@@ -7,6 +7,9 @@
 <img src="./images/snail.svg" alt="snail" />
 </p>
 
+
+[![Build](https://github.com/nismod/snail/actions/workflows/build.yml/badge.svg)](https://github.com/nismod/snail/actions/workflows/build.yml)
+
 > This code is under early development
 
 # 🤔 What is this?

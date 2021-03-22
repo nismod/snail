@@ -1,4 +1,4 @@
-name: Python package
+name: build
 # refer to https://docs.github.com/en/actions/guides/building-and-testing-python
 on: [push]
 
