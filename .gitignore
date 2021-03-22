@@ -1,2 +1,8 @@
+# Notebooks
 .ipynb_checkpoints
 
+# Python
+.eggs
+.pytest_cache
+__pycache__
+*.egg-info
