@@ -22,7 +22,7 @@ namespace utils{
   }
 
   // Helper function to determine if a MapInfo file exists (both parts)...
-  void mifExists(const std::string& name){
+  inline void mifExists(const std::string& name){
     // Take a local copy, for purpose of DRY...
     std::string _name = name;
     if(_name.find(".mif") != std::string::npos || _name.find(".mid") != std::string::npos)
@@ -44,7 +44,7 @@ namespace utils{
   }
 
   // Helper function to read a line of delimited text into vector of strings, respecting any strings that may have delimiters in quotes...
-  std::vector<std::string> readLine(const std::string line, const char delim = ',', const bool stripQuotes = false){
+  inline std::vector<std::string> readLine(const std::string line, const char delim = ',', const bool stripQuotes = false){
     std::stringstream ss(line);
 
     // Create some space to store the words in the incoming line...
