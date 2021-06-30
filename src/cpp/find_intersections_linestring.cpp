@@ -33,7 +33,7 @@ std::vector<linestr> findIntersectionsLineString(Feature feature, Ascii raster) 
       linestr intersections = raster.findIntersections(line);
       std::vector<linestr> splits = split_linestr(linestr_piece, intersections);
       allsplits.insert(allsplits.end(), splits.begin(), splits.end());
-      linestr linestr_piece = {intersections.back()};
+      linestr_piece = {intersections.back()};
     } else {
       linestr_piece.push_back(linestring.at(i));
     }
