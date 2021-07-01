@@ -1,0 +1,120 @@
+* <2021-06-30 Wed>
+  Testing with Catch2
+
+  3 ways of using it:
+  - Single hpp file in project (~#include "catch.hpp") is easy but does not scale well.
+  - Can clone repo in project and link using CMake
+  - Can build lib from repo and link with CMake. This means catch is expected
+    to be installed on devs system.
+
+  I think option 2 is best.
+
+  Catch2 seems pretty easy to use, it generates a test executable that takes
+  command line arguments. The [[https://github.com/catchorg/Catch2/blob/devel/docs/tutorial.md#top][tutorial]] is a good starting point.
+
+  Fake data
+  ---------
+
+  I created a fake raster data file that looks like this
+  #+begin_example
+    ncols        2
+    nrows        2
+    xllcorner    0.0
+    yllcorner    0.0
+    cellsize     1.0
+    NODATA_value  -9999
+    0 0
+    0 0
+  #+end_example
+
+  Had to inline a couple of functions in ~utils.h~
+  -------------------------------------------------
+
+  ~utils.h~ defined a couple of functions outside classes that were not ~inline~.
+  When you compile more than one translation unit (cpp file), for instance a main and
+  the definition of the intersection function these non-inline functions are defined in
+  each one and the linker cannot link (~multiple definition~ error).
+
+  Setting both functions to inline solves the issue but this makes me
+  question the benefit of having everything as a head-only lib.  I
+  don't think we see the benefits of this, since the code is so small.
+
+  Designing a test
+  -----------------
+
+  #+begin_example
+    Points coordinates are:
+    (0.5, 0.5)
+    (0.75, 0.5)
+    (1.5, 1.5)
+    Expected linestrings after decomposition are:
+    ======
+    (0.5, 0.5)
+    (0.75, 0.5)
+    (1, 0.833333)
+    ======
+    (1, 0.833333)
+    (1.125, 1)
+    ======
+    (1.125, 1)
+    (1.5, 1.5)
+    ======
+    
+    +---------------+--------------+
+    |               |              |
+    |               |              |
+    |               |              |
+    |               |       o      |
+    |               |      /       |
+    |               |    /-        |
+    |               |  /-          |
+    +---------------+(o)-----------+
+    |              (o)             |
+    |             /-|              |
+    |            /  |              |
+    |       o---o   |              |
+    |               |              |
+    |               |              |
+    |               |              |
+    +---------------+--------------+
+  #+end_example
+
+  #+begin_example
+    Points coordinates are:
+    (0.5, 0.5)
+    (0.75, 0.5)
+    (1.5, 0.5)
+    (1.5, 1.5)
+    Expected linestrings after decomposition are:
+    ======
+    (0.5, 0.5)
+    (0.75, 0.5)
+    (1, 0.5)
+    ======
+    (1, 0.5)
+    (1.5, 0.5)
+    (1.5, 1)
+    ======
+    (1.5, 1)
+    (1.5, 1.5)
+    ======
+    
+    +---------------+--------------+
+    |               |              |
+    |               |              |
+    |               |              |
+    |               |       o      |
+    |               |       |      |
+    |               |       |      |
+    |               |       |      |
+    +---------------+------(o)-----+
+    |               |       |      |
+    |               |       |      |
+    |               |       |      |
+    |       o---o--(o)------o      |
+    |               |              |
+    |               |              |
+    |               |              |
+    +---------------+--------------+
+  #+end_example
+  

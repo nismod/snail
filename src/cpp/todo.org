@@ -1,0 +1,5 @@
+- refactor tests
+- Reorganise folder structure with ubfolder tests
+- Write readme for tests forlder
+- Add catch as submodule
+- Make headr for intersection function
