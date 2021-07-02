@@ -10,5 +10,5 @@ add_executable(tests_intersections
   ${CPP_TESTS_DIR}/tests.cpp
   ${CPP_SRC_DIR}/find_intersections_linestring.cpp
   )
-target_include_directories(tests PUBLIC ${CPP_SRC_DIR})
-target_link_libraries(tests PRIVATE Catch2::Catch2)
+target_include_directories(tests_intersections PUBLIC ${CPP_SRC_DIR})
+target_link_libraries(tests_intersections PRIVATE Catch2::Catch2)
