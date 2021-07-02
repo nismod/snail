@@ -1,5 +1,7 @@
 # Tests
 
+*Important*: The following commands must be run from the top-level directory.
+
 Build the tests executable with
 
 ```shell
