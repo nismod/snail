@@ -10,9 +10,9 @@
 #include <fstream>
 #include <catch2/catch.hpp>
 
-#include "geofeatures.h"
-#include "raster.h"
-#include "geom.h"
+#include "geofeatures.hpp"
+#include "raster.hpp"
+#include "geom.hpp"
 
 using linestr = std::vector<geometry::Vec2<double>>;
 
