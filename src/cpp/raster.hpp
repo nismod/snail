@@ -4,8 +4,8 @@
 #include <vector>
 #include <string>
 
-#include "utils.h"
-#include "geom.h"
+#include "utils.hpp"
+#include "geom.hpp"
 
 // Structure defining an ESRI Ascii raster...
 struct Ascii{

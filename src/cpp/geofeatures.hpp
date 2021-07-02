@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include "geom.h"
+#include "geom.hpp"
 
 // Basic feature structure...
 struct Feature{

@@ -1,6 +1,6 @@
-#include "features.h"
-#include "geom.h"
-#include "raster.h"
+#include "geofeatures.hpp"
+#include "geom.hpp"
+#include "raster.hpp"
 
 using linestr = std::vector<geometry::Vec2<double>>;
 

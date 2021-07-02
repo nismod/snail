@@ -7,7 +7,7 @@
 #include <vector>
 #include <algorithm>
 
-#include "exceptions.h"
+#include "exceptions.hpp"
 
 namespace utils{
   // Global constants needed for general-purpose calculations across the namespace...
