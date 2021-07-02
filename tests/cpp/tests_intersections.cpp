@@ -13,10 +13,9 @@
 #include "geofeatures.hpp"
 #include "raster.hpp"
 #include "geom.hpp"
+#include "findintersectionslinestring.hpp"
 
 using linestr = std::vector<geometry::Vec2<double>>;
-
-std::vector<linestr> findIntersectionsLineString(Feature, Ascii);
 
 TEST_CASE( "LineStrings are decomposed", "[decomposition]") {
   // Linestring points are marked by o:
@@ -38,7 +37,7 @@ TEST_CASE( "LineStrings are decomposed", "[decomposition]") {
   // |               |              |
   // |               |              |
   // +---------------+--------------+
-  // (0,0)         (1,0)          (1,0)
+  // (0,0)       (0.5,0)          (1,0)
   
   geometry::Vec2<double> point1(0.5, 0.5);
   geometry::Vec2<double> point2(0.75, 0.5);
