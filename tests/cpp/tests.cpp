@@ -58,7 +58,7 @@ TEST_CASE( "LineStrings are decomposed", "[decomposition]") {
   linestr geom = {point1, point2, point3, point4};
   f.geometry.insert(f.geometry.begin(), geom.begin(), geom.end());
 
-  Ascii test_raster("./test_data/fake_raster.asc");
+  Ascii test_raster("./tests/test_data/fake_raster.asc");
   std::vector<linestr> splits = findIntersectionsLineString(f, test_raster);
 
   // Test that we're getting the expected number of splits
@@ -118,7 +118,7 @@ TEST_CASE( "LineStrings are decomposed II", "[decomposition]") {
   linestr geom = {point1, point2, point3};
   f.geometry.insert(f.geometry.begin(), geom.begin(), geom.end());
 
-  Ascii test_raster("./test_data/fake_raster.asc");
+  Ascii test_raster("./tests/test_data/fake_raster.asc");
   std::vector<linestr> splits = findIntersectionsLineString(f, test_raster);
 
   // Test that we're getting the expected number of splits
