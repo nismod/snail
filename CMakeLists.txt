@@ -4,8 +4,7 @@ project(snail)
 set(CPP_SRC_DIR src/cpp)
 set(CPP_TESTS_DIR tests/cpp)
 
-# add_subdirectory(${CPP_TESTS_DIR}/lib/Catch2)
-find_package(Catch2 REQUIRED)
+add_subdirectory(${CPP_TESTS_DIR}/lib/Catch2)
 add_executable(tests_intersections
   ${CPP_TESTS_DIR}/tests_intersections.cpp
 )
