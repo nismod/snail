@@ -13,7 +13,7 @@
 #include "geofeatures.hpp"
 #include "raster.hpp"
 #include "geom.hpp"
-#include "findintersectionslinestring.hpp"
+#include "find_intersections_linestring.hpp"
 
 using linestr = std::vector<geometry::Vec2<double>>;
 
