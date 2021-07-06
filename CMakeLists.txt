@@ -7,8 +7,7 @@ set(CPP_TESTS_DIR tests/cpp)
 # add_subdirectory(${CPP_TESTS_DIR}/lib/Catch2)
 find_package(Catch2 REQUIRED)
 add_executable(tests_intersections
-  ${CPP_TESTS_DIR}/tests.cpp
-  ${CPP_SRC_DIR}/find_intersections_linestring.cpp
-  )
+  ${CPP_TESTS_DIR}/tests_intersections.cpp
+)
 target_include_directories(tests_intersections PUBLIC ${CPP_SRC_DIR})
 target_link_libraries(tests_intersections PRIVATE Catch2::Catch2)
