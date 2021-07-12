@@ -5,75 +5,59 @@
 #include <vector>
 
 #include "geom.hpp"
+#include "transform.hpp"
 #include "utils.hpp"
 
 /// Structure defining a raster grid.
 struct Grid {
   /// number of columns
-  int ncols;
+  size_t ncols;
   /// number of rows
-  int nrows;
-  /// xll corner
-  double xll;
-  /// yll corner
-  double yll;
-  /// x, y cell dimension of the incoming data
-  double cellsize;
-  /// value taken as "no data"
-  double nodata;
+  size_t nrows;
+  /// grid to world transform - provided (derived from x, y offset and cellsize)
+  Affine grid_to_world;
+  /// world to grid transform - calculated
+  Affine world_to_grid;
   /// 1D vector of doubles storing the data (conceptually a 2D grid)
   std::vector<double> data;
-  /// For convenience, store the number of cells (calculated)
-  int numCells;
 
-  /// Read and interpret a line in the ascii header.
-  void readHeaderLine(const std::string line) {
-    std::vector<std::string> key_value = utils::readLine(line, ' ');
+  Grid()
+    :ncols{0}, nrows{0}, grid_to_world{Affine()}, data{std::vector<double>()} {
+      world_to_grid = ~grid_to_world;
+    };
 
-    // Interpret the key-value pair from the header line.
-    std::string key = utils::lower_case(key_value.at(0));
-    std::string value = key_value.at(1);
+  Grid(size_t ncols, size_t nrows, Affine grid_to_world)
+    :ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world}, data{std::vector<double>()} {
+      world_to_grid = ~grid_to_world;
+    };
 
-    // Check the incoming strings against the known header.
-    if (key == "ncols")
-      ncols = std::stoi(value);
-    else if (key == "nrows")
-      nrows = std::stoi(value);
-    else if (key == "xllcorner")
-      xll = std::stod(value);
-    else if (key == "yllcorner")
-      yll = std::stod(value);
-    else if (key == "cellsize")
-      cellsize = std::stod(value);
-    else if (key == "nodata_value")
-      nodata = std::stoi(value); // nodata is taken to be an int, not a float.
-  }
+  Grid(size_t ncols, size_t nrows, Affine grid_to_world, std::vector<double> data)
+    :ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world}, data{data} {
+      world_to_grid = ~grid_to_world;
+    };
 
   /// Calculate hashed index in raster.
   int cellIndex(const geometry::Vec2<double> p) const {
-    geometry::Vec2<long double> offset((p.x - xll) / cellsize,
-                                       (p.y - yll) / cellsize);
+    auto offset = world_to_grid * p;
     return floor(offset.x) + floor(offset.y) * ncols;
   }
 
   /// Recover i, j index in raster.
   geometry::Vec2<int> cellIndices(const geometry::Vec2<double> p) const {
-    geometry::Vec2<double> offset((p.x - xll) / cellsize,
-                                  (p.y - yll) / cellsize);
+    auto offset = world_to_grid * p;
     return geometry::Vec2<int>(floor(offset.x), floor(offset.y));
   }
 
-  /// Calculate the position of a point in a cell.
+  /// Calculate the relative position of a point in a cell.
   geometry::Vec2<double> offsetInCell(const geometry::Vec2<double> p) const {
     // Retrieve the indices of the cell.
     geometry::Vec2<int> cell_offset = cellIndices(p);
 
     // Calculate the LL coordinates of the cell.
-    double x0 = xll + cell_offset.x * cellsize;
-    double y0 = yll + cell_offset.y * cellsize;
+    geometry::Vec2<double> cell = grid_to_world * cell_offset;
 
-    // Return the distance between the two points.
-    return geometry::Vec2<double>(p.x - x0, p.y - y0);
+    // Return the vector between the two points.
+    return geometry::Vec2<double>(p.x - cell.x, p.y - cell.y);
   }
 
   /// Calculate the points at which a line-segment intersects the
@@ -96,8 +80,10 @@ struct Grid {
 
     // And work out the appropriate delta from the start of the line to the
     // crossing boundary.
-    double dN = north ? cellsize - delta.y : -delta.y;
-    double dE = east ? cellsize - delta.x : -delta.x;
+    double cellsize_x = grid_to_world.a;
+    double cellsize_y = grid_to_world.e;
+    double dN = north ? cellsize_y - delta.y : -delta.y;
+    double dE = east ? cellsize_x - delta.x : -delta.x;
 
     // Calculate the positions at which the line crosses the grid graticules.
     geometry::Vec2<double> pN(dN * run / rise, dN);
@@ -117,14 +103,14 @@ struct Grid {
       if (pE.length() < pN.length()) {
         crossings.push_back(line.start + pE);
         // Update the distance to the next graticule.
-        dE += double(east - 1) * cellsize;
+        dE += double(east - 1) * cellsize_x;
         // Calculate the position of the crossing point on the next grid /
         // graticule line.
         pE = geometry::Vec2<double>(dE, dE * rise / run);
       } else {
         crossings.push_back(line.start + pN);
         // Update the distance to the next graticule.
-        dN += double(north - 1) * cellsize;
+        dN += double(north - 1) * cellsize_y;
         // Calculate the position of the crossing point on the next grid /
         // graticule line.
         pN = geometry::Vec2<double>(dN * run / rise, dN);
@@ -136,49 +122,6 @@ struct Grid {
     return crossings;
   }
 
-  /// Construct by reading from file
-  Grid(const std::string filename) {
-    // Test if the ascii raster exists.
-    if (!utils::exists(filename))
-      utils::Exception(
-          "The Ascii raster you are trying to open does not exist (" +
-          filename + ")");
-
-    // Open the nominated file.
-    std::ifstream infile;
-    infile.open(filename);
-
-    // Create somewhere to read the data.
-    std::string line;
-
-    // Read the header, process the data.
-    for (int i = 0; i < 6; i++) {
-      std::getline(infile, line);
-      readHeaderLine(line);
-    }
-
-    // Reserve some space for the data that is in the file.
-    data.resize(nrows * ncols);
-
-    // Read the rest of the data (NOTE: The file is being read in top-bottom in
-    // line with the file format).
-    for (int j = nrows - 1; j > 0; j--) {
-      std::getline(infile, line);
-      // Extract the data from the line.
-      std::vector<std::string> words = utils::readLine(line, ' ');
-      // Stick the data on the tab.
-      int i = 0;
-      for (auto word : words) {
-        // Calculate the index of the data, populate it.
-        data.at(i + j * ncols) = std::max(0.0, std::stod(word));
-        i++;
-      }
-    }
-
-    // For ease of testing later on, store the total number of cells in the
-    // grid.
-    numCells = data.size() - 1;
-  }
 };
 
 #endif // GRID_H
