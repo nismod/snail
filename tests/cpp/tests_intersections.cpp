@@ -13,6 +13,8 @@
 
 #define TOL 0.001
 
+#define TOL 0.001
+
 using linestr = std::vector<geometry::Vec2<double>>;
 
 struct Config {
