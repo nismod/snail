@@ -1,8 +1,3 @@
-// This tells Catch to provide a main()
-// only do this in one cpp file
-#define CATCH_CONFIG_MAIN
-#define TOL 0.001
-
 #include <catch2/catch.hpp>
 #include <fstream>
 #include <iostream>
@@ -14,6 +9,8 @@
 #include "geom.hpp"
 #include "raster.hpp"
 #include "find_intersections_linestring.hpp"
+
+#define TOL 0.001
 
 using linestr = std::vector<geometry::Vec2<double>>;
 

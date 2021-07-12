@@ -5,9 +5,10 @@ set(CPP_SRC_DIR src/cpp)
 set(CPP_TESTS_DIR tests/cpp)
 
 add_subdirectory(${CPP_TESTS_DIR}/lib/Catch2)
-add_executable(tests_intersections
+add_executable(run_tests
+  ${CPP_TESTS_DIR}/run_tests.cpp
   ${CPP_TESTS_DIR}/tests_intersections.cpp
   ${CPP_SRC_DIR}/find_intersections_linestring.cpp
   )
-target_include_directories(tests_intersections PUBLIC ${CPP_SRC_DIR})
-target_link_libraries(tests_intersections PRIVATE Catch2::Catch2)
+target_include_directories(run_tests PUBLIC ${CPP_SRC_DIR})
+target_link_libraries(run_tests PRIVATE Catch2::Catch2)
