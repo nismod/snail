@@ -51,3 +51,30 @@ configure [nbstripout](https://github.com/kynan/nbstripout) so data and outputs
 are not committed in the notebook files:
 
     nbstripout --install
+
+### C++ library
+
+The C++ library in `src/cpp` is under early development. It contains routines to quickly find
+intersections of lines with raster grids.
+
+Run code style auto-formatting:
+
+    clang-format -i src/cpp/*.hpp
+
+Run lints and checks:
+
+    clang-tidy --checks 'cppcoreguidelines-*' src/cpp/*.hpp
+
+Fetch source code for Catch2 unit testing library (this is included as a git submodule):
+
+    git submodule update --init --recursive
+
+Build the test application:
+
+    cmake --build build/
+    cmake -Bbuild .
+
+Run the test application:
+
+    ./build/tests_intersections
+
