@@ -1,5 +1,5 @@
-#ifndef RASTER_H
-#define RASTER_H
+#ifndef GRID_H
+#define GRID_H
 
 #include <string>
 #include <vector>
@@ -7,17 +7,23 @@
 #include "geom.hpp"
 #include "utils.hpp"
 
-/// Structure defining an ESRI Ascii raster.
-struct Ascii {
-  int ncols;       // number of columns in the Ascii Raster
-  int nrows;       // number of rows in the Ascii Raster
-  double xll;      // xl corner of the Ascii Raster
-  double yll;      // yll corner of the Ascii Raster
-  double cellsize; // x, y cell dimension of the incoming data
-  double nodata;   // value taken as "no data"
-  // 1D vector of doubles storing the data in the Ascii Raster
+/// Structure defining a raster grid.
+struct Grid {
+  /// number of columns
+  int ncols;
+  /// number of rows
+  int nrows;
+  /// xll corner
+  double xll;
+  /// yll corner
+  double yll;
+  /// x, y cell dimension of the incoming data
+  double cellsize;
+  /// value taken as "no data"
+  double nodata;
+  /// 1D vector of doubles storing the data (conceptually a 2D grid)
   std::vector<double> data;
-  // For convenience, store the number of cells (calculated)
+  /// For convenience, store the number of cells (calculated)
   int numCells;
 
   /// Read and interpret a line in the ascii header.
@@ -131,7 +137,7 @@ struct Ascii {
   }
 
   /// Construct by reading from file
-  Ascii(const std::string filename) {
+  Grid(const std::string filename) {
     // Test if the ascii raster exists.
     if (!utils::exists(filename))
       utils::Exception(
@@ -175,4 +181,4 @@ struct Ascii {
   }
 };
 
-#endif // RASTER_H
+#endif // GRID_H
