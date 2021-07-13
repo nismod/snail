@@ -10,10 +10,10 @@
 #include <sstream>
 #include <string>
 
-#include "find_intersections_linestring.hpp"
 #include "geofeatures.hpp"
 #include "geom.hpp"
 #include "raster.hpp"
+#include "find_intersections_linestring.hpp"
 
 using linestr = std::vector<geometry::Vec2<double>>;
 
