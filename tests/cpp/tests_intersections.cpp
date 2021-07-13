@@ -17,7 +17,7 @@ using linestr = std::vector<geometry::Vec2<double>>;
 
 TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 
-  auto data = GENERATE(table<linestr, std::vector<linestr>>({
+  auto test_data = GENERATE(table<linestr, std::vector<linestr>>({
 	{
 	  // Linestring points are marked by o:
 	  // Intersection points are marked by (o):
@@ -81,10 +81,10 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
       })
     );
 
-  std::vector<linestr> expected_splits = std::get<1>(data);
+  std::vector<linestr> expected_splits = std::get<1>(test_data);
 
   Feature f;
-  linestr geom = std::get<0>(data);
+  linestr geom = std::get<0>(test_data);
   f.geometry.insert(f.geometry.begin(), geom.begin(), geom.end());
 
   Ascii test_raster("./tests/test_data/fake_raster.asc");
