@@ -15,66 +15,71 @@
 
 using linestr = std::vector<geometry::Vec2<double>>;
 
+struct Config {
+  linestr linestring;
+  std::vector<linestr> expected_splits;
+};
+
 TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 
-  auto test_data = GENERATE(table<linestr, std::vector<linestr>>(
-      {{// Linestring points are marked by o:
-        // Intersection points are marked by (o):
-        // +---------------+--------------+
-        // |               |              |
-        // |               |              |
-        // |               |              |
-        // |               |       o      |
-        // |               |       |      |
-        // |               |       |      |
-        // |               |       |      |
-        // +---------------+------(o)-----+
-        // |               |       |      |
-        // |               |       |      |
-        // |               |       |      |
-        // |       o---o--(o)------o      |
-        // |               |              |
-        // |               |              |
-        // |               |              |
-        // +---------------+--------------+
-        // (0,0)         (1,0)          (2,0)
-        // Linestring
-        {{0.5, 0.5}, {0.75, 0.5}, {1.5, 0.5}, {1.5, 1.5}},
-        // Expected vector of splits
-        {{{0.5, 0.5}, {0.75, 0.5}, {1., 0.5}},
-         {{1., 0.5}, {1.5, 0.5}, {1.5, 1.}},
-         {{1.5, 1.}, {1.5, 1.5}}}},
-       {// Linestring points are marked by o:
-        // Intersection points are marked by (o):
-        // +---------------+--------------+
-        // |               |              |
-        // |               |              |
-        // |               |              |
-        // |               |       o      |
-        // |               |      /       |
-        // |               |    /-        |
-        // |               |  /-          |
-        // +---------------+(o)-----------+
-        // |              (o)             |
-        // |             /-|              |
-        // |            /  |              |
-        // |       o---o   |              |
-        // |               |              |
-        // |               |              |
-        // |               |              |
-        // +---------------+--------------+
-        // (0,0)         (1,0)          (2,0)
-        // Linestring
-        {{0.5, 0.5}, {0.75, 0.5}, {1.5, 1.5}},
-        // Expected vector of splits
-        {{{0.5, 0.5}, {0.75, 0.5}, {1., 0.8333}},
-         {{1., 0.8333}, {1.125, 1.}},
-         {{1.125, 1.}, {1.5, 1.5}}}}}));
+  // Linestring points are marked by o:
+  // Intersection points are marked by (o):
+  // +---------------+--------------+
+  // |               |              |
+  // |               |              |
+  // |               |              |
+  // |               |       o      |
+  // |               |       |      |
+  // |               |       |      |
+  // |               |       |      |
+  // +---------------+------(o)-----+
+  // |               |       |      |
+  // |               |       |      |
+  // |               |       |      |
+  // |       o---o--(o)------o      |
+  // |               |              |
+  // |               |              |
+  // |               |              |
+  // +---------------+--------------+
+  // (0,0)         (1,0)          (2,0)
+  Config case1;
+  case1.linestring = {{0.5, 0.5}, {0.75, 0.5}, {1.5, 0.5}, {1.5, 1.5}};
+  case1.expected_splits = {{{0.5, 0.5}, {0.75, 0.5}, {1., 0.5}},
+			   {{1., 0.5}, {1.5, 0.5}, {1.5, 1.}},
+			   {{1.5, 1.}, {1.5, 1.5}}};
 
-  std::vector<linestr> expected_splits = std::get<1>(test_data);
+  // Linestring points are marked by o:
+  // Intersection points are marked by (o):
+  // +---------------+--------------+
+  // |               |              |
+  // |               |              |
+  // |               |              |
+  // |               |       o      |
+  // |               |      /       |
+  // |               |    /-        |
+  // |               |  /-          |
+  // +---------------+(o)-----------+
+  // |              (o)             |
+  // |             /-|              |
+  // |            /  |              |
+  // |       o---o   |              |
+  // |               |              |
+  // |               |              |
+  // |               |              |
+  // +---------------+--------------+
+  // (0,0)         (1,0)          (2,0)
+  Config case2;
+  case2.linestring = {{0.5, 0.5}, {0.75, 0.5}, {1.5, 1.5}};
+  case2.expected_splits = {{{0.5, 0.5}, {0.75, 0.5}, {1., 0.8333}},
+			   {{1., 0.8333}, {1.125, 1.}},
+			   {{1.125, 1.}, {1.5, 1.5}}};
+
+  auto test_data = GENERATE_COPY(case1, case2);
+
+  std::vector<linestr> expected_splits = test_data.expected_splits;
 
   Feature f;
-  linestr geom = std::get<0>(test_data);
+  linestr geom = test_data.linestring;;
   f.geometry.insert(f.geometry.begin(), geom.begin(), geom.end());
 
   Ascii test_raster("./tests/test_data/fake_raster.asc");
