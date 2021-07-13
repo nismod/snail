@@ -1,6 +1,7 @@
 #ifndef GRID_H
 #define GRID_H
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -43,8 +44,11 @@ struct Grid {
   }
 
   /// Recover i, j index in raster.
-  geometry::Vec2<int> cellIndices(const geometry::Vec2<double> p) const {
-    auto offset = world_to_grid * p;
+  geometry::Vec2<int>
+  cellIndices(const geometry::Vec2<double> p,
+              double epsilon = std::numeric_limits<double>::epsilon()) const {
+    auto offset =
+        world_to_grid * (p + geometry::Vec2<double>(epsilon, epsilon));
     return geometry::Vec2<int>(floor(offset.x), floor(offset.y));
   }
 
