@@ -63,6 +63,13 @@ TEST_CASE("Invert okay", "[invert]") {
     REQUIRE( a_again.f == Approx(2));
 }
 
+TEST_CASE("Invert fails with zero determinant", "[invert]") {
+    Affine a(0, 0, 0, 0, 0, 0);
+    REQUIRE_THROWS_WITH( ~a, "The transform is not invertible" );
+    Affine b(2, 1, 0, 2, 1, 0);
+    REQUIRE_THROWS_WITH( ~b, "The transform is not invertible" );
+}
+
 TEST_CASE("Invert translation", "[invert]") {
     double x = 2;
     double y = 4;

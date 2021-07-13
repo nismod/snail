@@ -15,7 +15,7 @@ private:
 public:
   Exception(const std::string s) : e(s) {
     std::cout << "ERROR: " << e << "\n";
-    throw;
+    throw std::runtime_error(s);
   }
 
 private:
