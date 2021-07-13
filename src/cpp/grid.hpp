@@ -39,8 +39,8 @@ struct Grid {
 
   /// Calculate hashed index in raster.
   int cellIndex(const geometry::Vec2<double> p) const {
-    auto offset = world_to_grid * p;
-    return floor(offset.x) + floor(offset.y) * ncols;
+    auto offset = cellIndices(p);
+    return offset.x + offset.y * ncols;
   }
 
   /// Recover i, j index in raster.
@@ -125,7 +125,6 @@ struct Grid {
     // the start and end of the line.
     return crossings;
   }
-
 };
 
 #endif // GRID_H
