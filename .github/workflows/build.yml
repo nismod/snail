@@ -23,7 +23,7 @@ jobs:
           cmake --build build/
 
       - name: Test C++
-        run: ./build/tests_intersections
+        run: ./build/run_tests
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v2
