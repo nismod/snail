@@ -69,7 +69,31 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
         // Expected vector of splits
         {{{0.5, 0.5}, {0.75, 0.5}, {1., 0.8333}},
          {{1., 0.8333}, {1.125, 1.}},
-         {{1.125, 1.}, {1.5, 1.5}}}}}));
+         {{1.125, 1.}, {1.5, 1.5}}}},
+      {// Linestring points are marked by o:
+        // Intersection points are marked by (o):
+        // +---------------+--------------+
+        // |               |              |
+        // |               |              |
+        // |               |              |
+        // |               |              |
+        // |               |              |
+        // |               |              |
+        // |               |              |
+        // +---------------+--------------+
+        // |               |              |
+        // |               |              |
+        // |               |              |
+        // |      (o)      |              |
+        // |     /         |              |
+        // |  ---          |              |
+        // | /             |              |
+        //(o)--------------+--------------+
+        // (0,0)         (1,0)          (2,0)
+        // Linestring
+        {{0, 0}, {0.5, 0.5}},
+        // Expected vector of splits
+        {{{0, 0}, {0.5, 0.5}}}}}));
 
   std::vector<linestr> expected_splits = std::get<1>(test_data);
 
