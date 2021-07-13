@@ -23,19 +23,22 @@ struct Grid {
   std::vector<double> data;
 
   Grid()
-    :ncols{0}, nrows{0}, grid_to_world{Affine()}, data{std::vector<double>()} {
-      world_to_grid = ~grid_to_world;
-    };
+      : ncols{0}, nrows{0},
+        grid_to_world{Affine()}, data{std::vector<double>()} {
+    world_to_grid = ~grid_to_world;
+  };
 
   Grid(size_t ncols, size_t nrows, Affine grid_to_world)
-    :ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world}, data{std::vector<double>()} {
-      world_to_grid = ~grid_to_world;
-    };
+      : ncols{ncols}, nrows{nrows},
+        grid_to_world{grid_to_world}, data{std::vector<double>()} {
+    world_to_grid = ~grid_to_world;
+  };
 
-  Grid(size_t ncols, size_t nrows, Affine grid_to_world, std::vector<double> data)
-    :ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world}, data{data} {
-      world_to_grid = ~grid_to_world;
-    };
+  Grid(size_t ncols, size_t nrows, Affine grid_to_world,
+       std::vector<double> data)
+      : ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world}, data{data} {
+    world_to_grid = ~grid_to_world;
+  };
 
   /// Calculate hashed index in raster.
   int cellIndex(const geometry::Vec2<double> p) const {
