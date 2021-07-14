@@ -76,5 +76,5 @@ Build the test application:
 
 Run the test application:
 
-    ./build/tests_intersections
+    ./build/run_tests
 
