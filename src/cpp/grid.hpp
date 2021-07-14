@@ -50,6 +50,9 @@ struct Grid {
   geometry::Vec2<int>
   cellIndices(const geometry::Vec2<double> p,
               double epsilon = std::numeric_limits<double>::epsilon()) const {
+    // Note on epsilon: nudge point slightly in the x and y direction towards the cell centre
+    // - this should allow for some tolerance in coordinate precision and avoid off-by-one errors
+    // TODO confirm and construct test case to demonstrate.
     auto offset =
         world_to_grid * (p + geometry::Vec2<double>(epsilon, epsilon));
     return geometry::Vec2<int>(floor(offset.x), floor(offset.y));
