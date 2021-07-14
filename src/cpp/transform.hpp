@@ -4,6 +4,15 @@
 #include "exceptions.hpp"
 #include "geom.hpp"
 
+/**
+ * Affine transform
+ *
+ * Represents a 2D transform, can be a linear transformation plus translation,
+ * including scaling, rotation, translation or shear.
+ *
+ * This holds all the metadata needed to define world-to-grid or grid-to-world
+ * coordinate transformations for a raster::Grid.
+ */
 struct Affine {
   double a;
   double b;
@@ -20,6 +29,8 @@ struct Affine {
       : a{a}, b{b}, c{c}, d{d}, e{e}, f{f} {};
 
   /// Construct from GDALGeoTransform ordering of parameters
+  /// see
+  /// https://gdal.org/api/gdaldataset_cpp.html#_CPPv4N11GDALDataset15GetGeoTransformEPd
   static Affine from_gdal(double c, double a, double b, double f, double d,
                           double e) {
     return Affine(a, b, c, d, e, f);
