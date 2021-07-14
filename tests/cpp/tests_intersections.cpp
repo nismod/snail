@@ -8,7 +8,8 @@
 
 #include "geofeatures.hpp"
 #include "geom.hpp"
-#include "raster.hpp"
+#include "grid.hpp"
+#include "transform.hpp"
 #include "find_intersections_linestring.hpp"
 
 #define TOL 0.001
@@ -82,7 +83,8 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   linestr geom = test_data.linestring;;
   f.geometry.insert(f.geometry.begin(), geom.begin(), geom.end());
 
-  Ascii test_raster("./tests/test_data/fake_raster.asc");
+  // Using default Affine transform(1, 0, 0, 0, 1, 0)
+  Grid test_raster(2, 2, Affine());
   std::vector<linestr> splits = findIntersectionsLineString(f, test_raster);
 
   // Test that we're getting the expected number of splits

@@ -1,6 +1,6 @@
 #include "geofeatures.hpp"
 #include "geom.hpp"
-#include "raster.hpp"
+#include "grid.hpp"
 
 using linestr = std::vector<geometry::Vec2<double>>;
 
@@ -22,7 +22,7 @@ std::vector<linestr> split_linestr(linestr linestring, linestr intersections) {
 
 /// Find intersection points of a linestring with a raster grid
 std::vector<linestr> findIntersectionsLineString(Feature feature,
-                                                 Ascii raster) {
+                                                 Grid raster) {
   linestr linestring = feature.geometry;
 
   std::vector<linestr> allsplits;
