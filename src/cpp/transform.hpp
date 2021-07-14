@@ -45,10 +45,11 @@ struct Affine {
     if (determinant == 0) {
       utils::Exception("The transform is not invertible");
     }
-    double inverse_a = e / determinant;
-    double inverse_b = -b / determinant;
-    double inverse_d = -d / determinant;
-    double inverse_e = a / determinant;
+    double ideterminant = 1 / determinant;
+    double inverse_a = e * ideterminant;
+    double inverse_b = -b * ideterminant;
+    double inverse_d = -d * ideterminant;
+    double inverse_e = a * ideterminant;
     double inverse_c = -c * inverse_a - f * inverse_b;
     double inverse_f = -c * inverse_d - f * inverse_e;
     return Affine(inverse_a, inverse_b, inverse_c, inverse_d, inverse_e,
