@@ -13,3 +13,6 @@ add_executable(run_tests
 )
 target_include_directories(run_tests PUBLIC ${CPP_SRC_DIR})
 target_link_libraries(run_tests PRIVATE Catch2::Catch2)
+
+add_subdirectory(pybind11)
+pybind11_add_module(intersections ${CPP_SRC_DIR}/intersections.cpp)
