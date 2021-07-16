@@ -49,7 +49,7 @@ std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
   }
   return splits_py;
 }
-std::vector<py::object> fun(py::object linestring_py, int nrows, int ncols,
+std::vector<py::object> split(py::object linestring_py, int nrows, int ncols,
                             std::vector<double> transform) {
   linestr linestring = convert_py2cpp(linestring_py);
   Affine affine(transform[0], transform[1], transform[2], transform[3],
@@ -64,5 +64,5 @@ std::vector<py::object> fun(py::object linestring_py, int nrows, int ncols,
 PYBIND11_MODULE(intersections, m) {
   m.doc() = "pybind11 example plugin"; // optional module docstring
 
-  m.def("fun", &fun, "A function");
+  m.def("split", &split, "A function");
 }
