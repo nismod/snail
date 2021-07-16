@@ -18,6 +18,9 @@ namespace geo = geometry;
 
 using linestr = std::vector<geometry::Vec2<double>>;
 
+py::object SHPLY_LINESTR =
+    py::module_::import("shapely.geometry").attr("LineString");
+
 linestr convert_py2cpp(py::object linestring_py) {
   py::object coords = linestring_py.attr("coords");
   int size = py::len(coords);
@@ -29,18 +32,9 @@ linestr convert_py2cpp(py::object linestring_py) {
   }
   return linestring;
 }
-std::vector<py::object> fun(py::object linestring_py, int nrows, int ncols,
-                            std::vector<double> transform) {
-  linestr linestring = convert_py2cpp(linestring_py);
-  Affine affine(transform[0], transform[1], transform[2], transform[3],
-                transform[4], transform[5]);
-  Grid grid(ncols, nrows, affine);
-  Feature f;
-  f.geometry.insert(f.geometry.begin(), linestring.begin(), linestring.end());
-  std::vector<linestr> splits = findIntersectionsLineString(f, grid);
 
-  py::object shapely_linstr =
-      py::module_::import("shapely.geometry").attr("LineString");
+std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
+
   std::vector<py::object> splits_py;
   std::vector<std::vector<double>> split_py;
   std::vector<double> point_py;
@@ -51,10 +45,21 @@ std::vector<py::object> fun(py::object linestring_py, int nrows, int ncols,
       split_py.push_back(point_py);
       point_py.clear();
     }
-    splits_py.push_back(shapely_linstr(split_py));
+    splits_py.push_back(SHPLY_LINESTR(split_py));
     split_py.clear();
   }
   return splits_py;
+}
+std::vector<py::object> fun(py::object linestring_py, int nrows, int ncols,
+                            std::vector<double> transform) {
+  linestr linestring = convert_py2cpp(linestring_py);
+  Affine affine(transform[0], transform[1], transform[2], transform[3],
+                transform[4], transform[5]);
+  Grid grid(ncols, nrows, affine);
+  Feature f;
+  f.geometry.insert(f.geometry.begin(), linestring.begin(), linestring.end());
+  std::vector<linestr> splits = findIntersectionsLineString(f, grid);
+  return convert_cpp2py(splits);
 }
 
 PYBIND11_MODULE(intersections, m) {
