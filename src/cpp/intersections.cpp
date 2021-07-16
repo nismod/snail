@@ -18,7 +18,7 @@ namespace geo = geometry;
 
 using linestr = std::vector<geometry::Vec2<double>>;
 
-double fun(py::object linestring_frompy, int nrows, int ncols, std::vector<double> transform) {
+std::vector <py::object> fun(py::object linestring_frompy, int nrows, int ncols, std::vector<double> transform) {
   py::object coords = linestring_frompy.attr("coords");
   int size = py::len(coords);
   std::vector<geo::Vec2<double>> linestring;
@@ -37,6 +37,22 @@ double fun(py::object linestring_frompy, int nrows, int ncols, std::vector<doubl
   Feature f;
   f.geometry.insert(f.geometry.begin(), linestring.begin(), linestring.end());
   std::vector<linestr> splits = findIntersectionsLineString(f, grid);
+
+  py::object shapely_linstr = py::module_::import("shapely.geometry").attr("LineString");
+  std::vector<py::object> splits_py;
+  std::vector<std::vector<double>> split_py;
+  std::vector<double> point_py;
+  for (auto split : splits) {
+    for (auto point : split) {
+      point_py.push_back(point.x);
+      point_py.push_back(point.y);
+      split_py.push_back(point_py);
+      point_py.clear();
+    }
+    splits_py.push_back(shapely_linstr(split_py));
+    split_py.clear();
+  }
+  return splits_py;
 }
 
 PYBIND11_MODULE(intersections, m) {
