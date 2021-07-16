@@ -18,9 +18,8 @@ namespace geo = geometry;
 
 using linestr = std::vector<geometry::Vec2<double>>;
 
-std::vector<py::object> fun(py::object linestring_frompy, int nrows, int ncols,
-                            std::vector<double> transform) {
-  py::object coords = linestring_frompy.attr("coords");
+linestr convert_py2cpp(py::object linestring_py) {
+  py::object coords = linestring_py.attr("coords");
   int size = py::len(coords);
   std::vector<geo::Vec2<double>> linestring;
   for (int i = 0; i < size; i++) {
@@ -28,6 +27,11 @@ std::vector<py::object> fun(py::object linestring_frompy, int nrows, int ncols,
     geo::Vec2<double> p((py::float_)xy[0], (py::float_)xy[1]);
     linestring.push_back(p);
   }
+  return linestring;
+}
+std::vector<py::object> fun(py::object linestring_py, int nrows, int ncols,
+                            std::vector<double> transform) {
+  linestr linestring = convert_py2cpp(linestring_py);
   Affine affine(transform[0], transform[1], transform[2], transform[3],
                 transform[4], transform[5]);
   Grid grid(ncols, nrows, affine);
