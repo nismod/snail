@@ -48,7 +48,7 @@ setup(
         'setuptools_scm'
     ],
     install_requires=[
-        # eg: 'aspectlib==1.1.1', 'six>=1.7',
+        'shapely'
     ],
     extras_require={
         # eg:
