@@ -23,9 +23,8 @@ py::object SHPLY_LINESTR =
 
 linestr convert_py2cpp(py::object linestring_py) {
   py::object coords = linestring_py.attr("coords");
-  int size = py::len(coords);
-  std::vector<geo::Vec2<double>> linestring;
-  for (int i = 0; i < size; i++) {
+  linestr linestring;
+  for (int i = 0; i < py::len(coords); i++) {
     py::tuple xy = (py::tuple)coords[py::cast(i)];
     geo::Vec2<double> p((py::float_)xy[0], (py::float_)xy[1]);
     linestring.push_back(p);
