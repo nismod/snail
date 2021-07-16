@@ -20,7 +20,7 @@ jobs:
       - name: Build C++
         run: |
           cmake -Bbuild .
-          cmake --build build/
+          cmake --build build/ --target run_tests
 
       - name: Test C++
         run: ./build/run_tests
@@ -29,6 +29,11 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Build intersections module
+        run: |
+          cmake -Bbuild_python .
+          cmake --build build_python/ --target intersections
 
       - name: Install dependencies
         run: |
