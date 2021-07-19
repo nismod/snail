@@ -2,11 +2,7 @@ import unittest
 
 from shapely.geometry import LineString
 
-import sys
-
-# TODO: Update setup script to install extension module
-sys.path.append("build_python")
-import intersections
+from snail import intersections
 
 
 class TestIntersections(unittest.TestCase):
