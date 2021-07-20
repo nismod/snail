@@ -6,6 +6,8 @@ import numpy
 from shapely.geometry import LineString
 import geopandas as gpd
 
+import snail.cli
+
 
 def make_raster_data():
     data = numpy.random.randn(2, 2)
@@ -38,5 +40,14 @@ class TestCli(unittest.TestCase):
     def test_cli(self):
         raster_data = make_raster_data()
         vector_data = make_vector_data()
-
+        output_data = "/tmp/test_output.gpkg"
+        args = [
+            "--raster",
+            raster_data,
+            "--vector",
+            vector_data,
+            "--output",
+            output_data,
+        ]
+        snail.cli.main(args)
         self.assertTrue(True)

@@ -3,6 +3,8 @@ import argparse
 import geopandas as gpd
 import rasterio
 
+from snail.intersections import split
+
 
 def parse_arguments(arguments):
     parser = argparse.ArgumentParser(description="the parser")
@@ -37,6 +39,14 @@ def main(arguments=None):
 
     raster_data = rasterio.open(args.raster)
     vector_data = gpd.read_file(args.vector)
+
+    for linestring in vector_data["geometry"].values:
+        splits = split(
+            linestring,
+            raster_data.width,
+            raster_data.height,
+            list(raster_data.transform),
+        )
     print("Working with:")
     print(f"  Raster dataset: {args.raster}")
     print(f"  Vector dataset: {args.vector}")
