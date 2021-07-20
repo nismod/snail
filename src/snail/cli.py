@@ -1,5 +1,7 @@
 import argparse
 
+import geopandas as gpd
+import rasterio
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="the parser")
@@ -32,6 +34,8 @@ def parse_arguments():
 def main(arguments=None):
     args = parse_arguments()
 
+    raster_data = rasterio.open(args.raster)
+    vector_data = gpd.read_file(args.vector)
     print("Working with:")
     print(f"  Raster dataset: {args.raster}")
     print(f"  Vector dataset: {args.vector}")
