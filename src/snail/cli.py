@@ -3,7 +3,8 @@ import argparse
 import geopandas as gpd
 import rasterio
 
-def parse_arguments():
+
+def parse_arguments(arguments):
     parser = argparse.ArgumentParser(description="the parser")
     parser.add_argument(
         "-r",
@@ -27,12 +28,12 @@ def parse_arguments():
         required=True,
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(arguments)
     return args
 
 
 def main(arguments=None):
-    args = parse_arguments()
+    args = parse_arguments(arguments)
 
     raster_data = rasterio.open(args.raster)
     vector_data = gpd.read_file(args.vector)
