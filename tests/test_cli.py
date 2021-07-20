@@ -5,6 +5,8 @@ from affine import Affine
 import numpy
 from shapely.geometry import LineString
 import geopandas as gpd
+from geopandas.testing import assert_geodataframe_equal
+from numpy.testing import assert_array_almost_equal
 
 import snail.cli
 
@@ -29,8 +31,11 @@ def make_raster_data():
 
 
 def make_vector_data():
-    linestring = LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)])
-    gdf = gpd.GeoDataFrame({"col1": ["name1"], "geometry": [linestring]})
+    test_linestrings = [
+        LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
+        LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
+    ]
+    gdf = gpd.GeoDataFrame({"col1": ["name1", "name2"], "geometry": test_linestrings})
     vector_data = "/tmp/test_vector_data.gpkg"
     gdf.to_file(vector_data)
     return vector_data
@@ -49,5 +54,38 @@ class TestCli(unittest.TestCase):
             "--output",
             output_data,
         ]
+
         snail.cli.main(args)
-        self.assertTrue(True)
+
+        gdf = gpd.read_file(output_data)
+        expected_splits = [
+            LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.5)]),
+            LineString([(1.0, 0.5), (1.5, 0.5), (1.5, 1.0)]),
+            LineString([(1.5, 1.0), (1.5, 1.5)]),
+        ] + [
+            LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.8333)]),
+            LineString([(1.0, 0.8333), (1.125, 1.0)]),
+            LineString([(1.125, 1.0), (1.5, 1.5)]),
+        ]
+        expected_idx = [0] * 3 + [1] * 3
+        expected_gdf = gpd.GeoDataFrame(
+            {"line index": expected_idx, "geometry": expected_splits}
+        )
+
+        # Assertions
+
+        # Ideally we'd like to use geopandas.assert_geodataframe_equal to
+        # to compare both expected and actual geodfs, but this function offers
+        # little control over tolerance. When using option "check_less_precise",
+        # it used GeoSeries.geom_almost_equals under the hood, which has an kwarg
+        # "decimal". But assert_geodataframe_equal does not recognise kwarg "decimal".
+        self.assertTrue(
+            list(
+                gdf["geometry"]
+                .geom_almost_equals(expected_gdf["geometry"], decimal=3)
+                .values
+            )
+        )
+        assert_array_almost_equal(
+            gdf["line index"].values, expected_gdf["line index"].values
+        )
