@@ -40,14 +40,16 @@ def main(arguments=None):
     raster_data = rasterio.open(args.raster)
     vector_data = gpd.read_file(args.vector)
 
-    for linestring in vector_data["geometry"].values:
+    all_splits = []
+    all_idx = []
+    for idx, linestring in zip(vector_data.index, vector_data["geometry"]):
         splits = split(
             linestring,
             raster_data.width,
             raster_data.height,
             list(raster_data.transform),
         )
-    print("Working with:")
-    print(f"  Raster dataset: {args.raster}")
-    print(f"  Vector dataset: {args.vector}")
-    print(f"  Output vector dataset: {args.output}")
+        all_splits.extend(splits)
+        all_idx.extend([idx] * len(splits))
+    new_gdf = gpd.GeoDataFrame({"line index": all_idx, "geometry": all_splits})
+    new_gdf.to_file(args.output)
