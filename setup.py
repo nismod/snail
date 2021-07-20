@@ -58,7 +58,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            # eg: 'snail = snail.cli:main',
+            'snail_split = snail.cli:main',
         ]
     },
 )
