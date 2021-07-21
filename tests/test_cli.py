@@ -1,3 +1,5 @@
+import os
+import tempfile
 import unittest
 
 import rasterio
@@ -11,11 +13,10 @@ from numpy.testing import assert_array_almost_equal
 import snail.cli
 
 
-def make_raster_data():
+def make_raster_data(filename):
     data = numpy.random.randn(2, 2)
-    raster_data = "/tmp/test_raster_data.tif"
     new_dataset = rasterio.open(
-        raster_data,
+        filename,
         "w",
         driver="GTiff",
         height=data.shape[0],
@@ -27,37 +28,39 @@ def make_raster_data():
     )
     new_dataset.write(data, 1)
     new_dataset.close()
-    return raster_data
 
 
-def make_vector_data():
+def make_vector_data(filename):
     test_linestrings = [
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
     ]
     gdf = gpd.GeoDataFrame({"col1": ["name1", "name2"], "geometry": test_linestrings})
-    vector_data = "/tmp/test_vector_data.gpkg"
-    gdf.to_file(vector_data)
-    return vector_data
+    gdf.to_file(filename)
 
 
 class TestCli(unittest.TestCase):
     def test_cli(self):
-        raster_data = make_raster_data()
-        vector_data = make_vector_data()
-        output_data = "/tmp/test_output.gpkg"
+        tmp_dir = tempfile.TemporaryDirectory()
+        raster_file = os.path.join(tmp_dir.name, "test_raster.tif")
+        vector_file = os.path.join(tmp_dir.name, "test_vector.gpkg")
+        output_file = os.path.join(tmp_dir.name, "test_output.gpkg")
+
+        make_raster_data(raster_file)
+        make_vector_data(vector_file)
+
         args = [
             "--raster",
-            raster_data,
+            raster_file,
             "--vector",
-            vector_data,
+            vector_file,
             "--output",
-            output_data,
+            output_file,
         ]
 
         snail.cli.main(args)
 
-        gdf = gpd.read_file(output_data)
+        gdf = gpd.read_file(output_file)
         expected_splits = [
             LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.5)]),
             LineString([(1.0, 0.5), (1.5, 0.5), (1.5, 1.0)]),
@@ -89,3 +92,5 @@ class TestCli(unittest.TestCase):
         assert_array_almost_equal(
             gdf["line index"].values, expected_gdf["line index"].values
         )
+
+        tmp_dir.cleanup()
