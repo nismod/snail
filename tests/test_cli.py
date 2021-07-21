@@ -2,13 +2,12 @@ import os
 import tempfile
 import unittest
 
-import rasterio
 from affine import Affine
 import numpy
-from shapely.geometry import LineString
-import geopandas as gpd
-from geopandas.testing import assert_geodataframe_equal
 from numpy.testing import assert_array_almost_equal
+import geopandas as gpd
+import rasterio
+from shapely.geometry import LineString
 
 import snail.cli
 
