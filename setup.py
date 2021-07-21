@@ -49,7 +49,7 @@ setup(
         'setuptools_scm'
     ],
     install_requires=[
-        'shapely'
+        'affine', 'numpy', 'geopandas', 'shapely', 'rasterio'
     ],
     extras_require={
         # eg:
