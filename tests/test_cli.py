@@ -39,6 +39,23 @@ def make_vector_data(filename):
     gdf.to_file(filename)
 
 
+def get_expected_gdf():
+    expected_splits = [
+        LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.5)]),
+        LineString([(1.0, 0.5), (1.5, 0.5), (1.5, 1.0)]),
+        LineString([(1.5, 1.0), (1.5, 1.5)]),
+    ] + [
+        LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.8333)]),
+        LineString([(1.0, 0.8333), (1.125, 1.0)]),
+        LineString([(1.125, 1.0), (1.5, 1.5)]),
+    ]
+    expected_idx = [0] * 3 + [1] * 3
+    expected_gdf = gpd.GeoDataFrame(
+        {"line index": expected_idx, "geometry": expected_splits}
+    )
+    return expected_gdf
+
+
 class TestCli(unittest.TestCase):
     def test_cli(self):
         tmp_dir = tempfile.TemporaryDirectory()
@@ -61,19 +78,7 @@ class TestCli(unittest.TestCase):
         snail.cli.main(args)
 
         gdf = gpd.read_file(output_file)
-        expected_splits = [
-            LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.5)]),
-            LineString([(1.0, 0.5), (1.5, 0.5), (1.5, 1.0)]),
-            LineString([(1.5, 1.0), (1.5, 1.5)]),
-        ] + [
-            LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.8333)]),
-            LineString([(1.0, 0.8333), (1.125, 1.0)]),
-            LineString([(1.125, 1.0), (1.5, 1.5)]),
-        ]
-        expected_idx = [0] * 3 + [1] * 3
-        expected_gdf = gpd.GeoDataFrame(
-            {"line index": expected_idx, "geometry": expected_splits}
-        )
+        expected_gdf = get_expected_gdf()
 
         # Assertions
 
