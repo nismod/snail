@@ -49,6 +49,7 @@ std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
   }
   return splits_py;
 }
+
 std::vector<py::object> split(py::object linestring_py, int nrows, int ncols,
                             std::vector<double> transform) {
   linestr linestring = convert_py2cpp(linestring_py);
@@ -61,8 +62,27 @@ std::vector<py::object> split(py::object linestring_py, int nrows, int ncols,
   return convert_cpp2py(splits);
 }
 
+std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
+                                      int ncols,
+                                      std::vector<double> transform) {
+  py::tuple bounds = linestring.attr("bounds");
+  double minx = (py::float_)bounds[0];
+  double maxx = (py::float_)bounds[1];
+  double miny = (py::float_)bounds[2];
+  double maxy = (py::float_)bounds[3];
+  geo::Vec2<double> midpoint =
+      geo::Vec2<double>((maxx + minx) * 0.5, (maxy + miny) * 0.5);
+
+  Affine affine(transform[0], transform[1], transform[2], transform[3],
+                transform[4], transform[5]);
+  Grid grid(ncols, nrows, affine);
+  geo::Vec2<int> cell = grid.cellIndices(midpoint);
+  return std::make_tuple(cell.x, cell.y);
+}
+
 PYBIND11_MODULE(intersections, m) {
   m.doc() = "pybind11 example plugin"; // optional module docstring
 
   m.def("split", &split, "A function");
+  m.def("get_cell_indices", &get_cell_indices, "Getting cell indices");
 }
