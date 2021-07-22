@@ -3,17 +3,18 @@ import tempfile
 import unittest
 
 from affine import Affine
-import numpy
+import numpy as np
 from numpy.testing import assert_array_almost_equal
 import geopandas as gpd
 import rasterio
 from shapely.geometry import LineString
 
 import snail.cli
+from snail.raster2split import raster2split
 
 
 def make_raster_data(filename):
-    data = numpy.random.randn(2, 2)
+    data = np.random.randn(2, 2)
     new_dataset = rasterio.open(
         filename,
         "w",
@@ -98,3 +99,23 @@ class TestCli(unittest.TestCase):
         )
 
         tmp_dir.cleanup()
+
+    def test_raster2split(self):
+        tmp_dir = tempfile.TemporaryDirectory()
+        raster_file = os.path.join(tmp_dir.name, "test_raster.tif")
+        vector_file = os.path.join(tmp_dir.name, "test_vector.gpkg")
+        output_file = os.path.join(tmp_dir.name, "test_output.gpkg")
+
+        make_raster_data(raster_file)
+
+        get_expected_gdf().to_file(vector_file)
+
+        raster2split(raster_file, vector_file, output_file, bands=[1])
+
+        output_gdf = gpd.read_file(output_file)
+        data_array_indices = [[0, 0, 1], [0, 1, 1]]
+        raster_data = rasterio.open(raster_file).read(1)
+        expected_raster_values = np.tile(raster_data[data_array_indices], 2)
+        assert_array_almost_equal(
+            output_gdf["band1"].values, expected_raster_values
+        )
