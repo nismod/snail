@@ -35,7 +35,9 @@ def make_vector_data(filename):
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
     ]
-    gdf = gpd.GeoDataFrame({"col1": ["name1", "name2"], "geometry": test_linestrings})
+    gdf = gpd.GeoDataFrame(
+        {"col1": ["name1", "name2"], "geometry": test_linestrings}
+    )
     gdf.to_file(filename)
 
 
