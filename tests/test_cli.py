@@ -115,7 +115,7 @@ class TestCli(unittest.TestCase):
         raster2split(raster_file, vector_file, output_file, bands=[1])
 
         output_gdf = gpd.read_file(output_file)
-        data_array_indices = [[0, 0, 1], [0, 1, 1]]
+        data_array_indices = [[0, 1, 1], [0, 0, 1]]
         raster_data = rasterio.open(raster_file).read(1)
         expected_raster_values = np.tile(raster_data[data_array_indices], 2)
         assert_array_almost_equal(
