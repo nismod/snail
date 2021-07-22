@@ -67,8 +67,8 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
                                       std::vector<double> transform) {
   py::tuple bounds = linestring.attr("bounds");
   double minx = (py::float_)bounds[0];
-  double maxx = (py::float_)bounds[1];
-  double miny = (py::float_)bounds[2];
+  double miny = (py::float_)bounds[1];
+  double maxx = (py::float_)bounds[2];
   double maxy = (py::float_)bounds[3];
   geo::Vec2<double> midpoint =
       geo::Vec2<double>((maxx + minx) * 0.5, (maxy + miny) * 0.5);
