@@ -41,7 +41,7 @@ def parse_arguments(arguments):
     return args
 
 
-def main(arguments=None):
+def snail_split(arguments=None):
     args = parse_arguments(arguments)
 
     raster_data = rasterio.open(args.raster)
