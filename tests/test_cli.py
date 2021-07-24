@@ -35,9 +35,7 @@ def make_vector_data(filename):
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
     ]
-    gdf = gpd.GeoDataFrame(
-        {"col1": ["name1", "name2"], "geometry": test_linestrings}
-    )
+    gdf = gpd.GeoDataFrame({"col1": ["name1", "name2"], "geometry": test_linestrings})
     gdf.to_file(filename)
 
 
@@ -106,19 +104,18 @@ class TestCli(unittest.TestCase):
         tmp_dir = tempfile.TemporaryDirectory()
         raster_file = os.path.join(tmp_dir.name, "test_raster.tif")
         vector_file = os.path.join(tmp_dir.name, "test_vector.gpkg")
-        output_file = os.path.join(tmp_dir.name, "test_output.gpkg")
 
         make_raster_data(raster_file)
-
         get_expected_gdf().to_file(vector_file)
 
-        raster2split(raster_file, vector_file, output_file, bands=[1])
+        raster_data = rasterio.open(raster_file)
+        vector_data = gpd.read_file(vector_file)
 
-        output_gdf = gpd.read_file(output_file)
+        output_gdf = raster2split(vector_data, raster_data, bands=[1])
+
         # Expected raster values are points (0,1), (1,0) and (1,1) of the grid
         data_array_indices = [[0, 1, 1], [0, 0, 1]]
+        raster_data.close()
         raster_data = rasterio.open(raster_file).read(1)
         expected_raster_values = np.tile(raster_data[data_array_indices], 2)
-        assert_array_almost_equal(
-            output_gdf["band1"].values, expected_raster_values
-        )
+        assert_array_almost_equal(output_gdf["band1"].values, expected_raster_values)
