@@ -59,6 +59,7 @@ setup(
     entry_points={
         'console_scripts': [
             'snail_split = snail.cli:main',
+            'snail_raster2split = snail.cli:snail_raster2split',
         ]
     },
 )
