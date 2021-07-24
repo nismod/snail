@@ -56,15 +56,19 @@ def get_expected_gdf():
 
 
 class TestSnailIntersections(unittest.TestCase):
-    def test_split(self):
-        tmp_dir = tempfile.TemporaryDirectory()
-        raster_file = os.path.join(tmp_dir.name, "test_raster.tif")
-
-        vector_data = make_vector_data()
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        raster_file = os.path.join(self.tmp_dir.name, "test_raster.tif")
         make_raster_data(raster_file)
-        raster_data = rasterio.open(raster_file)
-        
-        gdf = split(vector_data, raster_data)
+        self.raster_dataset = rasterio.open(raster_file)
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+        self.raster_dataset.close()
+
+    def test_split(self):
+        vector_data = make_vector_data()
+        gdf = split(vector_data, self.raster_dataset)
         expected_gdf = get_expected_gdf()
 
         # Assertions
@@ -85,24 +89,13 @@ class TestSnailIntersections(unittest.TestCase):
             gdf["line index"].values, expected_gdf["line index"].values
         )
 
-        tmp_dir.cleanup()
-        raster_data.close()
-
     def test_raster2split(self):
-        tmp_dir = tempfile.TemporaryDirectory()
-        raster_file = os.path.join(tmp_dir.name, "test_raster.tif")
-
         vector_data = get_expected_gdf()
-        make_raster_data(raster_file)
-        raster_data = rasterio.open(raster_file)
 
-        output_gdf = raster2split(vector_data, raster_data, bands=[1])
+        output_gdf = raster2split(vector_data, self.raster_dataset, bands=[1])
 
         # Expected raster values are points (0,1), (1,0) and (1,1) of the grid
         data_array_indices = [[0, 1, 1], [0, 0, 1]]
-        raster_data.close()
-        raster_data = rasterio.open(raster_file).read(1)
+        raster_data = self.raster_dataset.read(1)
         expected_raster_values = np.tile(raster_data[data_array_indices], 2)
         assert_array_almost_equal(output_gdf["band1"].values, expected_raster_values)
-
-        tmp_dir.cleanup()
