@@ -10,7 +10,7 @@ import rasterio
 from shapely.geometry import LineString
 
 import snail.cli
-from snail.raster2split import raster2split
+from snail.snail_intersections import raster2split
 
 
 def make_raster_data(filename):
