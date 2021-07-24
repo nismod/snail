@@ -9,8 +9,7 @@ import geopandas as gpd
 import rasterio
 from shapely.geometry import LineString
 
-import snail.cli
-from snail.snail_intersections import raster2split
+from snail.snail_intersections import split, raster2split
 
 
 def make_raster_data(filename):
@@ -56,28 +55,19 @@ def get_expected_gdf():
     return expected_gdf
 
 
-class TestCli(unittest.TestCase):
-    def test_cli(self):
+class TestSnailIntersections(unittest.TestCase):
+    def test_split(self):
         tmp_dir = tempfile.TemporaryDirectory()
         raster_file = os.path.join(tmp_dir.name, "test_raster.tif")
         vector_file = os.path.join(tmp_dir.name, "test_vector.gpkg")
-        output_file = os.path.join(tmp_dir.name, "test_output.gpkg")
 
         make_raster_data(raster_file)
         make_vector_data(vector_file)
 
-        args = [
-            "--raster",
-            raster_file,
-            "--vector",
-            vector_file,
-            "--output",
-            output_file,
-        ]
+        raster_data = rasterio.open(raster_file)
+        vector_data = gpd.read_file(vector_file)
 
-        snail.cli.main(args)
-
-        gdf = gpd.read_file(output_file)
+        gdf = split(vector_data, raster_data)
         expected_gdf = get_expected_gdf()
 
         # Assertions
