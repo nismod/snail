@@ -29,13 +29,13 @@ def make_raster_data(filename):
     new_dataset.close()
 
 
-def make_vector_data(filename):
+def make_vector_data():
     test_linestrings = [
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
     ]
     gdf = gpd.GeoDataFrame({"col1": ["name1", "name2"], "geometry": test_linestrings})
-    gdf.to_file(filename)
+    return gdf
 
 
 def get_expected_gdf():
@@ -59,14 +59,11 @@ class TestSnailIntersections(unittest.TestCase):
     def test_split(self):
         tmp_dir = tempfile.TemporaryDirectory()
         raster_file = os.path.join(tmp_dir.name, "test_raster.tif")
-        vector_file = os.path.join(tmp_dir.name, "test_vector.gpkg")
 
+        vector_data = make_vector_data()
         make_raster_data(raster_file)
-        make_vector_data(vector_file)
-
         raster_data = rasterio.open(raster_file)
-        vector_data = gpd.read_file(vector_file)
-
+        
         gdf = split(vector_data, raster_data)
         expected_gdf = get_expected_gdf()
 
@@ -89,17 +86,15 @@ class TestSnailIntersections(unittest.TestCase):
         )
 
         tmp_dir.cleanup()
+        raster_data.close()
 
     def test_raster2split(self):
         tmp_dir = tempfile.TemporaryDirectory()
         raster_file = os.path.join(tmp_dir.name, "test_raster.tif")
-        vector_file = os.path.join(tmp_dir.name, "test_vector.gpkg")
 
+        vector_data = get_expected_gdf()
         make_raster_data(raster_file)
-        get_expected_gdf().to_file(vector_file)
-
         raster_data = rasterio.open(raster_file)
-        vector_data = gpd.read_file(vector_file)
 
         output_gdf = raster2split(vector_data, raster_data, bands=[1])
 
@@ -109,3 +104,5 @@ class TestSnailIntersections(unittest.TestCase):
         raster_data = rasterio.open(raster_file).read(1)
         expected_raster_values = np.tile(raster_data[data_array_indices], 2)
         assert_array_almost_equal(output_gdf["band1"].values, expected_raster_values)
+
+        tmp_dir.cleanup()
