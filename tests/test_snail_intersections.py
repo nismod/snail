@@ -31,7 +31,9 @@ def make_vector_data():
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
     ]
-    gdf = gpd.GeoDataFrame({"col1": ["name1", "name2"], "geometry": test_linestrings})
+    gdf = gpd.GeoDataFrame(
+        {"col1": ["name1", "name2"], "geometry": test_linestrings}
+    )
     return gdf
 
 
@@ -91,4 +93,6 @@ class TestSnailIntersections(unittest.TestCase):
         data_array_indices = ([0, 1, 1], [0, 0, 1])
         raster_data = self.raster_dataset.read(1)
         expected_raster_values = np.tile(raster_data[data_array_indices], 2)
-        assert_array_almost_equal(output_gdf["band1"].values, expected_raster_values)
+        assert_array_almost_equal(
+            output_gdf["band1"].values, expected_raster_values
+        )
