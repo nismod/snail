@@ -88,7 +88,7 @@ class TestSnailIntersections(unittest.TestCase):
         output_gdf = raster2split(vector_data, self.raster_dataset, bands=[1])
 
         # Expected raster values are points (0,1), (1,0) and (1,1) of the grid
-        data_array_indices = [[0, 1, 1], [0, 0, 1]]
+        data_array_indices = ([0, 1, 1], [0, 0, 1])
         raster_data = self.raster_dataset.read(1)
         expected_raster_values = np.tile(raster_data[data_array_indices], 2)
         assert_array_almost_equal(output_gdf["band1"].values, expected_raster_values)
