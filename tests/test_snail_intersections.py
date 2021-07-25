@@ -1,32 +1,29 @@
-import os
-import tempfile
 import unittest
 
 from affine import Affine
 import numpy as np
 from numpy.testing import assert_array_equal
 import geopandas as gpd
-import rasterio
+from rasterio.io import MemoryFile
 from shapely.geometry import LineString
 
 from snail.snail_intersections import split, raster2split
 
 
-def make_raster_data(filename):
+def make_raster_data():
     data = np.random.randn(2, 2)
-    new_dataset = rasterio.open(
-        filename,
-        "w",
+    memfile = MemoryFile()
+    new_dataset = memfile.open(
         driver="GTiff",
-        height=data.shape[0],
         width=data.shape[1],
+        height=data.shape[0],
         count=1,
-        dtype=data.dtype,
         crs="+proj=latlong",
         transform=Affine.identity(),
+        dtype=data.dtype,
     )
     new_dataset.write(data, 1)
-    new_dataset.close()
+    return new_dataset
 
 
 def make_vector_data():
@@ -57,13 +54,9 @@ def get_expected_gdf():
 
 class TestSnailIntersections(unittest.TestCase):
     def setUp(self):
-        self.tmp_dir = tempfile.TemporaryDirectory()
-        raster_file = os.path.join(self.tmp_dir.name, "test_raster.tif")
-        make_raster_data(raster_file)
-        self.raster_dataset = rasterio.open(raster_file)
+        self.raster_dataset = make_raster_data()
 
     def tearDown(self):
-        self.tmp_dir.cleanup()
         self.raster_dataset.close()
 
     def test_split(self):
