@@ -2,14 +2,15 @@ import unittest
 
 from shapely.geometry import LineString
 
-import sys
-
-# TODO: Update setup script to install extension module
-sys.path.append("build_python")
-import intersections
+from snail import intersections
 
 
 class TestIntersections(unittest.TestCase):
+    def setUp(self):
+        self.nrows = 2
+        self.ncols = 2
+        self.transform = [1, 0, 0, 0, 1, 0]
+
     def test_linestring_splitting(self):
         test_linestrings = [
             LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
@@ -28,14 +29,11 @@ class TestIntersections(unittest.TestCase):
             ],
         ]
 
-        nrows = 2
-        ncols = 2
-        transform = [1, 0, 0, 0, 1, 0]
         for i, test_data in enumerate(zip(test_linestrings, expected)):
             test_linestring, expected_splits = test_data
             with self.subTest(i=i):
                 splits = intersections.split(
-                    test_linestring, nrows, ncols, transform
+                    test_linestring, self.nrows, self.ncols, self.transform
                 )
                 self.assertTrue(
                     [
@@ -45,3 +43,17 @@ class TestIntersections(unittest.TestCase):
                         )
                     ]
                 )
+
+    def test_get_cell_indices(self):
+        test_linestrings = [
+            LineString([(0.25, 1.25), (0.5, 1.5), (0.5, 1.75)]),
+            LineString([(1.25, 1.25), (1.5, 1.5), (1.5, 1.75)]),
+        ]
+        expected_cell_indices = [(0, 1), (1, 1)]
+
+        for i, test_linestring in enumerate(test_linestrings):
+            with self.subTest(i=i):
+                cell_indices = intersections.get_cell_indices(
+                    test_linestring, self.nrows, self.ncols, self.transform
+                )
+                self.assertEqual(cell_indices, expected_cell_indices[i])

@@ -6,7 +6,7 @@ from glob import glob
 from os.path import basename, splitext
 
 from setuptools import find_packages
-from setuptools import setup
+from skbuild import setup
 
 
 def readme():
@@ -29,6 +29,7 @@ setup(
     packages=find_packages('src'),
     package_dir={'': 'src'},
     py_modules=[splitext(basename(path))[0] for path in glob('src/*.py')],
+    cmake_install_dir="src/snail",
     include_package_data=True,
     zip_safe=False,
     classifiers=[
@@ -48,7 +49,7 @@ setup(
         'setuptools_scm'
     ],
     install_requires=[
-        'shapely'
+        'affine', 'numpy', 'geopandas', 'shapely', 'rasterio'
     ],
     extras_require={
         # eg:
@@ -57,7 +58,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            # eg: 'snail = snail.cli:main',
+            'snail_split = snail.cli:snail_split',
+            'snail_raster2split = snail.cli:snail_raster2split',
         ]
     },
 )
