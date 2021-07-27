@@ -49,7 +49,7 @@ setup(
         'setuptools_scm'
     ],
     install_requires=[
-        'shapely'
+        'affine', 'numpy', 'geopandas', 'shapely', 'rasterio'
     ],
     extras_require={
         # eg:
@@ -58,7 +58,8 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            # eg: 'snail = snail.cli:main',
+            'snail_split = snail.cli:snail_split',
+            'snail_raster2split = snail.cli:snail_raster2split',
         ]
     },
 )
