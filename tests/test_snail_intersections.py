@@ -2,7 +2,7 @@ import unittest
 
 from affine import Affine
 import numpy as np
-from numpy.testing import assert_array_equal
+from numpy.testing import assert_array_equal, assert_array_almost_equal
 import geopandas as gpd
 from rasterio.io import MemoryFile
 from shapely.geometry import LineString
