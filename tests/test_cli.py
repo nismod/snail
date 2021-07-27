@@ -4,7 +4,7 @@ import unittest
 
 from affine import Affine
 import numpy as np
-from numpy.testing import assert_array_almost_equal
+from numpy.testing import assert_array_equal
 import geopandas as gpd
 import rasterio
 from shapely.geometry import LineString
@@ -96,7 +96,7 @@ class TestCli(unittest.TestCase):
                 .values
             )
         )
-        assert_array_almost_equal(
+        assert_array_equal(
             gdf["line index"].values, expected_gdf["line index"].values
         )
 
