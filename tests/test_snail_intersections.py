@@ -1,41 +1,40 @@
-import os
-import tempfile
 import unittest
 
 from affine import Affine
-import numpy
-from numpy.testing import assert_array_equal
+import numpy as np
+from numpy.testing import assert_array_equal, assert_array_almost_equal
 import geopandas as gpd
-import rasterio
+from rasterio.io import MemoryFile
 from shapely.geometry import LineString
 
-import snail.cli
+from snail.snail_intersections import split, raster2split
 
 
-def make_raster_data(filename):
-    data = numpy.random.randn(2, 2)
-    new_dataset = rasterio.open(
-        filename,
-        "w",
+def make_raster_data():
+    data = np.random.randn(2, 2)
+    memfile = MemoryFile()
+    new_dataset = memfile.open(
         driver="GTiff",
-        height=data.shape[0],
         width=data.shape[1],
+        height=data.shape[0],
         count=1,
-        dtype=data.dtype,
         crs="+proj=latlong",
         transform=Affine.identity(),
+        dtype=data.dtype,
     )
     new_dataset.write(data, 1)
-    new_dataset.close()
+    return new_dataset
 
 
-def make_vector_data(filename):
+def make_vector_data():
     test_linestrings = [
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
     ]
-    gdf = gpd.GeoDataFrame({"col1": ["name1", "name2"], "geometry": test_linestrings})
-    gdf.to_file(filename)
+    gdf = gpd.GeoDataFrame(
+        {"col1": ["name1", "name2"], "geometry": test_linestrings}
+    )
+    return gdf
 
 
 def get_expected_gdf():
@@ -55,28 +54,16 @@ def get_expected_gdf():
     return expected_gdf
 
 
-class TestCli(unittest.TestCase):
-    def test_cli(self):
-        tmp_dir = tempfile.TemporaryDirectory()
-        raster_file = os.path.join(tmp_dir.name, "test_raster.tif")
-        vector_file = os.path.join(tmp_dir.name, "test_vector.gpkg")
-        output_file = os.path.join(tmp_dir.name, "test_output.gpkg")
+class TestSnailIntersections(unittest.TestCase):
+    def setUp(self):
+        self.raster_dataset = make_raster_data()
 
-        make_raster_data(raster_file)
-        make_vector_data(vector_file)
+    def tearDown(self):
+        self.raster_dataset.close()
 
-        args = [
-            "--raster",
-            raster_file,
-            "--vector",
-            vector_file,
-            "--output",
-            output_file,
-        ]
-
-        snail.cli.main(args)
-
-        gdf = gpd.read_file(output_file)
+    def test_split(self):
+        vector_data = make_vector_data()
+        gdf = split(vector_data, self.raster_dataset)
         expected_gdf = get_expected_gdf()
 
         # Assertions
@@ -97,4 +84,15 @@ class TestCli(unittest.TestCase):
             gdf["line index"].values, expected_gdf["line index"].values
         )
 
-        tmp_dir.cleanup()
+    def test_raster2split(self):
+        vector_data = get_expected_gdf()
+
+        output_gdf = raster2split(vector_data, self.raster_dataset, bands=[1])
+
+        # Expected raster values are points (0,1), (1,0) and (1,1) of the grid
+        data_array_indices = ([0, 1, 1], [0, 0, 1])
+        raster_data = self.raster_dataset.read(1)
+        expected_raster_values = np.tile(raster_data[data_array_indices], 2)
+        assert_array_almost_equal(
+            output_gdf["band1"].values, expected_raster_values
+        )

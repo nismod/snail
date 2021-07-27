@@ -1,6 +1,8 @@
 #ifndef TRANSFORM_H
 #define TRANSFORM_H
 
+#include <vector>
+
 #include "exceptions.hpp"
 #include "geom.hpp"
 
@@ -27,6 +29,10 @@ struct Affine {
   /// Construct with six parameters, first two rows of 3x3 matrix
   Affine(double a, double b, double c, double d, double e, double f)
       : a{a}, b{b}, c{c}, d{d}, e{e}, f{f} {};
+
+  /// Same as above but construct from vector
+  Affine(std::vector<double> c)
+      : a{c[0]}, b{c[1]}, c{c[2]}, d{c[3]}, e{c[4]}, f{c[5]} {};
 
   /// Construct from GDALGeoTransform ordering of parameters
   /// see
