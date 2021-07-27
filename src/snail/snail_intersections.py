@@ -21,6 +21,9 @@ def split(vector_data, raster_data):
 
 
 def raster2split(vector_data, raster_data, bands=[1]):
+    # Let's not catch the user by surprise by modifying the
+    # dataframe in place. Return an enriched copy instead.
+    enriched_gdf = vector_data.copy()
     for band in bands:
         band_data = raster_data.read(band)
         geom_raster_values = []
@@ -32,8 +35,5 @@ def raster2split(vector_data, raster_data, bands=[1]):
                 list(raster_data.transform),
             )
             geom_raster_values.append(band_data[cell_x, cell_y])
-        # Let's not catch the user by surprise by modifying the
-        # dataframe in place. Return an enriched copy instead.
-        enriched_gdf = vector_data.copy()
         enriched_gdf.insert(len(vector_data.columns), f"band{band}", geom_raster_values)
     return enriched_gdf
