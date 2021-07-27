@@ -2,6 +2,7 @@
 #define GEOM_H
 
 #include <cmath>
+#include <tuple>
 
 #include "utils.hpp"
 
@@ -27,6 +28,8 @@ template <typename T> struct Vec2 {
   Vec2(void) {}
   // Construct a Vec2<T> from a pair of T
   Vec2(const T x, const T y) : x(x), y(y) {}
+  // Construct a Vec2<T> from tuple of two T
+  Vec2(const std::tuple<T, T> xy) : x(std::get<0>(xy)), y(std::get<1>(xy)) {}
   // Helper function to calculate the length of a Vec2<T>, cast to a double
   inline double length(void) const { return (double)sqrt(x * x + y * y); }
 };

@@ -20,7 +20,7 @@ jobs:
       - name: Build C++
         run: |
           cmake -Bbuild .
-          cmake --build build/
+          cmake --build build/ --target run_tests
 
       - name: Test C++
         run: ./build/run_tests
@@ -30,12 +30,17 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Build intersections module
+        run: |
+          cmake -Bbuild_python .
+          cmake --build build_python/ --target intersections
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install flake8 pytest pytest-cov
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          python setup.py develop
+          pip install -e .
 
       - name: Lint with flake8
         run: |
