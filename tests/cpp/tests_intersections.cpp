@@ -75,7 +75,32 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 			   {{1., 0.8333}, {1.125, 1.}},
 			   {{1.125, 1.}, {1.5, 1.5}}};
 
-  auto test_data = GENERATE_COPY(case1, case2);
+  // Linestring points are marked by o:
+  // Intersection points are marked by (o):
+  // +---------------+------(o)-----+
+  // |               |       |      |
+  // |               |       |      |
+  // |               |       |      |
+  // |               |       |      |
+  // |               |       |      |
+  // |               |       |      |
+  // |               |       |      |
+  // +---------------+------(o)-----+
+  // |               |     /        |
+  // |               |    /         |
+  // |               |   /          |
+  // |              (o)-/           |
+  // |               |              |
+  // |               |              |
+  // |               |              |
+  // +---------------+--------------+
+  // (0,0)         (1,0)          (2,0)
+  Config case3;
+  case3.linestring = {{1.0, 0.5}, {1.5, 1.0}, {1.5, 2.0}};
+  case3.expected_splits = {{{1.0, 1.5}, {1.5, 1.0}},
+			   {{1.5, 1.0}, {1.5, 2.0}}};
+
+  auto test_data = GENERATE_COPY(case1, case2, case3);
 
   std::vector<linestr> expected_splits = test_data.expected_splits;
 
