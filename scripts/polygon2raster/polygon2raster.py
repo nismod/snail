@@ -36,9 +36,18 @@ def get_crossings(splits):
 
 nrows = 5
 ncols = 3
-points = [(1.5, 0.25), (2.5, 1.5), (2.5, 3.5), (1.5, 2.25), (0.5, 3.5), (0.5, 1.5)]
+points = [
+    (1.5, 0.25),
+    (2.5, 1.5),
+    (2.5, 3.5),
+    (1.5, 2.25),
+    (0.5, 3.5),
+    (0.5, 1.5),
+]
 ring = orient(Polygon(points), -1)
-splits = split_one_geom(ring.exterior, nrows, ncols, [1, 0, 0, 0, 1, 0])
+exterior_splits = split_one_geom(
+    ring.exterior, nrows, ncols, [1, 0, 0, 0, 1, 0]
+)
 b_box = ring.bounds
 
 maxy = b_box[-1]
@@ -46,24 +55,43 @@ miny = b_box[1]
 maxx = b_box[-2]
 minx = b_box[0]
 
-inner_grid_lines = []
-for y in range(int(miny) + 1, int(maxy) + 1):
-    # Split horizontal grid lines inside polygon according to
-    # intersections with vertical grid lines.
-    crossings_on_gridline = list(
-        filter(lambda coord: coord[1] == y, get_crossings(splits))
-    )
-    gridline_segments = list(
-        zip(crossings_on_gridline, crossings_on_gridline[1:])
-    )
-    # Only every other gridline segments (between two consecutive
-    # crossings) is contained in the polygon
-    for line2 in gridline_segments[::2]:
-        inner_grid_lines.extend(
-            split_one_geom(
-                LineString(line2), nrows, ncols, [1, 0, 0, 0, 1, 0]
+
+def split_along_gridlines(
+    exterior_splits, min_idx=0, max_idx=0, direction="horizontal"
+):
+    x_or_y = {"horizontal": 1, "vertical": 0}
+    gridline_splits = []
+    for idx in range(min_idx, max_idx + 1):
+        # Split horizontal grid lines inside polygon according to
+        # intersections with vertical grid lines.
+        crossings_on_gridline = list(
+            filter(
+                # Returns True if crossing point lies on gridline
+                lambda coord: coord[x_or_y[direction]] == idx,
+                get_crossings(exterior_splits),
             )
         )
+        gridline_segments = list(
+            zip(crossings_on_gridline, crossings_on_gridline[1:])
+        )
+        # Only every other gridline segments (between two consecutive
+        # crossings) is contained in the polygon
+        for gridline_segment in gridline_segments[::2]:
+            splits = split_one_geom(
+                LineString(gridline_segment), nrows, ncols, [1, 0, 0, 0, 1, 0]
+            )
+            gridline_splits.extend(splits)
+    return gridline_splits
+
+
+inner_grid_lines = []
+
+split_along_gridlines(
+    exterior_splits,
+    min_idx=int(miny) + 1,
+    max_idx=int(maxy),
+    direction="horizontal",
+)
 
 for x in range(int(minx) + 1, int(maxx) + 1):
     p = [coord for coord in inter_points.coords if coord[0] == x]
