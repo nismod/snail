@@ -1,5 +1,6 @@
 from shapely.geometry.polygon import LinearRing, orient
 from shapely.geometry import LineString, Polygon
+from shapely.ops import polygonize
 
 import matplotlib.pyplot as plt
 
@@ -65,8 +66,7 @@ for x in range(int(minx) + 1, int(maxx) + 1):
         inner_grid_lines.extend(
             local_splits
         )
-        
-        
+polygons = list(polygonize(splits + inner_grid_lines))
 
 ax = plt.subplot()
 plot_coords(ax, ring.exterior)
