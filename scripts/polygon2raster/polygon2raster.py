@@ -70,15 +70,6 @@ for x in range(int(minx) + 1, int(maxx) + 1):
 polygons = list(polygonize(splits + inner_grid_lines))
 
 ax = plt.subplot()
-plot_coords(ax, ring.exterior)
-plot_line(ax, ring.exterior)
-for i in range(nrows):
-    plt.axhline(i, 0, ncols - 1)
-for i in range(ncols):
-    plt.axvline(i, 0, nrows - 1)
-plot_coords(ax, inter_points, color=RED)
-
-for line in inner_grid_lines:
-    plot_line(ax, line, color=GREEN)
-
+for p in polygons:
+    plot_line(ax, p.exterior)
 plt.show()
