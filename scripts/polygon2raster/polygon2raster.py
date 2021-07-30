@@ -46,11 +46,11 @@ miny = b_box[1]
 maxx = b_box[-2]
 minx = b_box[0]
 
-inter_points = LineString(get_crossings(splits))
-
 inner_grid_lines = []
 for y in range(int(miny) + 1, int(maxy) + 1):
-    p = [coord for coord in inter_points.coords if coord[1] == y]
+    p = list(
+        filter(lambda coord: coord[1] == y, get_crossings(splits))
+    )
     line2s = list(zip(p, p[1:]))[::2]
     for line2 in line2s:
         local_splits = split_one_geom(
