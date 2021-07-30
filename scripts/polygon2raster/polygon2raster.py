@@ -48,15 +48,22 @@ minx = b_box[0]
 
 inner_grid_lines = []
 for y in range(int(miny) + 1, int(maxy) + 1):
-    p = list(
+    # Split horizontal grid lines inside polygon according to
+    # intersections with vertical grid lines.
+    crossings_on_gridline = list(
         filter(lambda coord: coord[1] == y, get_crossings(splits))
     )
-    line2s = list(zip(p, p[1:]))[::2]
-    for line2 in line2s:
-        local_splits = split_one_geom(
-            LineString(line2), nrows, ncols, [1, 0, 0, 0, 1, 0]
+    gridline_segments = list(
+        zip(crossings_on_gridline, crossings_on_gridline[1:])
+    )
+    # Only every other gridline segments (between two consecutive
+    # crossings) is contained in the polygon
+    for line2 in gridline_segments[::2]:
+        inner_grid_lines.extend(
+            split_one_geom(
+                LineString(line2), nrows, ncols, [1, 0, 0, 0, 1, 0]
+            )
         )
-        inner_grid_lines.extend(local_splits)
 
 for x in range(int(minx) + 1, int(maxx) + 1):
     p = [coord for coord in inter_points.coords if coord[0] == x]
