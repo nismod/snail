@@ -8,8 +8,8 @@ from snail.intersections import split as split_one_geom
 
 BLUE = "#6699cc"
 GRAY = "#999999"
-RED = '#ff3333'
-GREEN = '#339933'
+RED = "#ff3333"
+GREEN = "#339933"
 
 
 def plot_coords(ax, ob, color=GRAY, zorder=1, alpha=1):
@@ -53,28 +53,29 @@ for y in range(int(miny) + 1, int(maxy) + 1):
     p = [coord for coord in inter_points.coords if coord[1] == y]
     line2s = list(zip(p, p[1:]))[::2]
     for line2 in line2s:
-        local_splits = split_one_geom(LineString(line2), nrows, ncols, [1, 0, 0, 0, 1, 0])
-        inner_grid_lines.extend(
-            local_splits
+        local_splits = split_one_geom(
+            LineString(line2), nrows, ncols, [1, 0, 0, 0, 1, 0]
         )
+        inner_grid_lines.extend(local_splits)
 
 for x in range(int(minx) + 1, int(maxx) + 1):
     p = [coord for coord in inter_points.coords if coord[0] == x]
     line2s = list(zip(p, p[1:]))[::2]
     for line2 in line2s:
-        local_splits = split_one_geom(LineString(line2), nrows, ncols, [1, 0, 0, 0, 1, 0])
-        inner_grid_lines.extend(
-            local_splits
+        local_splits = split_one_geom(
+            LineString(line2), nrows, ncols, [1, 0, 0, 0, 1, 0]
         )
+        inner_grid_lines.extend(local_splits)
+
 polygons = list(polygonize(splits + inner_grid_lines))
 
 ax = plt.subplot()
 plot_coords(ax, ring.exterior)
 plot_line(ax, ring.exterior)
 for i in range(nrows):
-    plt.axhline(i, 0, ncols-1)
+    plt.axhline(i, 0, ncols - 1)
 for i in range(ncols):
-    plt.axvline(i, 0, nrows-1)
+    plt.axvline(i, 0, nrows - 1)
 plot_coords(ax, inter_points, color=RED)
 
 for line in inner_grid_lines:
