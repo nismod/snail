@@ -84,25 +84,21 @@ def split_along_gridlines(
     return gridline_splits
 
 
-inner_grid_lines = []
-
-split_along_gridlines(
+horiz_splits = split_along_gridlines(
     exterior_splits,
     min_idx=int(miny) + 1,
     max_idx=int(maxy),
     direction="horizontal",
 )
 
-for x in range(int(minx) + 1, int(maxx) + 1):
-    p = [coord for coord in inter_points.coords if coord[0] == x]
-    line2s = list(zip(p, p[1:]))[::2]
-    for line2 in line2s:
-        local_splits = split_one_geom(
-            LineString(line2), nrows, ncols, [1, 0, 0, 0, 1, 0]
-        )
-        inner_grid_lines.extend(local_splits)
+vert_splits = split_along_gridlines(
+    exterior_splits,
+    min_idx=int(minx) + 1,
+    max_idx=int(maxx),
+    direction="vertical",
+)
 
-polygons = list(polygonize(splits + inner_grid_lines))
+polygons = list(polygonize(exterior_splits + horiz_splits + vert_splits))
 
 ax = plt.subplot()
 for p in polygons:
