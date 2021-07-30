@@ -30,7 +30,7 @@ def plot_line(ax, ob, color=BLUE, zorder=1, linewidth=3, alpha=1):
 
 nrows = 5
 ncols = 3
-points = [(1.5, 0.5), (2.5, 1.5), (2.5, 3.5), (1.5, 3.25), (0.5, 3.5), (0.5, 1.5)]
+points = [(1.5, 0.25), (2.5, 1.5), (2.5, 3.5), (1.5, 2.25), (0.5, 3.5), (0.5, 1.5)]
 ring = orient(Polygon(points), -1)
 splits = split_one_geom(ring.exterior, nrows, ncols, [1, 0, 0, 0, 1, 0])
 
