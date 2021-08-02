@@ -1,5 +1,6 @@
 #include <algorithm> /// copy_if
-#include <iterator> /// advance
+#include <iterator>  /// advance
+#include <string>
 #include "geofeatures.hpp"
 #include "geom.hpp"
 #include "grid.hpp"
@@ -23,8 +24,7 @@ std::vector<linestr> split_linestr(linestr linestring, linestr intersections) {
 }
 
 /// Find intersection points of a linestring with a raster grid
-std::vector<linestr> findIntersectionsLineString(Feature feature,
-                                                 Grid raster) {
+std::vector<linestr> findIntersectionsLineString(Feature feature, Grid raster) {
   linestr linestring = feature.geometry;
 
   std::vector<linestr> allsplits;
@@ -55,16 +55,26 @@ std::vector<linestr> findIntersectionsLineString(Feature feature,
   return (allsplits);
 }
 
+bool isOnGridLine(geometry::Vec2<double> point, std::string direction,
+                  int level) {
+  if (direction.compare("horizontal") == 0) {
+    return (point.y == level);
+  } else {
+    return (point.x == level);
+  }
+}
+
 std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                                          int min_level, int max_level,
-                                         Grid grid) {
+                                         std::string direction, Grid grid) {
   std::vector<geometry::Vec2<double>> crossings_on_gridline;
   std::vector<linestr> gridline_splits;
   for (int level = min_level; level <= max_level; level++) {
-    auto it = std::copy_if(
-        exterior_crossings.begin(), exterior_crossings.end(),
-        std::back_inserter(crossings_on_gridline),
-        [level](geometry::Vec2<double> p) { return p.y == level; });
+    auto it = std::copy_if(exterior_crossings.begin(), exterior_crossings.end(),
+                           std::back_inserter(crossings_on_gridline),
+                           [direction, level](geometry::Vec2<double> p) {
+                             return isOnGridLine(p, direction, level);
+                           });
     linestr segment(2);
 
     auto itr = crossings_on_gridline.begin();
