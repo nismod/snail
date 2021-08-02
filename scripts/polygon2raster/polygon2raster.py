@@ -57,17 +57,17 @@ minx = b_box[0]
 
 
 def split_along_gridlines(
-    exterior_splits, min_idx=0, max_idx=0, direction="horizontal"
+    exterior_splits, min_level=0, max_level=0, direction="horizontal"
 ):
     x_or_y = {"horizontal": 1, "vertical": 0}
     gridline_splits = []
-    for idx in range(min_idx, max_idx + 1):
+    for level in range(min_level, max_level + 1):
         # Split horizontal grid lines inside polygon according to
         # intersections with vertical grid lines.
         crossings_on_gridline = list(
             filter(
                 # Returns True if crossing point lies on gridline
-                lambda coord: coord[x_or_y[direction]] == idx,
+                lambda coord: coord[x_or_y[direction]] == level,
                 get_crossings(exterior_splits),
             )
         )
@@ -86,15 +86,15 @@ def split_along_gridlines(
 
 horiz_splits = split_along_gridlines(
     exterior_splits,
-    min_idx=int(miny) + 1,
-    max_idx=int(maxy),
+    min_level=int(miny) + 1,
+    max_level=int(maxy),
     direction="horizontal",
 )
 
 vert_splits = split_along_gridlines(
     exterior_splits,
-    min_idx=int(minx) + 1,
-    max_idx=int(maxx),
+    min_level=int(minx) + 1,
+    max_level=int(maxx),
     direction="vertical",
 )
 
