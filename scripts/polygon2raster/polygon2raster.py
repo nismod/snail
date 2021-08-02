@@ -71,14 +71,17 @@ def split_along_gridlines(
                 get_crossings(exterior_splits),
             )
         )
-        gridline_segments = list(
-            zip(crossings_on_gridline, crossings_on_gridline[1:])
-        )
+        gridline_segments = [
+            LineString(coord_pair)
+            for coord_pair in zip(
+                crossings_on_gridline, crossings_on_gridline[1:]
+            )
+        ]
         # Only every other gridline segments (between two consecutive
         # crossings) is contained in the polygon
         for gridline_segment in gridline_segments[::2]:
             splits = split_one_geom(
-                LineString(gridline_segment), nrows, ncols, [1, 0, 0, 0, 1, 0]
+                gridline_segment, nrows, ncols, [1, 0, 0, 0, 1, 0]
             )
             gridline_splits.extend(splits)
     return gridline_splits
