@@ -30,10 +30,6 @@ def plot_line(ax, ob, color=BLUE, zorder=1, linewidth=3, alpha=1):
     )
 
 
-def get_crossings(splits):
-    return [split.coords[0] for split in splits]
-
-
 nrows = 5
 ncols = 3
 points = [
@@ -45,9 +41,6 @@ points = [
     (0.5, 1.5),
 ]
 ring = orient(Polygon(points), -1)
-exterior_splits = split_one_geom(
-    ring.exterior, nrows, ncols, [1, 0, 0, 0, 1, 0]
-)
 b_box = ring.bounds
 
 maxy = b_box[-1]
@@ -57,7 +50,7 @@ minx = b_box[0]
 
 
 def split_along_gridlines(
-    exterior_splits, min_level=0, max_level=0, direction="horizontal"
+    exterior_crossings, min_level=0, max_level=0, direction="horizontal"
 ):
     x_or_y = {"horizontal": 1, "vertical": 0}
     gridline_splits = []
@@ -68,7 +61,7 @@ def split_along_gridlines(
             filter(
                 # Returns True if crossing point lies on gridline
                 lambda coord: coord[x_or_y[direction]] == level,
-                get_crossings(exterior_splits),
+                exterior_crossings,
             )
         )
         gridline_segments = [
@@ -87,15 +80,20 @@ def split_along_gridlines(
     return gridline_splits
 
 
+exterior_splits = split_one_geom(
+    ring.exterior, nrows, ncols, [1, 0, 0, 0, 1, 0]
+)
+exterior_crossings = [split.coords[0] for split in exterior_splits]
+
 horiz_splits = split_along_gridlines(
-    exterior_splits,
+    exterior_crossings,
     min_level=int(miny) + 1,
     max_level=int(maxy),
     direction="horizontal",
 )
 
 vert_splits = split_along_gridlines(
-    exterior_splits,
+    exterior_crossings,
     min_level=int(minx) + 1,
     max_level=int(maxx),
     direction="vertical",
