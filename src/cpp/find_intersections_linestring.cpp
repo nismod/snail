@@ -1,3 +1,5 @@
+#include <algorithm> /// copy_if
+#include <iterator> /// advance
 #include "geofeatures.hpp"
 #include "geom.hpp"
 #include "grid.hpp"
@@ -51,4 +53,34 @@ std::vector<linestr> findIntersectionsLineString(Feature feature,
   }
 
   return (allsplits);
+}
+
+std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
+                                         int min_level, int max_level,
+                                         Grid grid) {
+  std::vector<geometry::Vec2<double>> crossings_on_gridline;
+  std::vector<linestr> gridline_splits;
+  for (int level = min_level; level <= max_level; level++) {
+    auto it = std::copy_if(
+        exterior_crossings.begin(), exterior_crossings.end(),
+        std::back_inserter(crossings_on_gridline),
+        [level](geometry::Vec2<double> p) { return p.y == level; });
+    linestr segment(2);
+
+    auto itr = crossings_on_gridline.begin();
+    while (itr != crossings_on_gridline.end()) {
+      segment[0] = (*itr);
+      segment[1] = (*(std::next(itr)));
+
+      Feature f;
+      f.geometry.insert(f.geometry.begin(), segment.begin(), segment.end());
+      std::vector<linestr> splits = findIntersectionsLineString(f, grid);
+      gridline_splits.insert(gridline_splits.end(), splits.begin(),
+                             splits.end());
+      std::advance(itr, 2);
+    }
+    crossings_on_gridline.clear();
+  }
+
+  return (gridline_splits);
 }
