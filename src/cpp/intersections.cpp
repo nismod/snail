@@ -62,6 +62,40 @@ std::vector<py::object> split(py::object linestring_py, int nrows, int ncols,
   return convert_cpp2py(splits);
 }
 
+std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
+                    std::vector<double> transform) {
+  /// It is assumed that polygon is oriented (counter-clockwise)
+  py::tuple bounds = polygon.attr("bounds");
+  double minx = (py::float_)bounds[0];
+  double miny = (py::float_)bounds[1];
+  double maxx = (py::float_)bounds[2];
+  double maxy = (py::float_)bounds[3];
+
+  linestr exterior = convert_py2cpp(polygon.attr("exterior"));
+  Affine affine(transform[0], transform[1], transform[2], transform[3],
+                transform[4], transform[5]);
+  Grid grid(ncols, nrows, affine);
+  Feature f;
+  f.geometry.insert(f.geometry.begin(), exterior.begin(), exterior.end());
+  std::vector<linestr> exterior_splits =
+      findIntersectionsLineString(f, grid);
+  std::vector<geometry::Vec2<double>> exterior_crossings;
+  for (auto split : exterior_splits) {
+    exterior_crossings.push_back(split[0]);
+  }
+  std::vector<linestr> horiz_splits = splitAlongGridlines(
+      exterior_crossings, floor(miny) + 1, floor(maxy), "horizontal", grid);
+  std::vector<linestr> vert_splits = splitAlongGridlines(
+      exterior_crossings, floor(minx) + 1, floor(maxx), "vertical", grid);
+  std::vector<linestr> all_splits;
+  all_splits.insert(all_splits.end(), exterior_splits.begin(),
+                    exterior_splits.end());
+  all_splits.insert(all_splits.end(), horiz_splits.begin(), horiz_splits.end());
+  all_splits.insert(all_splits.end(), vert_splits.begin(), vert_splits.end());
+
+  return convert_cpp2py(all_splits);
+}
+
 std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
                                       int ncols,
                                       std::vector<double> transform) {
@@ -85,4 +119,5 @@ PYBIND11_MODULE(intersections, m) {
 
   m.def("split", &split, "A function");
   m.def("get_cell_indices", &get_cell_indices, "Getting cell indices");
+  m.def("split_polygon", &splitPolygon, "Splitting a polygon");
 }
