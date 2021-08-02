@@ -30,25 +30,6 @@ def plot_line(ax, ob, color=BLUE, zorder=1, linewidth=3, alpha=1):
     )
 
 
-nrows = 5
-ncols = 3
-points = [
-    (1.5, 0.25),
-    (2.5, 1.5),
-    (2.5, 3.5),
-    (1.5, 2.25),
-    (0.5, 3.5),
-    (0.5, 1.5),
-]
-ring = orient(Polygon(points), -1)
-b_box = ring.bounds
-
-maxy = b_box[-1]
-miny = b_box[1]
-maxx = b_box[-2]
-minx = b_box[0]
-
-
 def split_along_gridlines(
     exterior_crossings, min_level=0, max_level=0, direction="horizontal"
 ):
@@ -79,6 +60,19 @@ def split_along_gridlines(
             gridline_splits.extend(splits)
     return gridline_splits
 
+
+nrows = 5
+ncols = 3
+points = [
+    (1.5, 0.25),
+    (2.5, 1.5),
+    (2.5, 3.5),
+    (1.5, 2.25),
+    (0.5, 3.5),
+    (0.5, 1.5),
+]
+ring = orient(Polygon(points), -1)
+minx, miny, maxx, maxy = ring.bounds
 
 exterior_splits = split_one_geom(
     ring.exterior, nrows, ncols, [1, 0, 0, 0, 1, 0]
