@@ -71,7 +71,7 @@ points = [
     (0.5, 3.5),
     (0.5, 1.5),
 ]
-ring = orient(Polygon(points), -1)
+ring = orient(Polygon(points), 1)
 minx, miny, maxx, maxy = ring.bounds
 
 exterior_splits = split_one_geom(
