@@ -107,7 +107,7 @@ struct Grid {
 
     // As long as there is a crossing point BEFORE the end of the line, we can
     // keep looping.
-    while (pE.length() < length || pN.length() < length) {
+    while (pE.length() <= length || pN.length() <= length) {
       // Add the closest crossing point to the vector of grid / graticule
       // crossings.
       if (pE.length() < pN.length()) {
