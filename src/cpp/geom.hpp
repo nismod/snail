@@ -84,6 +84,14 @@ template <typename T> struct Line2 {
   }
 };
 
+/// A templated LineString representation. The list of points in coordinates
+/// defines a series of connected straight-line segments.
+template <typename T> struct LineString {
+  std::vector<geometry::Vec2<T>> coordinates;
+
+  LineString(const std::vector<geometry::Vec2<T>> coordinates) : coordinates(coordinates) {}
+};
+
 /// Haversine formula - calculate the distance between two points on the surface
 /// of the earth, using great-circles (NOTE: Only use with data in
 /// latitude/longitude coordinates).

@@ -1,7 +1,7 @@
 #include <algorithm> /// copy_if
 #include <iterator>  /// advance
 #include <string>
-#include "geofeatures.hpp"
+#include <vector>
 #include "geom.hpp"
 #include "grid.hpp"
 
@@ -24,13 +24,13 @@ std::vector<linestr> split_linestr(linestr linestring, linestr intersections) {
 }
 
 /// Find intersection points of a linestring with a raster grid
-std::vector<linestr> findIntersectionsLineString(Feature feature, Grid raster) {
-  linestr linestring = feature.geometry;
+std::vector<linestr> findIntersectionsLineString(geometry::LineString<double> linestring, Grid raster) {
+  linestr coords = linestring.coordinates;
 
   std::vector<linestr> allsplits;
   linestr linestr_piece;
-  for (std::size_t i = 0; i < linestring.size() - 1; i++) {
-    geometry::Line2<double> line(linestring.at(i), linestring.at(i + 1));
+  for (std::size_t i = 0; i < coords.size() - 1; i++) {
+    geometry::Line2<double> line(coords.at(i), coords.at(i + 1));
 
     // If the line starts and ends in different cells, it needs to be cleaned.
     if (raster.cellIndex(line.start) != raster.cellIndex(line.end)) {
@@ -43,12 +43,12 @@ std::vector<linestr> findIntersectionsLineString(Feature feature, Grid raster) {
 	linestr_piece = {intersections.back()};
       }
     } else {
-      linestr_piece.push_back(linestring.at(i));
+      linestr_piece.push_back(coords.at(i));
     }
   }
 
   if(linestr_piece.size() > 0) {
-    linestr_piece.push_back(linestring.back());
+    linestr_piece.push_back(coords.back());
     allsplits.push_back(linestr_piece);
   }
 
@@ -75,16 +75,15 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                            [direction, level](geometry::Vec2<double> p) {
                              return isOnGridLine(p, direction, level);
                            });
-    linestr segment(2);
+    linestr segment_coords(2);
 
     auto itr = crossings_on_gridline.begin();
     while (itr != crossings_on_gridline.end()) {
-      segment[0] = (*itr);
-      segment[1] = (*(std::next(itr)));
+      segment_coords[0] = (*itr);
+      segment_coords[1] = (*(std::next(itr)));
 
-      Feature f;
-      f.geometry.insert(f.geometry.begin(), segment.begin(), segment.end());
-      std::vector<linestr> splits = findIntersectionsLineString(f, grid);
+      geometry::LineString<double> segment(segment_coords);
+      std::vector<linestr> splits = findIntersectionsLineString(segment, grid);
       gridline_splits.insert(gridline_splits.end(), splits.begin(),
                              splits.end());
       std::advance(itr, 2);

@@ -4,10 +4,10 @@
 #include <sstream>
 #include <string>
 #include <tuple>
+#include <vector>
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "geofeatures.hpp"
 #include "geom.hpp"
 #include "grid.hpp"
 #include "transform.hpp"
@@ -56,9 +56,8 @@ std::vector<py::object> split(py::object linestring_py, int nrows, int ncols,
   Affine affine(transform[0], transform[1], transform[2], transform[3],
                 transform[4], transform[5]);
   Grid grid(ncols, nrows, affine);
-  Feature f;
-  f.geometry.insert(f.geometry.begin(), linestring.begin(), linestring.end());
-  std::vector<linestr> splits = findIntersectionsLineString(f, grid);
+  geometry::LineString<double> line(linestring);
+  std::vector<linestr> splits = findIntersectionsLineString(line, grid);
   return convert_cpp2py(splits);
 }
 
@@ -75,10 +74,9 @@ std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
   Affine affine(transform[0], transform[1], transform[2], transform[3],
                 transform[4], transform[5]);
   Grid grid(ncols, nrows, affine);
-  Feature f;
-  f.geometry.insert(f.geometry.begin(), exterior.begin(), exterior.end());
+  geometry::LineString<double> line(exterior);
   std::vector<linestr> exterior_splits =
-      findIntersectionsLineString(f, grid);
+      findIntersectionsLineString(line, grid);
   std::vector<geometry::Vec2<double>> exterior_crossings;
   for (auto split : exterior_splits) {
     exterior_crossings.push_back(split[0]);
