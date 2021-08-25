@@ -97,7 +97,7 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   // (0,0)         (1,0)          (2,0)
   Config case3;
   case3.linestring = {{1.0, 0.5}, {1.5, 1.0}, {1.5, 2.0}};
-  case3.expected_splits = {{{1.0, 1.5}, {1.5, 1.0}},
+  case3.expected_splits = {{{1.0, 0.5}, {1.5, 1.0}},
 			   {{1.5, 1.0}, {1.5, 2.0}}};
 
   auto test_data = GENERATE_COPY(case1, case2, case3);
