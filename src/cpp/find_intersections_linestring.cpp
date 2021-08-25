@@ -35,13 +35,20 @@ std::vector<linestr> findIntersectionsLineString(Feature feature,
       linestr intersections = raster.findIntersections(line);
       std::vector<linestr> splits = split_linestr(linestr_piece, intersections);
       allsplits.insert(allsplits.end(), splits.begin(), splits.end());
-      linestr_piece = {intersections.back()};
+      if(line.end == intersections.back()) {
+	linestr_piece = {};
+      } else {
+	linestr_piece = {intersections.back()};
+      }
     } else {
       linestr_piece.push_back(linestring.at(i));
     }
   }
-  linestr_piece.push_back(linestring.back());
-  allsplits.push_back(linestr_piece);
+
+  if(linestr_piece.size() > 0) {
+    linestr_piece.push_back(linestring.back());
+    allsplits.push_back(linestr_piece);
+  }
 
   return (allsplits);
 }
