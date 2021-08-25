@@ -107,24 +107,31 @@ struct Grid {
 
     // As long as there is a crossing point BEFORE the end of the line, we can
     // keep looping.
+    geometry::Vec2<double> p;
     while (pE.length() <= length || pN.length() <= length) {
-      // Add the closest crossing point to the vector of grid / graticule
-      // crossings.
-      if (pE.length() < pN.length()) {
-        crossings.push_back(line.start + pE);
+      // Add the closest crossing point to the vector of grid /
+      // graticule crossings.  If both crossing points overlap then we
+      // update both and it doesn't matter wich one we add to the
+      // vector of crossings.
+      if (pE.length() <= pN.length()) {
+	// Register location of next crossing point before updating
+	p = pE;
         // Update the distance to the next graticule.
         dE += double(east - 1) * cellsize_x;
         // Calculate the position of the crossing point on the next grid /
         // graticule line.
         pE = geometry::Vec2<double>(dE, dE * rise / run);
-      } else {
-        crossings.push_back(line.start + pN);
+      }
+      if (pE.length() >= pN.length()){
+	// Register location of next crossing point before updating
+        p = pN;
         // Update the distance to the next graticule.
         dN += double(north - 1) * cellsize_y;
         // Calculate the position of the crossing point on the next grid /
         // graticule line.
         pN = geometry::Vec2<double>(dN * run / rise, dN);
       }
+      crossings.push_back(line.start + p);
     }
 
     // Return the vector of grid / graticule crossing points that exist bbetween
