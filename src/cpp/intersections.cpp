@@ -8,10 +8,12 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "geom.hpp"
+#include "geometry.hpp"
 #include "grid.hpp"
 #include "transform.hpp"
-#include "find_intersections_linestring.hpp"
+#include "operations.hpp"
+
+namespace snail {
 
 namespace py = pybind11;
 namespace geo = geometry;
@@ -53,11 +55,12 @@ std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
 std::vector<py::object> split(py::object linestring_py, int nrows, int ncols,
                             std::vector<double> transform) {
   linestr linestring = convert_py2cpp(linestring_py);
-  Affine affine(transform[0], transform[1], transform[2], transform[3],
-                transform[4], transform[5]);
-  Grid grid(ncols, nrows, affine);
+  transform::Affine affine(
+    transform[0], transform[1], transform[2], transform[3], transform[4],
+    transform[5]);
+  grid::Grid grid(ncols, nrows, affine);
   geometry::LineString<double> line(linestring);
-  std::vector<linestr> splits = findIntersectionsLineString(line, grid);
+  std::vector<linestr> splits = operations::findIntersectionsLineString(line, grid);
   return convert_cpp2py(splits);
 }
 
@@ -71,19 +74,19 @@ std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
   double maxy = (py::float_)bounds[3];
 
   linestr exterior = convert_py2cpp(polygon.attr("exterior"));
-  Affine affine(transform[0], transform[1], transform[2], transform[3],
+  transform::Affine affine(transform[0], transform[1], transform[2], transform[3],
                 transform[4], transform[5]);
-  Grid grid(ncols, nrows, affine);
+  grid::Grid grid(ncols, nrows, affine);
   geometry::LineString<double> line(exterior);
   std::vector<linestr> exterior_splits =
-      findIntersectionsLineString(line, grid);
+      operations::findIntersectionsLineString(line, grid);
   std::vector<geometry::Vec2<double>> exterior_crossings;
   for (auto split : exterior_splits) {
     exterior_crossings.push_back(split[0]);
   }
-  std::vector<linestr> horiz_splits = splitAlongGridlines(
+  std::vector<linestr> horiz_splits = operations::splitAlongGridlines(
       exterior_crossings, floor(miny) + 1, floor(maxy), "horizontal", grid);
-  std::vector<linestr> vert_splits = splitAlongGridlines(
+  std::vector<linestr> vert_splits = operations::splitAlongGridlines(
       exterior_crossings, floor(minx) + 1, floor(maxx), "vertical", grid);
   std::vector<linestr> all_splits;
   all_splits.insert(all_splits.end(), exterior_splits.begin(),
@@ -105,17 +108,20 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
   geo::Vec2<double> midpoint =
       geo::Vec2<double>((maxx + minx) * 0.5, (maxy + miny) * 0.5);
 
-  Affine affine(transform[0], transform[1], transform[2], transform[3],
+  transform::Affine affine(transform[0], transform[1], transform[2], transform[3],
                 transform[4], transform[5]);
-  Grid grid(ncols, nrows, affine);
+  grid::Grid grid(ncols, nrows, affine);
   geo::Vec2<int> cell = grid.cellIndices(midpoint);
   return std::make_tuple(cell.x, cell.y);
 }
 
+} // namespace snail
+
+
 PYBIND11_MODULE(intersections, m) {
   m.doc() = "pybind11 example plugin"; // optional module docstring
 
-  m.def("split", &split, "A function");
-  m.def("get_cell_indices", &get_cell_indices, "Getting cell indices");
-  m.def("split_polygon", &splitPolygon, "Splitting a polygon");
+  m.def("split", &snail::split, "A function");
+  m.def("get_cell_indices", &snail::get_cell_indices, "Getting cell indices");
+  m.def("split_polygon", &snail::splitPolygon, "Splitting a polygon");
 }

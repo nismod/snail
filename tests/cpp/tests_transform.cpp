@@ -1,7 +1,10 @@
 #include <catch2/catch.hpp>
 
-#include "geom.hpp"
+#include "geometry.hpp"
 #include "transform.hpp"
+
+using snail::transform::Affine;
+using snail::geometry::Vec2;
 
 TEST_CASE("Default is identity", "[construction]") {
     Affine(a);
@@ -98,8 +101,8 @@ TEST_CASE("Invert scaling", "[invert]") {
 TEST_CASE("Scale transform", "[transform]") {
     double scale = 3;
     Affine a(scale, 0, 0, 0, scale, 0);
-    geometry::Vec2<double> p(0.5, 0.5);
-    geometry::Vec2<double> expected(1.5, 1.5);
+    Vec2<double> p(0.5, 0.5);
+    Vec2<double> expected(1.5, 1.5);
     auto actual = a * p;
     REQUIRE( actual.x == Approx(expected.x));
     REQUIRE( actual.y == Approx(expected.y));
@@ -110,8 +113,8 @@ TEST_CASE("Translate transform", "[transform]") {
     double x = 2;
     double y = 4;
     Affine a(1, 0, x, 0, 1, y);
-    geometry::Vec2<double> p(0.5, 0.5);
-    geometry::Vec2<double> expected(2.5, 4.5);
+    Vec2<double> p(0.5, 0.5);
+    Vec2<double> expected(2.5, 4.5);
     auto actual = a * p;
     REQUIRE( actual.x == Approx(expected.x));
     REQUIRE( actual.y == Approx(expected.y));

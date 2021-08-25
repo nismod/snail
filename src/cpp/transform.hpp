@@ -3,8 +3,11 @@
 
 #include <vector>
 
-#include "exceptions.hpp"
-#include "geom.hpp"
+#include "utils.hpp"
+#include "geometry.hpp"
+
+namespace snail {
+namespace transform {
 
 /**
  * Affine transform
@@ -72,4 +75,6 @@ struct Affine {
   }
 };
 
+} // namespace transform
+} // namespace snail
 #endif // TRANSFORM_H

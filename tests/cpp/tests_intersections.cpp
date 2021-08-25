@@ -7,14 +7,14 @@
 #include <tuple>
 #include <vector>
 
-#include "geom.hpp"
+#include "geometry.hpp"
 #include "grid.hpp"
 #include "transform.hpp"
-#include "find_intersections_linestring.hpp"
+#include "operations.hpp"
 
 #define TOL 0.001
 
-using linestr = std::vector<geometry::Vec2<double>>;
+using linestr = std::vector<snail::geometry::Vec2<double>>;
 
 struct Config {
   linestr linestring;
@@ -130,11 +130,11 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   std::vector<linestr> expected_splits = test_data.expected_splits;
 
   linestr geom = test_data.linestring;;
-  geometry::LineString<double> line(geom);
+  snail::geometry::LineString<double> line(geom);
 
   // Using default Affine transform(1, 0, 0, 0, 1, 0)
-  Grid test_raster(2, 2, Affine());
-  std::vector<linestr> splits = findIntersectionsLineString(line, test_raster);
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+  std::vector<linestr> splits = snail::operations::findIntersectionsLineString(line, test_raster);
 
   // Test that we're getting the expected number of splits
   REQUIRE(splits.size() == expected_splits.size());
@@ -145,8 +145,8 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   // Test that each one of the splits are made of the expected points
   for (int i = 0; i < splits.size(); i++) {
     for (int j = 0; j < splits[i].size(); j++) {
-      geometry::Vec2<double> point = splits[i][j];
-      geometry::Vec2<double> expected_point = expected_splits[i][j];
+      snail::geometry::Vec2<double> point = splits[i][j];
+      snail::geometry::Vec2<double> expected_point = expected_splits[i][j];
 
       REQUIRE(std::abs(point.x - expected_point.x) < TOL);
       REQUIRE(std::abs(point.y - expected_point.y) < TOL);

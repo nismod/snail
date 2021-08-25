@@ -5,9 +5,14 @@
 #include <string>
 #include <vector>
 
-#include "geom.hpp"
+#include "geometry.hpp"
 #include "transform.hpp"
 #include "utils.hpp"
+
+namespace snail {
+namespace grid {
+
+using transform::Affine;
 
 /// Structure defining a raster grid.
 struct Grid {
@@ -145,5 +150,6 @@ struct Grid {
     return crossings;
   }
 };
-
+} // namespace grid
+} // namespace snail
 #endif // GRID_H

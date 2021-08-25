@@ -3,9 +3,11 @@
 
 #include <cmath>
 #include <tuple>
+#include <vector>
 
 #include "utils.hpp"
 
+namespace snail {
 namespace geometry {
 
 /// A templated 2D vector representation
@@ -107,5 +109,6 @@ inline double haversine(Line2<double> line) {
   return utils::R * c;
 }
 } // namespace geometry
+} // namespace snail
 
 #endif // GEOM_H

@@ -2,8 +2,11 @@
 #include <iterator>  /// advance
 #include <string>
 #include <vector>
-#include "geom.hpp"
+#include "geometry.hpp"
 #include "grid.hpp"
+
+namespace snail {
+namespace operations {
 
 using linestr = std::vector<geometry::Vec2<double>>;
 
@@ -24,7 +27,8 @@ std::vector<linestr> split_linestr(linestr linestring, linestr intersections) {
 }
 
 /// Find intersection points of a linestring with a raster grid
-std::vector<linestr> findIntersectionsLineString(geometry::LineString<double> linestring, Grid raster) {
+std::vector<linestr> findIntersectionsLineString(
+  geometry::LineString<double> linestring, grid::Grid raster) {
   linestr coords = linestring.coordinates;
 
   std::vector<linestr> allsplits;
@@ -66,7 +70,7 @@ bool isOnGridLine(geometry::Vec2<double> point, std::string direction,
 
 std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                                          int min_level, int max_level,
-                                         std::string direction, Grid grid) {
+                                         std::string direction, grid::Grid grid) {
   std::vector<geometry::Vec2<double>> crossings_on_gridline;
   std::vector<linestr> gridline_splits;
   for (int level = min_level; level <= max_level; level++) {
@@ -93,3 +97,6 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
 
   return (gridline_splits);
 }
+
+} // namespace operations
+} // namespace snail
