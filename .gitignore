@@ -18,4 +18,6 @@ data
 # cpp
 *.out
 *.o
+*.so
 build/*
+_skbuild
