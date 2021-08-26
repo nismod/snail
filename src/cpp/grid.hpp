@@ -132,7 +132,6 @@ struct Grid {
       else if (pN.length() < pE.length()){
 	crossings.push_back(line.start + pN);
 	// Register location of next crossing point before updating
-        p = pN;
         // Update the distance to the next graticule.
         dN += double(north - 1) * cellsize_y;
         // Calculate the position of the crossing point on the next grid /
