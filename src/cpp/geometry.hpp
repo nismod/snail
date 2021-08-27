@@ -88,10 +88,10 @@ template <typename T> struct Line2 {
 
 /// A templated LineString representation. The list of points in coordinates
 /// defines a series of connected straight-line segments.
-template <typename T> struct LineString {
-  std::vector<geometry::Vec2<T>> coordinates;
+struct LineString {
+  std::vector<geometry::Vec2<double>> coordinates;
 
-  LineString(const std::vector<geometry::Vec2<T>> coordinates)
+  LineString(const std::vector<geometry::Vec2<double>> coordinates)
       : coordinates(coordinates) {}
 };
 

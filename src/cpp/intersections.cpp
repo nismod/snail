@@ -58,7 +58,7 @@ std::vector<py::object> split(py::object linestring_py, int nrows, int ncols,
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
-  geometry::LineString<double> line(linestring);
+  geometry::LineString line(linestring);
   std::vector<linestr> splits =
       operations::findIntersectionsLineString(line, grid);
   return convert_cpp2py(splits);
@@ -77,7 +77,7 @@ std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
-  geometry::LineString<double> line(exterior);
+  geometry::LineString line(exterior);
   std::vector<linestr> exterior_splits =
       operations::findIntersectionsLineString(line, grid);
   std::vector<geometry::Vec2<double>> exterior_crossings;

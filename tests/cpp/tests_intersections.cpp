@@ -130,7 +130,7 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   std::vector<linestr> expected_splits = test_data.expected_splits;
 
   linestr geom = test_data.linestring;
-  snail::geometry::LineString<double> line(geom);
+  snail::geometry::LineString line(geom);
 
   // Using default Affine transform(1, 0, 0, 0, 1, 0)
   snail::grid::Grid test_raster(2, 2, snail::transform::Affine());

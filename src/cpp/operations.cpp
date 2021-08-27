@@ -29,7 +29,7 @@ std::vector<linestr> split_linestr(linestr linestring, linestr intersections) {
 
 /// Find intersection points of a linestring with a raster grid
 std::vector<linestr>
-findIntersectionsLineString(geometry::LineString<double> linestring,
+findIntersectionsLineString(geometry::LineString linestring,
                             grid::Grid raster) {
   linestr coords = linestring.coordinates;
 
@@ -94,7 +94,7 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
       segment_coords[0] = (*itr);
       segment_coords[1] = (*(std::next(itr)));
 
-      geometry::LineString<double> segment(segment_coords);
+      geometry::LineString segment(segment_coords);
       std::vector<linestr> splits = findIntersectionsLineString(segment, grid);
       gridline_splits.insert(
         gridline_splits.end(), splits.begin(), splits.end());
