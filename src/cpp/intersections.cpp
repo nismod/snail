@@ -113,8 +113,7 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
-  geo::Vec2<int> cell = grid.cellIndices(midpoint);
-  return std::make_tuple(cell.x, cell.y);
+  return grid.cellIndices(midpoint);
 }
 
 } // namespace snail

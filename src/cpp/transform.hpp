@@ -69,10 +69,6 @@ struct Affine {
   geometry::Vec2<double> operator*(const geometry::Vec2<double> &p) const {
     return geometry::Vec2<double>(p.x * a + p.y * b + c, p.x * d + p.y * e + f);
   }
-
-  geometry::Vec2<double> operator*(const geometry::Vec2<int> &p) const {
-    return geometry::Vec2<double>(p.x * a + p.y * b + c, p.x * d + p.y * e + f);
-  }
 };
 
 } // namespace transform

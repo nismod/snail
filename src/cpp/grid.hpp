@@ -48,11 +48,11 @@ struct Grid {
   /// Calculate hashed index in raster.
   int cellIndex(const geometry::Vec2<double> p) const {
     auto offset = cellIndices(p);
-    return offset.x + offset.y * ncols;
+    return std::get<0>(offset) + std::get<1>(offset) * ncols;
   }
 
   /// Recover i, j index in raster.
-  geometry::Vec2<int>
+  std::tuple<int, int>
   cellIndices(const geometry::Vec2<double> p,
               double epsilon = std::numeric_limits<double>::epsilon()) const {
     // Note on epsilon: nudge point slightly in the x and y direction towards
@@ -62,16 +62,17 @@ struct Grid {
     // TODO confirm and construct test case to demonstrate.
     auto offset =
         world_to_grid * (p + geometry::Vec2<double>(epsilon, epsilon));
-    return geometry::Vec2<int>(floor(offset.x), floor(offset.y));
+    return std::make_tuple(floor(offset.x), floor(offset.y));
   }
 
   /// Calculate the relative position of a point in a cell.
   geometry::Vec2<double> offsetInCell(const geometry::Vec2<double> p) const {
     // Retrieve the indices of the cell.
-    geometry::Vec2<int> cell_offset = cellIndices(p);
+    auto cell_offset = cellIndices(p);
 
     // Calculate the LL coordinates of the cell.
-    geometry::Vec2<double> cell = grid_to_world * cell_offset;
+    geometry::Vec2<double> cell = grid_to_world * geometry::Vec2<double>(std::get<0>(cell_offset), std::get<1>(cell_offset));
+
 
     // Return the vector between the two points.
     return geometry::Vec2<double>(p.x - cell.x, p.y - cell.y);
