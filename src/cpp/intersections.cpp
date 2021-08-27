@@ -52,8 +52,8 @@ std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
   return splits_py;
 }
 
-std::vector<py::object> split(py::object linestring_py, int nrows, int ncols,
-                              std::vector<double> transform) {
+std::vector<py::object> splitLineString(
+  py::object linestring_py, int nrows, int ncols, std::vector<double> transform) {
   linestr linestring = convert_py2cpp(linestring_py);
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);
@@ -119,9 +119,9 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
 } // namespace snail
 
 PYBIND11_MODULE(intersections, m) {
-  m.doc() = "pybind11 example plugin"; // optional module docstring
+  m.doc() = "Vector geometry to grid intersections";
 
-  m.def("split", &snail::split, "A function");
-  m.def("get_cell_indices", &snail::get_cell_indices, "Getting cell indices");
-  m.def("split_polygon", &snail::splitPolygon, "Splitting a polygon");
+  m.def("split_linestring", &snail::splitLineString, "Split LineString along a grid");
+  m.def("get_cell_indices", &snail::get_cell_indices, "Get LineString cell indices in a grid");
+  m.def("split_polygon", &snail::splitPolygon, "Split Polygon along a grid");
 }

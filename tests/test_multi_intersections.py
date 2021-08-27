@@ -8,7 +8,11 @@ from rasterio.io import MemoryFile
 from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import LinearRing, orient
 
-from snail.snail_intersections import split, raster2split
+from snail.multi_intersections import (
+    split_linestrings,
+    split_polygons,
+    raster2split,
+)
 
 
 def make_raster_data():
@@ -142,9 +146,9 @@ class TestSnailIntersections(unittest.TestCase):
     def tearDown(self):
         self.raster_dataset.close()
 
-    def test_split(self):
+    def test_split_linestrings(self):
         vector_data = make_vector_data()
-        gdf = split(vector_data, self.raster_dataset)
+        gdf = split_linestrings(vector_data, self.raster_dataset)
         expected_gdf = get_expected_gdf()
 
         # Assertions
@@ -165,9 +169,9 @@ class TestSnailIntersections(unittest.TestCase):
             gdf["line index"].values, expected_gdf["line index"].values
         )
 
-    def test_split_polygon(self):
+    def test_split_polygons(self):
         vector_data = make_polygon_vector_data()
-        gdf = split(vector_data, self.raster_dataset)
+        gdf = split_polygons(vector_data, self.raster_dataset)
         expected_gdf = get_expected_polygon_gdf()
 
         self.assertTrue(

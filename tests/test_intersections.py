@@ -32,7 +32,7 @@ class TestIntersections(unittest.TestCase):
         for i, test_data in enumerate(zip(test_linestrings, expected)):
             test_linestring, expected_splits = test_data
             with self.subTest(i=i):
-                splits = intersections.split(
+                splits = intersections.split_linestring(
                     test_linestring, self.nrows, self.ncols, self.transform
                 )
                 self.assertTrue(
