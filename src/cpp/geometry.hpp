@@ -1,5 +1,5 @@
-#ifndef GEOM_H
-#define GEOM_H
+#ifndef GEOMETRY_H
+#define GEOMETRY_H
 
 #include <cmath>
 #include <tuple>
@@ -112,4 +112,4 @@ inline double haversine(Line2<double> line) {
 } // namespace geometry
 } // namespace snail
 
-#endif // GEOM_H
+#endif // GEOMETRY_H
