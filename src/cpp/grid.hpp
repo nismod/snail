@@ -55,8 +55,10 @@ struct Grid {
   geometry::Vec2<int>
   cellIndices(const geometry::Vec2<double> p,
               double epsilon = std::numeric_limits<double>::epsilon()) const {
-    // Note on epsilon: nudge point slightly in the x and y direction towards the cell centre
-    // - this should allow for some tolerance in coordinate precision and avoid off-by-one errors
+    // Note on epsilon: nudge point slightly in the x and y direction towards
+    // the cell centre
+    // - this should allow for some tolerance in coordinate precision and avoid
+    // off-by-one errors
     // TODO confirm and construct test case to demonstrate.
     auto offset =
         world_to_grid * (p + geometry::Vec2<double>(epsilon, epsilon));
@@ -118,25 +120,24 @@ struct Grid {
       // update both and it doesn't matter wich one we add to the
       // vector of crossings.
       if (pE == pN) {
-	crossings.push_back(line.start + pN);
-	// Update the distance to the next graticule.
+        crossings.push_back(line.start + pN);
+        // Update the distance to the next graticule.
         dE += double(east - 1) * cellsize_x;
-	dN += double(north - 1) * cellsize_y;
+        dN += double(north - 1) * cellsize_y;
         // Calculate the position of the crossing point on the next grid /
         // graticule line.
         pE = geometry::Vec2<double>(dE, dE * rise / run);
-	pN = geometry::Vec2<double>(dN * run / rise, dN);
+        pN = geometry::Vec2<double>(dN * run / rise, dN);
       } else if (pE.length() < pN.length()) {
-	crossings.push_back(line.start + pE);
+        crossings.push_back(line.start + pE);
         // Update the distance to the next graticule.
         dE += double(east - 1) * cellsize_x;
         // Calculate the position of the crossing point on the next grid /
         // graticule line.
         pE = geometry::Vec2<double>(dE, dE * rise / run);
-      }
-      else if (pN.length() < pE.length()){
-	crossings.push_back(line.start + pN);
-	// Register location of next crossing point before updating
+      } else if (pN.length() < pE.length()) {
+        crossings.push_back(line.start + pN);
+        // Register location of next crossing point before updating
         // Update the distance to the next graticule.
         dN += double(north - 1) * cellsize_y;
         // Calculate the position of the crossing point on the next grid /

@@ -27,8 +27,9 @@ std::vector<linestr> split_linestr(linestr linestring, linestr intersections) {
 }
 
 /// Find intersection points of a linestring with a raster grid
-std::vector<linestr> findIntersectionsLineString(
-  geometry::LineString<double> linestring, grid::Grid raster) {
+std::vector<linestr>
+findIntersectionsLineString(geometry::LineString<double> linestring,
+                            grid::Grid raster) {
   linestr coords = linestring.coordinates;
 
   std::vector<linestr> allsplits;
@@ -41,17 +42,17 @@ std::vector<linestr> findIntersectionsLineString(
       linestr intersections = raster.findIntersections(line);
       std::vector<linestr> splits = split_linestr(linestr_piece, intersections);
       allsplits.insert(allsplits.end(), splits.begin(), splits.end());
-      if(line.end == intersections.back()) {
-	linestr_piece = {};
+      if (line.end == intersections.back()) {
+        linestr_piece = {};
       } else {
-	linestr_piece = {intersections.back()};
+        linestr_piece = {intersections.back()};
       }
     } else {
       linestr_piece.push_back(coords.at(i));
     }
   }
 
-  if(linestr_piece.size() > 0) {
+  if (linestr_piece.size() > 0) {
     linestr_piece.push_back(coords.back());
     allsplits.push_back(linestr_piece);
   }
@@ -70,7 +71,8 @@ bool isOnGridLine(geometry::Vec2<double> point, std::string direction,
 
 std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                                          int min_level, int max_level,
-                                         std::string direction, grid::Grid grid) {
+                                         std::string direction,
+                                         grid::Grid grid) {
   std::vector<geometry::Vec2<double>> crossings_on_gridline;
   std::vector<linestr> gridline_splits;
   for (int level = min_level; level <= max_level; level++) {

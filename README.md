@@ -65,6 +65,11 @@ Run lints and checks:
 
     clang-tidy --checks 'cppcoreguidelines-*' src/cpp/*.hpp
 
+This may need some includes for `pybind11` - which will vary depending on your
+python installation. For example, with python via miniconda:
+
+    clang-tidy --checks 'cppcoreguidelines-*' src/cpp/* -- -I/home/username/miniconda3/include/python3.7m/ -I./pybind11/include/
+
 Fetch source code for Catch2 unit testing library (this is included as a git submodule):
 
     git submodule update --init --recursive
@@ -77,4 +82,3 @@ Build the test application:
 Run the test application:
 
     ./build/run_tests
-

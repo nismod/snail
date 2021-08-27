@@ -53,19 +53,19 @@ std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
 }
 
 std::vector<py::object> split(py::object linestring_py, int nrows, int ncols,
-                            std::vector<double> transform) {
+                              std::vector<double> transform) {
   linestr linestring = convert_py2cpp(linestring_py);
-  transform::Affine affine(
-    transform[0], transform[1], transform[2], transform[3], transform[4],
-    transform[5]);
+  transform::Affine affine(transform[0], transform[1], transform[2],
+                           transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
   geometry::LineString<double> line(linestring);
-  std::vector<linestr> splits = operations::findIntersectionsLineString(line, grid);
+  std::vector<linestr> splits =
+      operations::findIntersectionsLineString(line, grid);
   return convert_cpp2py(splits);
 }
 
 std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
-                    std::vector<double> transform) {
+                                     std::vector<double> transform) {
   /// It is assumed that polygon is oriented (counter-clockwise)
   py::tuple bounds = polygon.attr("bounds");
   double minx = (py::float_)bounds[0];
@@ -74,8 +74,8 @@ std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
   double maxy = (py::float_)bounds[3];
 
   linestr exterior = convert_py2cpp(polygon.attr("exterior"));
-  transform::Affine affine(transform[0], transform[1], transform[2], transform[3],
-                transform[4], transform[5]);
+  transform::Affine affine(transform[0], transform[1], transform[2],
+                           transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
   geometry::LineString<double> line(exterior);
   std::vector<linestr> exterior_splits =
@@ -108,15 +108,14 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
   geo::Vec2<double> midpoint =
       geo::Vec2<double>((maxx + minx) * 0.5, (maxy + miny) * 0.5);
 
-  transform::Affine affine(transform[0], transform[1], transform[2], transform[3],
-                transform[4], transform[5]);
+  transform::Affine affine(transform[0], transform[1], transform[2],
+                           transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
   geo::Vec2<int> cell = grid.cellIndices(midpoint);
   return std::make_tuple(cell.x, cell.y);
 }
 
 } // namespace snail
-
 
 PYBIND11_MODULE(intersections, m) {
   m.doc() = "pybind11 example plugin"; // optional module docstring

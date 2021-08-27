@@ -91,7 +91,8 @@ template <typename T> struct Line2 {
 template <typename T> struct LineString {
   std::vector<geometry::Vec2<T>> coordinates;
 
-  LineString(const std::vector<geometry::Vec2<T>> coordinates) : coordinates(coordinates) {}
+  LineString(const std::vector<geometry::Vec2<T>> coordinates)
+      : coordinates(coordinates) {}
 };
 
 /// Haversine formula - calculate the distance between two points on the surface
