@@ -84,10 +84,12 @@ std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
   for (auto split : exterior_splits) {
     exterior_crossings.push_back(split[0]);
   }
+
   std::vector<linestr> horiz_splits = operations::splitAlongGridlines(
-      exterior_crossings, floor(miny) + 1, floor(maxy), "horizontal", grid);
+      exterior_crossings, ceil(miny), floor(maxy), operations::Direction::horizontal, grid);
   std::vector<linestr> vert_splits = operations::splitAlongGridlines(
-      exterior_crossings, floor(minx) + 1, floor(maxx), "vertical", grid);
+      exterior_crossings, ceil(minx), floor(maxx), operations::Direction::vertical, grid);
+
   std::vector<linestr> all_splits;
   all_splits.insert(all_splits.end(), exterior_splits.begin(),
                     exterior_splits.end());

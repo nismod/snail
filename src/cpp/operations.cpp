@@ -4,6 +4,7 @@
 #include <vector>
 #include "geometry.hpp"
 #include "grid.hpp"
+#include "operations.hpp"
 
 namespace snail {
 namespace operations {
@@ -60,29 +61,34 @@ findIntersectionsLineString(geometry::LineString<double> linestring,
   return (allsplits);
 }
 
-bool isOnGridLine(geometry::Vec2<double> point, std::string direction,
+bool isOnGridLine(geometry::Vec2<double> point, Direction direction,
                   int level) {
-  if (direction.compare("horizontal") == 0) {
-    return (point.y == level);
-  } else {
-    return (point.x == level);
+  switch (direction) {
+    case Direction::horizontal: return (point.y == level);
+    case Direction::vertical:   return (point.x == level);
+    default: return false;
   }
 }
 
 std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                                          int min_level, int max_level,
-                                         std::string direction,
+                                         Direction direction,
                                          grid::Grid grid) {
   std::vector<geometry::Vec2<double>> crossings_on_gridline;
   std::vector<linestr> gridline_splits;
   for (int level = min_level; level <= max_level; level++) {
-    auto it = std::copy_if(exterior_crossings.begin(), exterior_crossings.end(),
-                           std::back_inserter(crossings_on_gridline),
-                           [direction, level](geometry::Vec2<double> p) {
-                             return isOnGridLine(p, direction, level);
-                           });
+    // filter to find crossings at this level
+    std::copy_if(
+      exterior_crossings.begin(),
+      exterior_crossings.end(),
+      std::back_inserter(crossings_on_gridline),
+      [direction, level](geometry::Vec2<double> p) {
+        return isOnGridLine(p, direction, level);
+      }
+    );
     linestr segment_coords(2);
 
+    // step through each pair of crossings (0,1) (2,3) ...
     auto itr = crossings_on_gridline.begin();
     while (itr != crossings_on_gridline.end()) {
       segment_coords[0] = (*itr);
@@ -90,8 +96,8 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
 
       geometry::LineString<double> segment(segment_coords);
       std::vector<linestr> splits = findIntersectionsLineString(segment, grid);
-      gridline_splits.insert(gridline_splits.end(), splits.begin(),
-                             splits.end());
+      gridline_splits.insert(
+        gridline_splits.end(), splits.begin(), splits.end());
       std::advance(itr, 2);
     }
     crossings_on_gridline.clear();

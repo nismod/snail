@@ -159,7 +159,7 @@ struct SplitGridConfig {
   std::vector<linestr> expected_splits;
   int min_level = 0;
   int max_level = 2;
-  std::string direction = "horizontal";
+  snail::operations::Direction direction = snail::operations::Direction::horizontal;
 };
 
 
@@ -199,7 +199,7 @@ TEST_CASE("Exterior ring splits to gridlines", "[decomposition]") {
   case2.expected_splits = {
     {{1., 0.5}, {1., 1.}},
   };
-  case2.direction = "vertical";
+  case2.direction = snail::operations::Direction::vertical;
 
   auto test_data = GENERATE_COPY(case1, case2);
 
