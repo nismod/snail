@@ -87,17 +87,20 @@ struct Grid {
     // Calculate the length of the line segment being passed in for testing.
     double length = line.length();
 
-    // Work out where the start-point of the line falls in the cell.
-    geometry::Coord delta = offsetInCell(line.start);
+    // Determine horizontal and vertical heading (N or S, E or W).
+    bool north = rise >= 0;
+    bool east = run >= 0;
 
-    // Determine which cell boundaries the line will cross (N or S, E or W).
-    int north = rise >= 0 ? 2 : 0;
-    int east = run >= 0 ? 2 : 0;
-
-    // And work out the appropriate delta from the start of the line to the
-    // crossing boundary.
+    // Pull cell size out of grid transform
     double cellsize_x = grid_to_world.a;
     double cellsize_y = grid_to_world.e;
+
+    // We will step east or west, north or south, according to heading
+    double step_y = north? cellsize_y : -cellsize_y;
+    double step_x = east? cellsize_x : -cellsize_x;
+
+    // Set up initial delta from the start of the line to the first crossing.
+    geometry::Coord delta = offsetInCell(line.start);
     double dN = north ? cellsize_y - delta.y : -delta.y;
     double dE = east ? cellsize_x - delta.x : -delta.x;
 
@@ -121,35 +124,31 @@ struct Grid {
       if (pE == pN) {
         crossings.push_back(line.start + pN);
         // Update the distance to the next graticule.
-        dE += double(east - 1) * cellsize_x;
-        dN += double(north - 1) * cellsize_y;
-        // Calculate the position of the crossing point on the next grid /
-        // graticule line.
+        dE += step_x;
+        dN += step_y;
+        // Calculate the position of the next crossings in both directions
         pE = geometry::Coord(dE, dE * rise / run);
         pN = geometry::Coord(dN * run / rise, dN);
       } else if (pE.length() < pN.length()) {
         crossings.push_back(line.start + pE);
         // Update the distance to the next graticule.
-        dE += double(east - 1) * cellsize_x;
-        // Calculate the position of the crossing point on the next grid /
-        // graticule line.
+        dE += step_x;
+        // Calculate the position of the next crossing
         pE = geometry::Coord(dE, dE * rise / run);
       } else if (pN.length() < pE.length()) {
         crossings.push_back(line.start + pN);
-        // Register location of next crossing point before updating
         // Update the distance to the next graticule.
-        dN += double(north - 1) * cellsize_y;
-        // Calculate the position of the crossing point on the next grid /
-        // graticule line.
+        dN += step_y;
+        // Calculate the position of the next crossing
         pN = geometry::Coord(dN * run / rise, dN);
       }
     }
 
-    // Return the vector of grid / graticule crossing points that exist bbetween
-    // the start and end of the line.
+    // Return the vector of crossing points that exist along the line.
     return crossings;
   }
 };
+
 } // namespace grid
 } // namespace snail
 #endif // GRID_H
