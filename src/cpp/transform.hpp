@@ -66,8 +66,8 @@ struct Affine {
   }
 
   /// Apply transform to a 2-dimensional point
-  geometry::Vec2<double> operator*(const geometry::Vec2<double> &p) const {
-    return geometry::Vec2<double>(p.x * a + p.y * b + c, p.x * d + p.y * e + f);
+  geometry::Coord operator*(const geometry::Coord &p) const {
+    return geometry::Coord(p.x * a + p.y * b + c, p.x * d + p.y * e + f);
   }
 };
 

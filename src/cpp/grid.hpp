@@ -46,41 +46,39 @@ struct Grid {
   };
 
   /// Calculate hashed index in raster.
-  int cellIndex(const geometry::Vec2<double> p) const {
+  size_t cellIndex(const geometry::Coord p) const {
     auto offset = cellIndices(p);
     return std::get<0>(offset) + std::get<1>(offset) * ncols;
   }
 
   /// Recover i, j index in raster.
   std::tuple<int, int>
-  cellIndices(const geometry::Vec2<double> p,
+  cellIndices(const geometry::Coord p,
               double epsilon = std::numeric_limits<double>::epsilon()) const {
     // Note on epsilon: nudge point slightly in the x and y direction towards
     // the cell centre
     // - this should allow for some tolerance in coordinate precision and avoid
     // off-by-one errors
     // TODO confirm and construct test case to demonstrate.
-    auto offset =
-        world_to_grid * (p + geometry::Vec2<double>(epsilon, epsilon));
+    auto offset = world_to_grid * (p + geometry::Coord(epsilon, epsilon));
     return std::make_tuple(floor(offset.x), floor(offset.y));
   }
 
   /// Calculate the relative position of a point in a cell.
-  geometry::Vec2<double> offsetInCell(const geometry::Vec2<double> p) const {
+  geometry::Coord offsetInCell(const geometry::Coord p) const {
     // Retrieve the indices of the cell.
     auto cell_offset = cellIndices(p);
 
     // Calculate the LL coordinates of the cell.
-    geometry::Vec2<double> cell = grid_to_world * geometry::Vec2<double>(std::get<0>(cell_offset), std::get<1>(cell_offset));
+    geometry::Coord cell = grid_to_world * geometry::Coord(cell_offset);
 
-
-    // Return the vector between the two points.
-    return geometry::Vec2<double>(p.x - cell.x, p.y - cell.y);
+    // Return the difference between the two points.
+    return p - cell;
   }
 
   /// Calculate the points at which a line-segment intersects the
   /// grid lines / graticules.
-  std::vector<geometry::Vec2<double>>
+  std::vector<geometry::Coord>
   findIntersections(const geometry::Line line) const {
     // First, calculate the run and rise of the line.
     double run = (line.end.x - line.start.x);
@@ -90,7 +88,7 @@ struct Grid {
     double length = line.length();
 
     // Work out where the start-point of the line falls in the cell.
-    geometry::Vec2<double> delta = offsetInCell(line.start);
+    geometry::Coord delta = offsetInCell(line.start);
 
     // Determine which cell boundaries the line will cross (N or S, E or W).
     int north = rise >= 0 ? 2 : 0;
@@ -104,11 +102,11 @@ struct Grid {
     double dE = east ? cellsize_x - delta.x : -delta.x;
 
     // Calculate the positions at which the line crosses the grid graticules.
-    geometry::Vec2<double> pN(dN * run / rise, dN);
-    geometry::Vec2<double> pE(dE, dE * rise / run);
+    geometry::Coord pN(dN * run / rise, dN);
+    geometry::Coord pE(dE, dE * rise / run);
 
     // Create a vector of grid / graticule crossings to return to the caller.
-    std::vector<geometry::Vec2<double>> crossings;
+    std::vector<geometry::Coord> crossings;
 
     // Append the start point of the line to the vector of crossings.
     crossings.push_back(line.start);
@@ -127,15 +125,15 @@ struct Grid {
         dN += double(north - 1) * cellsize_y;
         // Calculate the position of the crossing point on the next grid /
         // graticule line.
-        pE = geometry::Vec2<double>(dE, dE * rise / run);
-        pN = geometry::Vec2<double>(dN * run / rise, dN);
+        pE = geometry::Coord(dE, dE * rise / run);
+        pN = geometry::Coord(dN * run / rise, dN);
       } else if (pE.length() < pN.length()) {
         crossings.push_back(line.start + pE);
         // Update the distance to the next graticule.
         dE += double(east - 1) * cellsize_x;
         // Calculate the position of the crossing point on the next grid /
         // graticule line.
-        pE = geometry::Vec2<double>(dE, dE * rise / run);
+        pE = geometry::Coord(dE, dE * rise / run);
       } else if (pN.length() < pE.length()) {
         crossings.push_back(line.start + pN);
         // Register location of next crossing point before updating
@@ -143,7 +141,7 @@ struct Grid {
         dN += double(north - 1) * cellsize_y;
         // Calculate the position of the crossing point on the next grid /
         // graticule line.
-        pN = geometry::Vec2<double>(dN * run / rise, dN);
+        pN = geometry::Coord(dN * run / rise, dN);
       }
     }
 

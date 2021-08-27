@@ -14,7 +14,7 @@
 
 #define TOL 0.001
 
-using linestr = std::vector<snail::geometry::Vec2<double>>;
+using linestr = std::vector<snail::geometry::Coord>;
 
 struct Config {
   linestr linestring;
@@ -145,8 +145,8 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   // Test that each one of the splits are made of the expected points
   for (int i = 0; i < splits.size(); i++) {
     for (int j = 0; j < splits[i].size(); j++) {
-      snail::geometry::Vec2<double> point = splits[i][j];
-      snail::geometry::Vec2<double> expected_point = expected_splits[i][j];
+      snail::geometry::Coord point = splits[i][j];
+      snail::geometry::Coord expected_point = expected_splits[i][j];
 
       REQUIRE(std::abs(point.x - expected_point.x) < TOL);
       REQUIRE(std::abs(point.y - expected_point.y) < TOL);
@@ -224,8 +224,8 @@ TEST_CASE("Exterior ring splits to gridlines", "[decomposition]") {
   // Test that each one of the splits are made of the expected points
   for (int i = 0; i < splits.size(); i++) {
     for (int j = 0; j < splits[i].size(); j++) {
-      snail::geometry::Vec2<double> point = splits[i][j];
-      snail::geometry::Vec2<double> expected_point = expected_splits[i][j];
+      snail::geometry::Coord point = splits[i][j];
+      snail::geometry::Coord expected_point = expected_splits[i][j];
 
       REQUIRE(std::abs(point.x - expected_point.x) < TOL);
       REQUIRE(std::abs(point.y - expected_point.y) < TOL);

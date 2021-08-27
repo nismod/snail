@@ -18,7 +18,7 @@ namespace snail {
 namespace py = pybind11;
 namespace geo = geometry;
 
-using linestr = std::vector<geometry::Vec2<double>>;
+using linestr = std::vector<geometry::Coord>;
 
 py::object SHPLY_LINESTR =
     py::module_::import("shapely.geometry").attr("LineString");
@@ -28,7 +28,7 @@ linestr convert_py2cpp(py::object linestring_py) {
   linestr linestring;
   for (int i = 0; i < py::len(coords); i++) {
     py::tuple xy = (py::tuple)coords[py::cast(i)];
-    geo::Vec2<double> p((py::float_)xy[0], (py::float_)xy[1]);
+    geo::Coord p((py::float_)xy[0], (py::float_)xy[1]);
     linestring.push_back(p);
   }
   return linestring;
@@ -80,7 +80,7 @@ std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
   geometry::LineString line(exterior);
   std::vector<linestr> exterior_splits =
       operations::findIntersectionsLineString(line, grid);
-  std::vector<geometry::Vec2<double>> exterior_crossings;
+  std::vector<geometry::Coord> exterior_crossings;
   for (auto split : exterior_splits) {
     exterior_crossings.push_back(split[0]);
   }
@@ -107,8 +107,8 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
   double miny = (py::float_)bounds[1];
   double maxx = (py::float_)bounds[2];
   double maxy = (py::float_)bounds[3];
-  geo::Vec2<double> midpoint =
-      geo::Vec2<double>((maxx + minx) * 0.5, (maxy + miny) * 0.5);
+  geo::Coord midpoint =
+      geo::Coord((maxx + minx) * 0.5, (maxy + miny) * 0.5);
 
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);

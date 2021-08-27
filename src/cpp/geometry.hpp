@@ -10,41 +10,43 @@
 namespace snail {
 namespace geometry {
 
-/// A templated 2D vector representation
-template <typename T> struct Vec2 {
-  T x;
-  T y;
-  // Add two Vec2<T> together
-  Vec2<T> operator+(const Vec2<T> &a) const {
-    return Vec2<T>(x + a.x, y + a.y);
+/// A 2D point representation
+struct Coord {
+  double x;
+  double y;
+  // Add two Coords together
+  Coord operator+(const Coord &a) const {
+    return Coord(x + a.x, y + a.y);
   }
-  // Subtract one Vec2<T> from another
-  Vec2<T> operator-(const Vec2<T> &a) const {
-    return Vec2<T>(x - a.x, y - a.y);
+  // Subtract one Coord from another
+  Coord operator-(const Coord &a) const {
+    return Coord(x - a.x, y - a.y);
   }
-  // Compare Vec2<T> for equality
-  bool operator==(const Vec2<T> &a) const { return x == a.x && y == a.y; }
-  // Divide a Vec2 by a constant
-  Vec2<T> operator/(const double a) const { return Vec2<T>(x / a, y / a); }
-  // Default constructor
-  Vec2(void) {}
-  // Construct a Vec2<T> from a pair of T
-  Vec2(const T x, const T y) : x(x), y(y) {}
-  // Construct a Vec2<T> from tuple of two T
-  Vec2(const std::tuple<T, T> xy) : x(std::get<0>(xy)), y(std::get<1>(xy)) {}
-  // Helper function to calculate the length of a Vec2<T>, cast to a double
-  inline double length(void) const { return (double)sqrt(x * x + y * y); }
+  // Compare Coords for equality
+  bool operator==(const Coord &a) const { return x == a.x && y == a.y; }
+  // Divide a Coord by a constant
+  Coord operator/(const double a) const { return Coord(x / a, y / a); }
+
+  // Construct a Coord from doubles
+  Coord(const double x, const double y) : x(x), y(y) {}
+  // Construct a Coord from tuple of two ints
+  Coord(const std::tuple<int, int> xy) : x(std::get<0>(xy)), y(std::get<1>(xy)) {}
+  // Construct a Coord from tuple of two doubles
+  Coord(const std::tuple<double, double> xy) : x(std::get<0>(xy)), y(std::get<1>(xy)) {}
+
+  // Helper function to calculate the length of a Coord
+  inline double length(void) const { return sqrt(x * x + y * y); }
 };
 
 /// A templated 2D line representation
 struct Line {
   // Start point of the line, in 2D space
-  Vec2<double> start;
+  Coord start;
   // End point of the line, in 2D space
-  Vec2<double> end;
+  Coord end;
   // Calculate the midpoint of a line
-  inline Vec2<double> midPoint(void) const {
-    return Vec2<double>((end.x + start.x) / 2, (end.y + start.y) / 2);
+  inline Coord midPoint(void) const {
+    return Coord((end.x + start.x) / 2, (end.y + start.y) / 2);
   }
   // Calculate the GEOMETRIC length of a line (NOTE: for lines in
   // spherical projection, use haversine formula to find great-circle length)
@@ -57,10 +59,10 @@ struct Line {
   inline double bearing(void) const {
     return atan2(end.x - start.x, end.y - start.y);
   }
-  /// Default constructor
-  Line(void) {}
+
   /// Construct a line from two points
-  Line(const Vec2<double> start, const Vec2<double> end) : start(start), end(end) {}
+  Line(const Coord start, const Coord end) : start(start), end(end) {}
+
   /// Calculate whether two Line objects cross in space (assumed to
   /// be in the sample plane).
   bool linesCross(const Line l) const {
@@ -72,7 +74,7 @@ struct Line {
     double s = (-dy * (start.x - l.start.x) + dx * (start.y - l.start.y)) / denom;
     double t = (_dx * (start.y - l.start.y) - _dy * (start.x - l.start.x)) / denom;
 
-    // NOTE: If needed, lines cross as this point Vec2<double>
+    // NOTE: If needed, lines cross as this point Coord
     // intersection(p0_x + (t * s1_x), p0_y + (t * s1_y));
     if (s >= 0 && s <= 1 && t >= 0 && t <= 1)
       return true;
@@ -80,8 +82,8 @@ struct Line {
     return false;
   }
   /// Calculate whether a Line crosses a line comprising a pair of
-  /// Vec2<double> points.
-  bool linesCross(const Vec2<double> start, Vec2<double> end) {
+  /// Coord points.
+  bool linesCross(const Coord start, Coord end) {
     return linesCross(Line(start, end));
   }
 };
@@ -89,9 +91,9 @@ struct Line {
 /// A templated LineString representation. The list of points in coordinates
 /// defines a series of connected straight-line segments.
 struct LineString {
-  std::vector<geometry::Vec2<double>> coordinates;
+  std::vector<geometry::Coord> coordinates;
 
-  LineString(const std::vector<geometry::Vec2<double>> coordinates)
+  LineString(const std::vector<geometry::Coord> coordinates)
       : coordinates(coordinates) {}
 };
 

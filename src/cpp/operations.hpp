@@ -10,10 +10,10 @@ namespace operations {
 
 enum class Direction { horizontal, vertical };
 
-std::vector<std::vector<geometry::Vec2<double>>>
+std::vector<std::vector<geometry::Coord>>
     findIntersectionsLineString(geometry::LineString, grid::Grid);
-std::vector<std::vector<geometry::Vec2<double>>>
-splitAlongGridlines(std::vector<geometry::Vec2<double>>, int, int, Direction,
+std::vector<std::vector<geometry::Coord>>
+splitAlongGridlines(std::vector<geometry::Coord>, int, int, Direction,
                     grid::Grid);
 
 } // namespace operations
