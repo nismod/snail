@@ -37,14 +37,14 @@ template <typename T> struct Vec2 {
 };
 
 /// A templated 2D line representation
-template <typename T> struct Line2 {
+struct Line {
   // Start point of the line, in 2D space
-  Vec2<T> start;
+  Vec2<double> start;
   // End point of the line, in 2D space
-  Vec2<T> end;
+  Vec2<double> end;
   // Calculate the midpoint of a line
-  inline Vec2<T> midPoint(void) const {
-    return Vec2<T>((end.x + start.x) / 2, (end.y + start.y) / 2);
+  inline Vec2<double> midPoint(void) const {
+    return Vec2<double>((end.x + start.x) / 2, (end.y + start.y) / 2);
   }
   // Calculate the GEOMETRIC length of a line (NOTE: for lines in
   // spherical projection, use haversine formula to find great-circle length)
@@ -58,19 +58,19 @@ template <typename T> struct Line2 {
     return atan2(end.x - start.x, end.y - start.y);
   }
   /// Default constructor
-  Line2(void) {}
+  Line(void) {}
   /// Construct a line from two points
-  Line2(const Vec2<T> start, const Vec2<T> end) : start(start), end(end) {}
-  /// Calculate whether two Line2<T> objects cross in space (assumed to
+  Line(const Vec2<double> start, const Vec2<double> end) : start(start), end(end) {}
+  /// Calculate whether two Line objects cross in space (assumed to
   /// be in the sample plane).
-  bool linesCross(const Line2<T> l) const {
-    T dx = end.x - start.x;
-    T dy = end.y - start.y;
-    T _dx = l.end.x - l.start.x;
-    T _dy = l.end.y - l.start.y;
-    T denom = -_dx * dy + dx * _dy;
-    T s = (-dy * (start.x - l.start.x) + dx * (start.y - l.start.y)) / denom;
-    T t = (_dx * (start.y - l.start.y) - _dy * (start.x - l.start.x)) / denom;
+  bool linesCross(const Line l) const {
+    double dx = end.x - start.x;
+    double dy = end.y - start.y;
+    double _dx = l.end.x - l.start.x;
+    double _dy = l.end.y - l.start.y;
+    double denom = -_dx * dy + dx * _dy;
+    double s = (-dy * (start.x - l.start.x) + dx * (start.y - l.start.y)) / denom;
+    double t = (_dx * (start.y - l.start.y) - _dy * (start.x - l.start.x)) / denom;
 
     // NOTE: If needed, lines cross as this point Vec2<double>
     // intersection(p0_x + (t * s1_x), p0_y + (t * s1_y));
@@ -79,10 +79,10 @@ template <typename T> struct Line2 {
 
     return false;
   }
-  /// Calculate whether a Line2<T> crosses a line comprising a pair of
-  /// Vec2<T> points.
-  bool linesCross(const Vec2<T> start, Vec2<T> end) {
-    return linesCross(Line2<T>(start, end));
+  /// Calculate whether a Line crosses a line comprising a pair of
+  /// Vec2<double> points.
+  bool linesCross(const Vec2<double> start, Vec2<double> end) {
+    return linesCross(Line(start, end));
   }
 };
 
@@ -98,7 +98,7 @@ struct LineString {
 /// Haversine formula - calculate the distance between two points on the surface
 /// of the earth, using great-circles (NOTE: Only use with data in
 /// latitude/longitude coordinates).
-inline double haversine(Line2<double> line) {
+inline double haversine(Line line) {
   double dLat_2 = ((line.end.y - line.start.y) * utils::toRad) / 2.0;
   double dLon_2 = ((line.end.x - line.start.x) * utils::toRad) / 2.0;
 

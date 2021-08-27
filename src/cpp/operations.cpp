@@ -36,7 +36,7 @@ findIntersectionsLineString(geometry::LineString linestring,
   std::vector<linestr> allsplits;
   linestr linestr_piece;
   for (std::size_t i = 0; i < coords.size() - 1; i++) {
-    geometry::Line2<double> line(coords.at(i), coords.at(i + 1));
+    geometry::Line line(coords.at(i), coords.at(i + 1));
 
     // If the line starts and ends in different cells, it needs to be cleaned.
     if (raster.cellIndex(line.start) != raster.cellIndex(line.end)) {

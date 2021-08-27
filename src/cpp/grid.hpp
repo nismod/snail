@@ -81,7 +81,7 @@ struct Grid {
   /// Calculate the points at which a line-segment intersects the
   /// grid lines / graticules.
   std::vector<geometry::Vec2<double>>
-  findIntersections(const geometry::Line2<double> line) const {
+  findIntersections(const geometry::Line line) const {
     // First, calculate the run and rise of the line.
     double run = (line.end.x - line.start.x);
     double rise = (line.end.y - line.start.y);
