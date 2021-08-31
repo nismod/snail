@@ -11,8 +11,9 @@ start = g.vs.find(name="roadn_0")
 finish = g.vs.find(name="roadn_15891")
 
 # Return list of list of edge IDs
+# Return vpath for comparison with pandana
 sp = g.get_shortest_paths(
-    start.index, finish.index, weights="length_km", output="epath"
+    start.index, finish.index, weights="length_km", output="vpath"
 )
 
 base = gdf.plot()
