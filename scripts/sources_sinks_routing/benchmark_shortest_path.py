@@ -37,16 +37,9 @@ for source_id in source_ensbl:
 
 # ########## pandana ##########
 
-# Build arrays of coordinate values
-x = []
-y = []
-for geodf_idx in geodf_idxs:
-    linestr = gdf.loc[geodf_idx % len(from_node), "geometry"]
-    coords = linestr.coords[int(-1 * (geodf_idx // len(from_node)))]
-    x.append(coords[0])
-    y.append(coords[1])
-
-nodes = DataFrame({"x": x, "y": y}, index=node_ids)
+nodes_gdf = gpd.read_file("jamaica_roads.gpkg", layer="nodes")
+list_of_coords = [(point.x, point.y) for point in nodes_gdf.loc[:, "geometry"]]
+nodes = DataFrame(list_of_coords, columns=["x", "y"])
 edges = DataFrame(
     {"from": from_node, "to": to_node, "weight": gdf["length_km"].values}
 )
