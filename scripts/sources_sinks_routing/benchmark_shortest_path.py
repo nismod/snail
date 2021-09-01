@@ -6,14 +6,19 @@ import numpy as np
 from igraph import Graph
 import geopandas as gpd
 
+
+def str_to_int(str_list):
+    return [int(string[6:]) for string in str_list]
+
+
 gdf = gpd.read_file("jamaica_roads.gpkg")
 nodes_gdf = gpd.read_file("jamaica_roads.gpkg", layer="nodes")
 
 # Sample source and desitnation ensembles
 Ns = 10
 Nt = 10
-source_ensbl = random.sample(nodes_gdf["node_id"], Ns)
-dest_ensbl = random.sample(nodes_gdf["node_id"], Nt)
+source_ensbl = random.sample(list(nodes_gdf["node_id"]), Ns)
+dest_ensbl = random.sample(list(nodes_gdf["node_id"]), Nt)
 
 # ########## python-igraph ##########
 
@@ -34,8 +39,8 @@ nodes = DataFrame(list_of_coords, columns=["x", "y"])
 
 # Transform source and destination columns into lists of integers
 # (node ids)
-from_node = [int(node_id[6:]) for node_id in gdf["from_node"]]
-to_node = [int(node_id[6:]) for node_id in gdf["to_node"]]
+from_node = str_to_int(gdf["from_node"])
+to_node = str_to_int(gdf["to_node"])
 
 edges = DataFrame(
     {"from": from_node, "to": to_node, "weight": gdf["length_km"].values}
@@ -62,5 +67,7 @@ def get_input_list(source, dest):
     return nodes_a, nodes_b
 
 
-nodes_a, nodes_b = get_input_list(source_ensbl, dest_ensbl)
+nodes_a, nodes_b = get_input_list(
+    str_to_int(source_ensbl), str_to_int(dest_ensbl)
+)
 sp_pandana = net.shortest_paths(nodes_a, nodes_b, imp_name="weight")
