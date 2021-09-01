@@ -44,4 +44,23 @@ net = pandana.Network(
     nodes["x"], nodes["y"], edges["from"], edges["to"], edges[["weight"]]
 )
 
-sp_pandana = net.shortest_paths(source_ensbl * len(dest_ensbl), dest_ensbl)
+
+def get_input_list(source, dest):
+    """Return the input lists for many-to-many shortest path calculation
+    with pandana.Network.shortest_paths
+    >>> list1, list2 = get_input_list(["a", "b", "c"], ["d", "e", "f", "g"])
+    >>> list1
+    ["a", "a", "a", "a", "b", "b", "b", "b", "c", "c", "c", "c"]
+    >>> list2
+    ["d", "e", "f", "g", "d", "e", "f", "g", "d", "e", "f", "g"]
+    """
+    nodes_a = []
+    nodes_b = []
+    for source_node in source:
+        nodes_a.extend([source_node]*len(dest))
+        nodes_b.extend(dest)
+    return nodes_a, nodes_b
+
+
+nodes_a, nodes_b = get_input_list(source_ensbl, dest_ensbl)
+sp_pandana = net.shortest_paths(nodes_a, nodes_b, imp_name="weight")
