@@ -5,9 +5,14 @@ import numpy as np
 from numpy.testing import assert_array_equal, assert_array_almost_equal
 import geopandas as gpd
 from rasterio.io import MemoryFile
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Polygon
+from shapely.geometry.polygon import LinearRing, orient
 
-from snail.snail_intersections import split, raster2split
+from snail.multi_intersections import (
+    split_linestrings,
+    split_polygons,
+    raster2split,
+)
 
 
 def make_raster_data():
@@ -37,6 +42,86 @@ def make_vector_data():
     return gdf
 
 
+def make_polygon_vector_data():
+    test_linearing = LinearRing(
+        [
+            (1.5, 0.25),
+            (2.5, 1.5),
+            (2.5, 3.5),
+            (1.5, 2.25),
+            (0.5, 3.5),
+            (0.5, 1.5),
+        ]
+    )
+    counter_clockwise = 1
+    test_polygon = orient(Polygon(test_linearing), counter_clockwise)
+    return gpd.GeoDataFrame({"col1": ["name1"], "geometry": [test_polygon]})
+
+
+def get_expected_polygon_gdf():
+    expected_polygons_rings = [
+        [
+            (2.0, 0.875),
+            (1.5, 0.25),
+            (1.0, 0.875),
+            (1.0, 1.0),
+            (2.0, 1.0),
+            (2.0, 0.875),
+        ],
+        [(2.1, 1.0), (2.0, 0.875), (2.0, 1.0), (2.1, 1.0)],
+        [
+            (2.5, 2.0),
+            (2.5, 1.5),
+            (2.1, 1.0),
+            (2.0, 1.0),
+            (2.0, 2.0),
+            (2.5, 2.0),
+        ],
+        [
+            (2.5, 3.0),
+            (2.5, 2.0),
+            (2.0, 2.0),
+            (2.0, 2.875),
+            (2.1, 3.0),
+            (2.5, 3.0),
+        ],
+        [(2.1, 3.0), (2.5, 3.5), (2.5, 3.0), (2.1, 3.0)],
+        [
+            (1.0, 2.875),
+            (1.5, 2.25),
+            (2.0, 2.875),
+            (2.0, 2.0),
+            (1.0, 2.0),
+            (1.0, 2.875),
+        ],
+        [
+            (0.9, 3.0),
+            (1.0, 2.875),
+            (1.0, 2.0),
+            (0.5, 2.0),
+            (0.5, 3.0),
+            (0.9, 3.0),
+        ],
+        [(0.5, 3.0), (0.5, 3.5), (0.9, 3.0), (0.5, 3.0)],
+        [
+            (0.9, 1.0),
+            (0.5, 1.5),
+            (0.5, 2.0),
+            (1.0, 2.0),
+            (1.0, 1.0),
+            (0.9, 1.0),
+        ],
+        [(1.0, 0.875), (0.9, 1.0), (1.0, 1.0), (1.0, 0.875)],
+        [(2.0, 1.0), (1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 1.0)],
+    ]
+    expected_polygons = [Polygon(ring) for ring in expected_polygons_rings]
+    expected_idx = [0] * len(expected_polygons_rings)
+    expected_gdf = gpd.GeoDataFrame(
+        {"line index": expected_idx, "geometry": expected_polygons}
+    )
+    return expected_gdf
+
+
 def get_expected_gdf():
     expected_splits = [
         LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.5)]),
@@ -61,9 +146,9 @@ class TestSnailIntersections(unittest.TestCase):
     def tearDown(self):
         self.raster_dataset.close()
 
-    def test_split(self):
+    def test_split_linestrings(self):
         vector_data = make_vector_data()
-        gdf = split(vector_data, self.raster_dataset)
+        gdf = split_linestrings(vector_data, self.raster_dataset)
         expected_gdf = get_expected_gdf()
 
         # Assertions
@@ -73,6 +158,22 @@ class TestSnailIntersections(unittest.TestCase):
         # little control over tolerance. When using option "check_less_precise",
         # it used GeoSeries.geom_almost_equals under the hood, which has an kwarg
         # "decimal". But assert_geodataframe_equal does not recognise kwarg "decimal".
+        self.assertTrue(
+            list(
+                gdf["geometry"]
+                .geom_almost_equals(expected_gdf["geometry"], decimal=3)
+                .values
+            )
+        )
+        assert_array_equal(
+            gdf["line index"].values, expected_gdf["line index"].values
+        )
+
+    def test_split_polygons(self):
+        vector_data = make_polygon_vector_data()
+        gdf = split_polygons(vector_data, self.raster_dataset)
+        expected_gdf = get_expected_polygon_gdf()
+
         self.assertTrue(
             list(
                 gdf["geometry"]
