@@ -77,11 +77,14 @@ if __name__ == "__main__":
     source_ensbl = random.sample(list(nodes_gdf["node_id"]), Ns)
     dest_ensbl = random.sample(list(nodes_gdf["node_id"]), Nt)
 
-    sp_igraph = "shortest_paths_igraph(gdf, source_ensbl, dest_ensbl)"
-    sp_pandana = "shortest_paths_pandana(gdf, nodes_gdf, source_ensbl, dest_ensbl)"
+    sp_pandana = shortest_paths_pandana(gdf, nodes_gdf, source_ensbl, dest_ensbl)
+    sp_igraph = shortest_paths_igraph(gdf, source_ensbl, dest_ensbl)
 
-    igraph_time = timeit.timeit(stmt=sp_igraph, globals=globals(), number=10)
-    pandana_time = timeit.timeit(stmt=sp_pandana, globals=globals(), number=10)
+    stmt_igraph = "shortest_paths_igraph(gdf, source_ensbl, dest_ensbl)"
+    stmt_pandana = "shortest_paths_pandana(gdf, nodes_gdf, source_ensbl, dest_ensbl)"
+
+    igraph_time = timeit.timeit(stmt=stmt_igraph, globals=globals(), number=10)
+    pandana_time = timeit.timeit(stmt=stmt_pandana, globals=globals(), number=10)
 
     print(f"igraph took {igraph_time}s")
     print(f"pandana took {pandana_time}s")
