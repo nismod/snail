@@ -16,12 +16,22 @@ sp = g.get_shortest_paths(
     start.index, finish.index, weights="length_km", output="vpath"
 )
 
+# base = gdf.plot()
+# for path in sp:
+#     # Select linestrings according to edge IDs making the path
+#     # edge ID are 1to1 with row id in dataframe
+#     sub_gdf = gdf.iloc[path, :]
+#     sub_gdf.plot(ax=base, color="green")
+# plt.show()
+
+nodes_gdf = gpd.read_file("jamaica_roads.gpkg", layer="nodes")
 base = gdf.plot()
 for path in sp:
+    nodeslist = [int(g.vs[i]["name"][6:]) for i in path]
     # Select linestrings according to edge IDs making the path
     # edge ID are 1to1 with row id in dataframe
-    sub_gdf = gdf.iloc[path, :]
-    sub_gdf.plot(ax=base, color="green")
+    sub_gdf = nodes_gdf.iloc[nodeslist, :]
+    sub_gdf.plot(ax=base, color="red", markersize=6)
 plt.show()
 
 # edge list
