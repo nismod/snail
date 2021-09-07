@@ -26,5 +26,13 @@ net = pandana.Network(
     nodes["x"], nodes["y"], edges["from"], edges["to"], edges[["weight"]]
 )
 
-sp = net.shortest_path(0, 15981)
+sp = net.shortest_path(0, 15981, imp_name="weight")
+epath = []
+for fromnode, tonode in zip(sp[:-1], sp[1:]):
+    from_id = "roadn_" + str(fromnode)
+    to_id = "roadn_" + str(tonode)
+    road = gdf.index[(gdf["from_node"] == from_id) & (gdf["to_node"] == to_id)].tolist()
+    if len(road) == 0:
+        road = gdf.index[(gdf["from_node"] == to_id) & (gdf["to_node"] == from_id)].tolist()
+    epath.extend(road)
 
