@@ -26,7 +26,8 @@ net = pandana.Network(
     nodes["x"], nodes["y"], edges["from"], edges["to"], edges[["weight"]]
 )
 
-sp = net.shortest_path(0, 15981, imp_name="weight")
+start_node_idx = 15891
+sp = net.shortest_path(0, start_node_idx, imp_name="weight")
 epath = []
 for fromnode, tonode in zip(sp[:-1], sp[1:]):
     from_id = "roadn_" + str(fromnode)
