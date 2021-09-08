@@ -1,5 +1,6 @@
 import random
 import timeit
+import argparse
 
 import pandana
 from pandas import DataFrame
@@ -68,6 +69,18 @@ def shortest_paths_pandana(geodf, nodes_geodf, source_ensbl, dest_ensbl):
 
 
 if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description="")
+    parser.add_argument("--vpath", action="store_true")
+    parser.add_argument("--epath", action="store_true")
+    parser.add_argument("--sizemin", type=int, default=10)
+    parser.add_argument("--sizemax", type=int, default=1000)
+    parser.add_argument("--npoints", type=int, default=5)
+
+    args = parser.parse_args()
+
+    path_type = "vpath" if args.vpath else "epath"
+    
     gdf = gpd.read_file("jamaica_roads.gpkg")
     nodes_gdf = gpd.read_file("jamaica_roads.gpkg", layer="nodes")
 
