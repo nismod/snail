@@ -71,8 +71,20 @@ def shortest_paths_pandana(
     return net.shortest_paths(nodes_a, nodes_b, imp_name="weight")
 
 
-def reconstruct_epath(vpath):
-    pass
+def reconstruct_epath(vpath, gdf):
+    epath = []
+    for fromnode, tonode in zip(vpath[:-1], vpath[1:]):
+        from_id = "roadn_" + str(fromnode)
+        to_id = "roadn_" + str(tonode)
+        road = gdf.index[
+            (gdf["from_node"] == from_id) & (gdf["to_node"] == to_id)
+        ].tolist()
+        if len(road) == 0:
+            road = gdf.index[
+                (gdf["from_node"] == to_id) & (gdf["to_node"] == from_id)
+            ].tolist()
+        epath.extend(road)
+    return epath
 
 
 if __name__ == "__main__":
@@ -117,6 +129,6 @@ if __name__ == "__main__":
 
             if path_type == "epath":
                 tic.time()
-                epath = reconstruct_epath(vpath)
+                epath = reconstruct_epath(vpath, gdf)
                 toc.time()
                 pandana_reconstruct_times.append(toc - tic)
