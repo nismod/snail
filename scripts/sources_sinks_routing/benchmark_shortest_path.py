@@ -47,7 +47,7 @@ def shortest_paths_igraph(geodf, source_ensbl, dest_ensbl, path_type):
 
 
 def shortest_paths_pandana(
-    geodf, nodes_geodf, source_ensbl, dest_ensbl, path_type
+    geodf, nodes_geodf, source_ensbl, dest_ensbl
 ):
     list_of_coords = [
         (point.x, point.y) for point in nodes_geodf.loc[:, "geometry"]
@@ -87,50 +87,56 @@ def reconstruct_epath(vpath, gdf):
     return epath
 
 
-if __name__ == "__main__":
+parser = argparse.ArgumentParser(description="")
+parser.add_argument("--vpath", action="store_true")
+parser.add_argument("--epath", action="store_true")
+parser.add_argument("--sizes", nargs="+")
+parser.add_argument("--nreps", type=int, default=2)
 
-    parser = argparse.ArgumentParser(description="")
-    parser.add_argument("--vpath", action="store_true")
-    parser.add_argument("--epath", action="store_true")
-    parser.add_argument("--sizemin", type=int, default=10)
-    parser.add_argument("--sizemax", type=int, default=1000)
-    parser.add_argument("--npoints", type=int, default=5)
-    parser.add_argument("--nreps", type=int, default=10)
+args = parser.parse_args(["--vpath", "--sizes", "2", "5", "10"])
 
-    args = parser.parse_args()
+path_type = "vpath" if args.vpath else "epath"
 
-    path_type = "vpath" if args.vpath else "epath"
+gdf = gpd.read_file("jamaica_roads.gpkg")
+nodes_gdf = gpd.read_file("jamaica_roads.gpkg", layer="nodes")
 
-    gdf = gpd.read_file("jamaica_roads.gpkg")
-    nodes_gdf = gpd.read_file("jamaica_roads.gpkg", layer="nodes")
+igraph_times = np.zeros((args.nreps, len(args.sizes)))
+pandana_times = np.zeros((args.nreps, len(args.sizes)))
+pandana_reconstruct_times = np.zeros((args.nreps, args.npoints))
+for j, size in enumerate(args.sizes):
+    print(f"Size {j+1} of {len(args.sizes)}")
+    # Sample source and destination ensembles
+    for irep in range(args.nreps):
+        print(f"    Rep {irep + 1} of {args.nreps}")
+        # Some nodes in the "nodes" layer don't seem to have roads
+        # start of end at them. So picking from from_node and to_node
+        # columns.
+        source_ensbl = random.sample(list(gdf["from_node"]), int(size))
+        dest_ensbl = random.sample(list(gdf["to_node"]), int(size))
 
-    igraph_times = np.zeros(args.nreps, args.npoints)
-    pandana_times = np.zeros(args.nreps, args.npoints)
-    pandana_reconstruct_times = np.zeros(args.nreps, args.npoints)
-    for j, size in enumerate(
-        np.logspace(args.sizemin, args.sizemax, args.npoints)
-    ):
-        # Sample source and destination ensembles
-        for irep in range(args.nreps):
-            source_ensbl = random.sample(list(nodes_gdf["node_id"]), size)
-            dest_ensbl = random.sample(list(nodes_gdf["node_id"]), size)
+        print("        Timing igraph")
+        tic = time.time()
+        path = shortest_paths_igraph(
+            gdf, source_ensbl, dest_ensbl, path_type
+        )
+        toc = time.time()
+        igraph_times[irep, j] = toc - tic
 
+        print("        Timing pandana")
+        tic = time.time()
+        vpaths = shortest_paths_pandana(
+            gdf, nodes_gdf, source_ensbl, dest_ensbl
+        )
+        toc = time.time()
+        pandana_times[irep, j] = toc - tic
+
+        if path_type == "epath":
+            print("        Timing pandana reconstrction step")
             tic = time.time()
-            path = shortest_paths_igraph(
-                gdf, source_ensbl, dest_ensbl, path_type
-            )
+            epaths = [reconstruct_epath(vpath, gdf) for vpath in vpaths]
             toc = time.time()
-            igraph_times[irep, j] = toc - tic
+            pandana_reconstruct_times[irep, j] = toc - tic
 
-            tic.time()
-            vpath = shortest_paths_pandana(
-                gdf, nodes_gdf, source_ensbl, dest_ensbl
-            )
-            toc.time()
-            pandana_times[irep, j] = toc - tic
-
-            if path_type == "epath":
-                tic.time()
-                epath = reconstruct_epath(vpath, gdf)
-                toc.time()
-                pandana_reconstruct_times[irep, j] = toc - tic
+igraph_min_times = np.min(igraph_times, axis=0)
+pandana_min_times = np.min(pandana_times, axis=0)
+pandana_reconstruct_min_times = np.min(pandana_reconstruct_times, axis=0)
