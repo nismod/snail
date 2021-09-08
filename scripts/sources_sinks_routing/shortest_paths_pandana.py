@@ -1,4 +1,5 @@
 import pandana
+from igraph import Graph
 import geopandas as gpd
 from pandas import DataFrame
 import matplotlib.pyplot as plt
@@ -28,21 +29,17 @@ net = pandana.Network(
 
 start_node_idx = 15891
 sp = net.shortest_path(0, start_node_idx, imp_name="weight")
-epath = []
-for fromnode, tonode in zip(sp[:-1], sp[1:]):
-    from_id = "roadn_" + str(fromnode)
-    to_id = "roadn_" + str(tonode)
-    road = gdf.index[(gdf["from_node"] == from_id) & (gdf["to_node"] == to_id)].tolist()
-    if len(road) == 0:
-        road = gdf.index[(gdf["from_node"] == to_id) & (gdf["to_node"] == from_id)].tolist()
-    epath.extend(road)
+edges = gdf.loc[:, ["from_node", "to_node"]]
+g = Graph.DataFrame(edges, directed=False)
+igraph_nodes = [g.vs.find(name="roadn_"+str(i)).index for i in sp]
+epath = g.get_eids(path=igraph_nodes, directed=False)
 
-nodes_gdf = gpd.read_file("jamaica_roads.gpkg", layer="nodes")
 base = gdf.plot()
-# Select linestrings according to edge IDs making the path
-# edge ID are 1to1 with row id in dataframe
-sub_gdf = nodes_gdf.iloc[list(sp), :]
-sub_gdf.plot(ax=base, color="red", markersize=6)
+for path in sp:
+    # Select linestrings according to edge IDs making the path
+    # edge ID are 1to1 with row id in dataframe
+    sub_gdf = gdf.iloc[epath, :]
+    sub_gdf.plot(ax=base, color="green", linewidth=5)
 plt.show()
 
 # edge list
