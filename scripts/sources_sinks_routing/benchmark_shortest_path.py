@@ -1,7 +1,8 @@
 import random
-import timeit
+import time
 import argparse
 
+import numpy as np
 import pandana
 from pandas import DataFrame
 from igraph import Graph
@@ -29,7 +30,7 @@ def get_input_list(source, dest):
     return nodes_a, nodes_b
 
 
-def shortest_paths_igraph(geodf, source_ensbl, dest_ensbl):
+def shortest_paths_igraph(geodf, source_ensbl, dest_ensbl, path_type):
     edges = geodf.loc[:, ["from_node", "to_node", "length_km"]]
     g = Graph.DataFrame(edges, directed=False)
     dest = g.vs.select(name_in=dest_ensbl)
@@ -38,14 +39,16 @@ def shortest_paths_igraph(geodf, source_ensbl, dest_ensbl):
     for source_id in source_ensbl:
         start = g.vs.find(name=source_id)
         sp = g.get_shortest_paths(
-            start, dest, weights="length_km", output="vpath"
+            start, dest, weights="length_km", output=path_type
         )
         shortest_paths.append(sp)
 
     return shortest_paths
 
 
-def shortest_paths_pandana(geodf, nodes_geodf, source_ensbl, dest_ensbl):
+def shortest_paths_pandana(
+    geodf, nodes_geodf, source_ensbl, dest_ensbl, path_type
+):
     list_of_coords = [
         (point.x, point.y) for point in nodes_geodf.loc[:, "geometry"]
     ]
@@ -68,6 +71,10 @@ def shortest_paths_pandana(geodf, nodes_geodf, source_ensbl, dest_ensbl):
     return net.shortest_paths(nodes_a, nodes_b, imp_name="weight")
 
 
+def reconstruct_epath(vpath):
+    pass
+
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="")
@@ -76,28 +83,40 @@ if __name__ == "__main__":
     parser.add_argument("--sizemin", type=int, default=10)
     parser.add_argument("--sizemax", type=int, default=1000)
     parser.add_argument("--npoints", type=int, default=5)
+    parser.add_argument("--nreps", type=int, default=10)
 
     args = parser.parse_args()
 
     path_type = "vpath" if args.vpath else "epath"
-    
+
     gdf = gpd.read_file("jamaica_roads.gpkg")
     nodes_gdf = gpd.read_file("jamaica_roads.gpkg", layer="nodes")
 
-    # Sample source and destination ensembles
-    Ns = 10
-    Nt = 10
-    source_ensbl = random.sample(list(nodes_gdf["node_id"]), Ns)
-    dest_ensbl = random.sample(list(nodes_gdf["node_id"]), Nt)
+    for size in np.logspace(args.sizemin, args.sizemax, args.npoints):
+        # Sample source and destination ensembles
+        igraph_times = []
+        pandana_times = []
+        pandana_reconstruct_times = []
+        for irep in range(args.nreps):
+            source_ensbl = random.sample(list(nodes_gdf["node_id"]), size)
+            dest_ensbl = random.sample(list(nodes_gdf["node_id"]), size)
 
-    sp_pandana = shortest_paths_pandana(gdf, nodes_gdf, source_ensbl, dest_ensbl)
-    sp_igraph = shortest_paths_igraph(gdf, source_ensbl, dest_ensbl)
+            tic = time.time()
+            path = shortest_paths_igraph(
+                gdf, source_ensbl, dest_ensbl, path_type
+            )
+            toc = time.time()
+            igraph_times.append(toc - tic)
 
-    stmt_igraph = "shortest_paths_igraph(gdf, source_ensbl, dest_ensbl)"
-    stmt_pandana = "shortest_paths_pandana(gdf, nodes_gdf, source_ensbl, dest_ensbl)"
+            tic.time()
+            vpath = shortest_paths_pandana(
+                gdf, nodes_gdf, source_ensbl, dest_ensbl
+            )
+            toc.time()
+            pandana_times.append(toc - tic)
 
-    igraph_time = timeit.timeit(stmt=stmt_igraph, globals=globals(), number=10)
-    pandana_time = timeit.timeit(stmt=stmt_pandana, globals=globals(), number=10)
-
-    print(f"igraph took {igraph_time}s")
-    print(f"pandana took {pandana_time}s")
+            if path_type == "epath":
+                tic.time()
+                epath = reconstruct_epath(vpath)
+                toc.time()
+                pandana_reconstruct_times.append(toc - tic)
