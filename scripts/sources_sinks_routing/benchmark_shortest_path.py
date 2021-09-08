@@ -104,11 +104,13 @@ if __name__ == "__main__":
     gdf = gpd.read_file("jamaica_roads.gpkg")
     nodes_gdf = gpd.read_file("jamaica_roads.gpkg", layer="nodes")
 
-    for size in np.logspace(args.sizemin, args.sizemax, args.npoints):
+    igraph_times = np.zeros(args.nreps, args.npoints)
+    pandana_times = np.zeros(args.nreps, args.npoints)
+    pandana_reconstruct_times = np.zeros(args.nreps, args.npoints)
+    for j, size in enumerate(
+        np.logspace(args.sizemin, args.sizemax, args.npoints)
+    ):
         # Sample source and destination ensembles
-        igraph_times = []
-        pandana_times = []
-        pandana_reconstruct_times = []
         for irep in range(args.nreps):
             source_ensbl = random.sample(list(nodes_gdf["node_id"]), size)
             dest_ensbl = random.sample(list(nodes_gdf["node_id"]), size)
@@ -118,17 +120,17 @@ if __name__ == "__main__":
                 gdf, source_ensbl, dest_ensbl, path_type
             )
             toc = time.time()
-            igraph_times.append(toc - tic)
+            igraph_times[irep, j] = toc - tic
 
             tic.time()
             vpath = shortest_paths_pandana(
                 gdf, nodes_gdf, source_ensbl, dest_ensbl
             )
             toc.time()
-            pandana_times.append(toc - tic)
+            pandana_times[irep, j] = toc - tic
 
             if path_type == "epath":
                 tic.time()
                 epath = reconstruct_epath(vpath, gdf)
                 toc.time()
-                pandana_reconstruct_times.append(toc - tic)
+                pandana_reconstruct_times[irep, j] = toc - tic
