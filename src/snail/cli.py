@@ -1,9 +1,13 @@
 import argparse
 
+from shapely.geometry import MultiLineString
 import geopandas as gpd
 import rasterio
+from pandas import read_csv
+from igraph import Graph
 
 from snail.snail_intersections import split, raster2split
+from snail.routing import shortest_paths
 
 
 def parse_arguments(arguments):
@@ -36,6 +40,12 @@ def parse_arguments(arguments):
         nargs="+",
         required=False,
     )
+    parser.add_argument(
+        "--extremities",
+        type=str,
+        help="Path to csv file for shortest paths extremities",
+        required=False,
+    )
 
     args = parser.parse_args(arguments)
     return args
@@ -59,3 +69,34 @@ def snail_raster2split(arguments=None):
 
     new_gdf = raster2split(vector_data, raster_data, args.bands)
     new_gdf.to_file(args.output)
+
+
+def snail_shortest_paths(arguments=None):
+    args = parse_arguments(arguments)
+    vector_data = gpd.read_file(args.vector)
+    # We assume the name of columns in geodataframe
+    edges = vector_data.loc[:, ["from_node", "to_node", "length_km"]]
+    graph = Graph.DataFrame(edges, directed=False)
+    extrm = read_csv(args.extremities)
+    extremities, paths = shortest_paths(
+        extrm.sources.tolist(), extrm.destinations.tolist(), graph, "length_km"
+    )
+    sources = []
+    dests = []
+    for source, dest in extremities:
+        sources.append(source)
+        dests.append(dest)
+    lengths = []
+    geoms = []
+    for path in paths:
+        sub_gdf = vector_data.iloc[path, :]
+        lengths.append(sub_gdf.length_km.sum())
+        geoms.append(MultiLineString([lstr for lstr in sub_gdf.geometry]))
+    return gpd.GeoDataFrame(
+        {
+            "from_node": sources,
+            "to_node": dests,
+            "length_km": lengths,
+            "geometry": geoms,
+        }
+    )
