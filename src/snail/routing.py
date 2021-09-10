@@ -20,6 +20,6 @@ def shortest_paths(sources, destinations, graph, weight):
         shortest_path = graph.get_shortest_paths(
             source_node, destinations, weights=weight, output="epath"
         )
-        shortest_paths.append(shortest_path)
+        shortest_paths.extend(shortest_path)
 
     return shortest_paths
