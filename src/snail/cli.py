@@ -89,28 +89,22 @@ def snail_shortest_paths(arguments=None):
     extremities, paths = shortest_paths(
         extrm.sources.tolist(), extrm.destinations.tolist(), graph, weight="length_km"
     )
-    sources = []
-    dests = []
-    for source, dest in extremities:
-        sources.append(source)
-        dests.append(dest)
-    lengths = []
-    geoms = []
-
     # Assemble output dataframe containing origin and end nodes,
     # length of shortest path, and geometry as a multi-LineString.
     # A path is a list of edge ids, each one
     # mapping back to the original vector data dataframe. We first
     # build a sub geodataframe that consists of just the geometries
     # making the path.
+    lengths = []
+    geoms = []
     for path in paths:
         sub_gdf = vector_data.iloc[path, :]
         lengths.append(sub_gdf.length_km.sum())
         geoms.append(MultiLineString([lstr for lstr in sub_gdf.geometry]))
     return gpd.GeoDataFrame(
         {
-            "from_node": sources,
-            "to_node": dests,
+            "from_node": extrm.sources.to_list(),
+            "to_node": extrm.destinations.to_list(),
             "length_km": lengths,
             "geometry": geoms,
         }
