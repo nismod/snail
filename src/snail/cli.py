@@ -73,13 +73,21 @@ def snail_raster2split(arguments=None):
 
 def snail_shortest_paths(arguments=None):
     args = parse_arguments(arguments)
+    # Read vector data and create graph object
     vector_data = gpd.read_file(args.vector)
     # We assume the name of columns in geodataframe
     edges = vector_data.loc[:, ["from_node", "to_node", "length_km"]]
     graph = Graph.DataFrame(edges, directed=False)
+    # "extremities" argument must be the path to a csv file giving
+    # start and end points of shortest paths
+    # Ex:
+    # from,to
+    # node_3,node_243
+    # node_4576,node_943
+    # ...
     extrm = read_csv(args.extremities)
     extremities, paths = shortest_paths(
-        extrm.sources.tolist(), extrm.destinations.tolist(), graph, "length_km"
+        extrm.sources.tolist(), extrm.destinations.tolist(), graph, weight="length_km"
     )
     sources = []
     dests = []
@@ -88,6 +96,13 @@ def snail_shortest_paths(arguments=None):
         dests.append(dest)
     lengths = []
     geoms = []
+
+    # Assemble output dataframe containing origin and end nodes,
+    # length of shortest path, and geometry as a multi-LineString.
+    # A path is a list of edge ids, each one
+    # mapping back to the original vector data dataframe. We first
+    # build a sub geodataframe that consists of just the geometries
+    # making the path.
     for path in paths:
         sub_gdf = vector_data.iloc[path, :]
         lengths.append(sub_gdf.length_km.sum())
