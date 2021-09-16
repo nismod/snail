@@ -87,7 +87,10 @@ def snail_shortest_paths(arguments=None):
     # ...
     extrm = read_csv(args.extremities)
     extremities, paths = shortest_paths(
-        extrm.sources.tolist(), extrm.destinations.tolist(), graph, weight="length_km"
+        extrm.sources.tolist(),
+        extrm.destinations.tolist(),
+        graph,
+        weight="length_km",
     )
     # Assemble output dataframe containing origin and end nodes,
     # length of shortest path, and geometry as a multi-LineString.
