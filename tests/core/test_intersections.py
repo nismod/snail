@@ -2,7 +2,7 @@ import unittest
 
 from shapely.geometry import LineString
 
-from snail import intersections
+import snail.core.intersections
 
 
 class TestIntersections(unittest.TestCase):
@@ -32,7 +32,7 @@ class TestIntersections(unittest.TestCase):
         for i, test_data in enumerate(zip(test_linestrings, expected)):
             test_linestring, expected_splits = test_data
             with self.subTest(i=i):
-                splits = intersections.split_linestring(
+                splits = snail.core.intersections.split_linestring(
                     test_linestring, self.nrows, self.ncols, self.transform
                 )
                 self.assertTrue(
@@ -53,7 +53,7 @@ class TestIntersections(unittest.TestCase):
 
         for i, test_linestring in enumerate(test_linestrings):
             with self.subTest(i=i):
-                cell_indices = intersections.get_cell_indices(
+                cell_indices = snail.core.intersections.get_cell_indices(
                     test_linestring, self.nrows, self.ncols, self.transform
                 )
                 self.assertEqual(cell_indices, expected_cell_indices[i])
