@@ -104,11 +104,11 @@ def snail_shortest_paths(arguments=None):
         sub_gdf = vector_data.iloc[path, :]
         lengths.append(sub_gdf.length_km.sum())
         geoms.append(MultiLineString([lstr for lstr in sub_gdf.geometry]))
-    return gpd.GeoDataFrame(
+    gpd.GeoDataFrame(
         {
             "from_node": extrm.sources.to_list(),
             "to_node": extrm.destinations.to_list(),
             "length_km": lengths,
             "geometry": geoms,
         }
-    )
+    ).to_file(args.output)
