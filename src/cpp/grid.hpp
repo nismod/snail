@@ -87,13 +87,17 @@ struct Grid {
     // Calculate the length of the line segment being passed in for testing.
     double length = line.length();
 
-    // Determine horizontal and vertical heading (N or S, E or W).
-    bool north = rise >= 0;
-    bool east = run >= 0;
-
     // Pull cell size out of grid transform
     double cellsize_x = grid_to_world.a;
     double cellsize_y = grid_to_world.e;
+
+    // Determine horizontal and vertical heading, in terms of cellsize unit.
+    // The double comparison is necessary in case of negative cell sizes, which
+    // are allowed in the definition of grid transforms.
+    // The run/rise comparison had better be >= or else we loop forever in some
+    // edge cases.
+    bool east = ((run >= 0) == (cellsize_x > 0));
+    bool north = ((rise >= 0) == (cellsize_y > 0));
 
     // We will step east or west, north or south, according to heading
     double step_y = north? cellsize_y : -cellsize_y;

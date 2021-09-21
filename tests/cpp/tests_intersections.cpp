@@ -154,6 +154,45 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   }
 }
 
+
+TEST_CASE("Split with different grid", "[decomposition]") {
+
+  std::vector<linestr> expected_splits = {
+    {{191483.13281982497, 2044523.5152593486}, {191487.679611496, 2044520.0}},
+    {{191487.679611496, 2044520.0}, {191565.0, 2044460.22131688}},
+    {{191565.0, 2044460.22131688}, {191604.089585794, 2044430.0}},
+    {{191604.089585794, 2044430.0}, {191618.28009818937, 2044419.0288944514}}
+  };
+
+  linestr geom = {
+    {191483.13281982497, 2044523.5152593486},
+    {191618.28009818937, 2044419.0288944514}
+  };
+  snail::geometry::LineString line(geom);
+
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine(
+    90.0, 0.0, 132165.0, 0.0, -90.0, 2055230.0
+  ));
+  std::vector<linestr> splits = snail::operations::findIntersectionsLineString(line, test_raster);
+
+  // Test that we're getting the expected number of splits
+  REQUIRE(splits.size() == expected_splits.size());
+  // Test that each one of the splits have the expected size
+  for (int i = 0; i < splits.size(); i++) {
+    REQUIRE(splits[i].size() == expected_splits[i].size());
+  }
+  // Test that each one of the splits are made of the expected points
+  for (int i = 0; i < splits.size(); i++) {
+    for (int j = 0; j < splits[i].size(); j++) {
+      snail::geometry::Coord point = splits[i][j];
+      snail::geometry::Coord expected_point = expected_splits[i][j];
+
+      REQUIRE(std::abs(point.x - expected_point.x) < TOL);
+      REQUIRE(std::abs(point.y - expected_point.y) < TOL);
+    }
+  }
+}
+
 struct SplitGridConfig {
   linestr exterior_crossings;
   std::vector<linestr> expected_splits;
