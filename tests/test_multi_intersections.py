@@ -14,6 +14,8 @@ from snail.multi_intersections import (
     raster2split,
 )
 
+from split_polygons_rings import expected_polygons_rings
+
 
 def make_raster_data():
     data = np.random.randn(2, 2)
@@ -31,7 +33,7 @@ def make_raster_data():
     return new_dataset
 
 
-def make_vector_data():
+def get_couple_of_linestrings():
     test_linestrings = [
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
@@ -42,7 +44,7 @@ def make_vector_data():
     return gdf
 
 
-def make_polygon_vector_data():
+def get_polygon_vector_data():
     test_linearing = LinearRing(
         [
             (1.5, 0.25),
@@ -58,62 +60,7 @@ def make_polygon_vector_data():
     return gpd.GeoDataFrame({"col1": ["name1"], "geometry": [test_polygon]})
 
 
-def get_expected_polygon_gdf():
-    expected_polygons_rings = [
-        [
-            (2.0, 0.875),
-            (1.5, 0.25),
-            (1.0, 0.875),
-            (1.0, 1.0),
-            (2.0, 1.0),
-            (2.0, 0.875),
-        ],
-        [(2.1, 1.0), (2.0, 0.875), (2.0, 1.0), (2.1, 1.0)],
-        [
-            (2.5, 2.0),
-            (2.5, 1.5),
-            (2.1, 1.0),
-            (2.0, 1.0),
-            (2.0, 2.0),
-            (2.5, 2.0),
-        ],
-        [
-            (2.5, 3.0),
-            (2.5, 2.0),
-            (2.0, 2.0),
-            (2.0, 2.875),
-            (2.1, 3.0),
-            (2.5, 3.0),
-        ],
-        [(2.1, 3.0), (2.5, 3.5), (2.5, 3.0), (2.1, 3.0)],
-        [
-            (1.0, 2.875),
-            (1.5, 2.25),
-            (2.0, 2.875),
-            (2.0, 2.0),
-            (1.0, 2.0),
-            (1.0, 2.875),
-        ],
-        [
-            (0.9, 3.0),
-            (1.0, 2.875),
-            (1.0, 2.0),
-            (0.5, 2.0),
-            (0.5, 3.0),
-            (0.9, 3.0),
-        ],
-        [(0.5, 3.0), (0.5, 3.5), (0.9, 3.0), (0.5, 3.0)],
-        [
-            (0.9, 1.0),
-            (0.5, 1.5),
-            (0.5, 2.0),
-            (1.0, 2.0),
-            (1.0, 1.0),
-            (0.9, 1.0),
-        ],
-        [(1.0, 0.875), (0.9, 1.0), (1.0, 1.0), (1.0, 0.875)],
-        [(2.0, 1.0), (1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 1.0)],
-    ]
+def get_split_polygons():
     expected_polygons = [Polygon(ring) for ring in expected_polygons_rings]
     expected_idx = [0] * len(expected_polygons_rings)
     expected_gdf = gpd.GeoDataFrame(
@@ -122,7 +69,7 @@ def get_expected_polygon_gdf():
     return expected_gdf
 
 
-def get_expected_gdf():
+def get_split_linestrings():
     expected_splits = [
         LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.5)]),
         LineString([(1.0, 0.5), (1.5, 0.5), (1.5, 1.0)]),
@@ -147,9 +94,9 @@ class TestSnailIntersections(unittest.TestCase):
         self.raster_dataset.close()
 
     def test_split_linestrings(self):
-        vector_data = make_vector_data()
+        vector_data = get_couple_of_linestrings()
         gdf = split_linestrings(vector_data, self.raster_dataset)
-        expected_gdf = get_expected_gdf()
+        expected_gdf = get_split_linestrings()
 
         # Assertions
 
@@ -170,9 +117,9 @@ class TestSnailIntersections(unittest.TestCase):
         )
 
     def test_split_polygons(self):
-        vector_data = make_polygon_vector_data()
+        vector_data = get_polygon_vector_data()
         gdf = split_polygons(vector_data, self.raster_dataset)
-        expected_gdf = get_expected_polygon_gdf()
+        expected_gdf = get_split_polygons()
 
         self.assertTrue(
             list(
@@ -186,7 +133,7 @@ class TestSnailIntersections(unittest.TestCase):
         )
 
     def test_raster2split(self):
-        vector_data = get_expected_gdf()
+        vector_data = get_split_linestrings()
 
         output_gdf = raster2split(vector_data, self.raster_dataset, bands=[1])
 
