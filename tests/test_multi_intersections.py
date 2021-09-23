@@ -31,7 +31,7 @@ def make_raster_data():
     return new_dataset
 
 
-def make_vector_data():
+def get_couple_of_linestrings():
     test_linestrings = [
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
@@ -122,7 +122,7 @@ def get_expected_polygon_gdf():
     return expected_gdf
 
 
-def get_expected_gdf():
+def get_split_linestrings():
     expected_splits = [
         LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.5)]),
         LineString([(1.0, 0.5), (1.5, 0.5), (1.5, 1.0)]),
@@ -147,9 +147,9 @@ class TestSnailIntersections(unittest.TestCase):
         self.raster_dataset.close()
 
     def test_split_linestrings(self):
-        vector_data = make_vector_data()
+        vector_data = get_couple_of_linestrings()
         gdf = split_linestrings(vector_data, self.raster_dataset)
-        expected_gdf = get_expected_gdf()
+        expected_gdf = get_split_linestrings()
 
         # Assertions
 
@@ -186,7 +186,7 @@ class TestSnailIntersections(unittest.TestCase):
         )
 
     def test_raster2split(self):
-        vector_data = get_expected_gdf()
+        vector_data = get_split_linestrings()
 
         output_gdf = raster2split(vector_data, self.raster_dataset, bands=[1])
 
