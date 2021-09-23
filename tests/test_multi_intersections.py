@@ -42,7 +42,7 @@ def get_couple_of_linestrings():
     return gdf
 
 
-def make_polygon_vector_data():
+def get_polygon_vector_data():
     test_linearing = LinearRing(
         [
             (1.5, 0.25),
@@ -58,7 +58,7 @@ def make_polygon_vector_data():
     return gpd.GeoDataFrame({"col1": ["name1"], "geometry": [test_polygon]})
 
 
-def get_expected_polygon_gdf():
+def get_split_polygons():
     expected_polygons_rings = [
         [
             (2.0, 0.875),
@@ -170,9 +170,9 @@ class TestSnailIntersections(unittest.TestCase):
         )
 
     def test_split_polygons(self):
-        vector_data = make_polygon_vector_data()
+        vector_data = get_polygon_vector_data()
         gdf = split_polygons(vector_data, self.raster_dataset)
-        expected_gdf = get_expected_polygon_gdf()
+        expected_gdf = get_split_polygons()
 
         self.assertTrue(
             list(
