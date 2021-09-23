@@ -14,7 +14,7 @@ from snail.multi_intersections import (
     raster2split,
 )
 
-from .split_polygons_rings import expected_polygons_rings
+from split_polygons_rings import expected_polygons_rings
 
 
 def make_raster_data():
