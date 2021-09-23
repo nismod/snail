@@ -2,9 +2,9 @@ import geopandas as gpd
 from shapely.geometry import LineString, Polygon
 from shapely.ops import polygonize
 
-from snail.intersections import split_linestring
-from snail.intersections import split_polygon
-from snail.intersections import get_cell_indices
+from snail.core.intersections import split_linestring
+from snail.core.intersections import split_polygon
+from snail.core.intersections import get_cell_indices
 
 
 def split_linestrings(vector_data, raster_data):

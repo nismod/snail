@@ -6,7 +6,7 @@ import rasterio
 from pandas import read_csv
 from igraph import Graph
 
-from snail.snail_intersections import split, raster2split
+from snail.multi_intersections import split, raster2split
 from snail.routing import shortest_paths
 
 
