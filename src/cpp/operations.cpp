@@ -61,7 +61,7 @@ findIntersectionsLineString(geometry::LineString linestring,
   return (allsplits);
 }
 
-bool isOnGridLine(geometry::Coord point, Direction direction, int level) {
+bool isOnGridLine(geometry::Coord point, Direction direction, double level) {
   switch (direction) {
   case Direction::horizontal:
     return (point.y == level);
@@ -90,7 +90,7 @@ bool isOnGridLine(geometry::Coord point, Direction direction, int level) {
 // immediately previous point on the exterior, discard it in favour of the
 // current exterior/crossing point".
 bool crossesGridLine(geometry::Coord prev, geometry::Coord next,
-                     Direction direction, int level) {
+                     Direction direction, double level) {
   switch (direction) {
   case Direction::horizontal:
     return (prev.y <= level && next.y >= level) ||
@@ -103,12 +103,27 @@ bool crossesGridLine(geometry::Coord prev, geometry::Coord next,
   }
 }
 
+/// Find the relevant grid coordinate (x or y) from cell index (row or col)
+double gridCoordinate(int level, Direction direction, const grid::Grid &grid){
+    switch (direction) {
+    case Direction::horizontal:
+      return (grid.grid_to_world * geometry::Coord(0,level)).y;
+    case Direction::vertical:
+      return (grid.grid_to_world * geometry::Coord(level, 0)).x;
+    default:
+      return false;
+    }
+}
+
 std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                                          int min_level, int max_level,
                                          Direction direction, grid::Grid grid) {
   std::vector<geometry::Coord> crossings_on_gridline;
   std::vector<linestr> gridline_splits;
   for (int level = min_level; level <= max_level; level++) {
+    // find level value in coordinates
+    double level_value = gridCoordinate(level, direction, grid);
+
     // find crossings at this level
     for (auto curr = exterior_crossings.begin();
          curr != exterior_crossings.end(); curr++) {
@@ -127,8 +142,8 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                       ? exterior_crossings.begin()
                       : (curr + 1);
       // include if on the current line and prev/next are on opposite sides
-      if (isOnGridLine(*curr, direction, level) &&
-          crossesGridLine(*prev, *next, direction, level)) {
+      if (isOnGridLine(*curr, direction, level_value) &&
+          crossesGridLine(*prev, *next, direction, level_value)) {
         crossings_on_gridline.push_back(*curr);
       }
     }

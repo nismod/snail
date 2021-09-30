@@ -380,3 +380,44 @@ TEST_CASE("Exterior ring splits to gridlines", "[decomposition]") {
     }
   }
 }
+
+TEST_CASE("Exterior ring to gridlines with fractional grid", "[decomposition]") {
+  // Using Affine transform with fractional cell size
+  snail::grid::Grid grid(
+      2, 2,
+      snail::transform::Affine(0.5, 0.0, 0.0, 0.0, 0.5, 0.0));
+
+  std::vector<linestr> splits = snail::operations::splitAlongGridlines(
+    {
+      {.3,.3},{.3,.5},{.3,.8},
+      {.5,.8},{.8,.8},
+      {.8,.5},{.8,.3},
+      {.5,.3}
+    },
+    0, 2,
+    snail::operations::Direction::horizontal,
+    grid
+  );
+  std::vector<linestr> expected_splits = {
+    {
+      {{.3,.5},{.5,.5}},
+      {{.5,.5},{.8,.5}},
+    }
+  };
+  // Test that we're getting the expected number of splits
+  REQUIRE(splits.size() == expected_splits.size());
+  // Test that each one of the splits have the expected size
+  for (int i = 0; i < splits.size(); i++) {
+    REQUIRE(splits[i].size() == expected_splits[i].size());
+  }
+  // Test that each one of the splits are made of the expected points
+  for (int i = 0; i < splits.size(); i++) {
+    for (int j = 0; j < splits[i].size(); j++) {
+      snail::geometry::Coord point = splits[i][j];
+      snail::geometry::Coord expected_point = expected_splits[i][j];
+
+      REQUIRE(std::abs(point.x - expected_point.x) < TOL);
+      REQUIRE(std::abs(point.y - expected_point.y) < TOL);
+    }
+  }
+}
