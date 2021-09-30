@@ -126,6 +126,10 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
     // find level value in coordinates
     double level_value = gridCoordinate(level, direction, grid);
 
+    // remove consecutive (adjacent) duplicates
+    auto last = std::unique(exterior_crossings.begin(), exterior_crossings.end());
+    exterior_crossings.erase(last, exterior_crossings.end());
+
     // find crossings at this level
     for (auto curr = exterior_crossings.begin();
          curr != exterior_crossings.end(); curr++) {
@@ -135,10 +139,6 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                       ? (exterior_crossings.end() - 1)
                       : (curr - 1);
 
-      // skip duplicates in sequence
-      if (*curr == *prev) {
-        continue;
-      }
       // pick next point on ring (wrap around)
       auto next = ((curr + 1) == exterior_crossings.end())
                       ? exterior_crossings.begin()
