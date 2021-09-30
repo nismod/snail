@@ -64,8 +64,10 @@ findIntersectionsLineString(geometry::LineString linestring,
 bool isOnGridLine(geometry::Coord point, Direction direction, double level) {
   switch (direction) {
   case Direction::horizontal:
+    return snail::utils::almost_equal(point.y, level, 2);
     return (point.y == level);
   case Direction::vertical:
+    return snail::utils::almost_equal(point.x, level, 2);
     return (point.x == level);
   default:
     return false;
