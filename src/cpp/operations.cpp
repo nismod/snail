@@ -120,6 +120,7 @@ double gridCoordinate(int level, Direction direction, const grid::Grid &grid){
 std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                                          int min_level, int max_level,
                                          Direction direction, grid::Grid grid) {
+
   std::vector<geometry::Coord> crossings_on_gridline;
   std::vector<linestr> gridline_splits;
   for (int level = min_level; level <= max_level; level++) {
@@ -143,6 +144,7 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
       auto next = ((curr + 1) == exterior_crossings.end())
                       ? exterior_crossings.begin()
                       : (curr + 1);
+
       // include if on the current line and prev/next are on opposite sides
       if (isOnGridLine(*curr, direction, level_value) &&
           crossesGridLine(*prev, *next, direction, level_value)) {
