@@ -1,4 +1,5 @@
 import argparse
+from os.path import splitext
 
 from shapely.geometry import MultiLineString
 import geopandas as gpd
@@ -17,6 +18,7 @@ def parse_arguments(arguments):
         "--raster",
         type=str,
         help="The path to the raster data file",
+        nargs="+",
         required=True,
     )
     parser.add_argument(
@@ -34,10 +36,9 @@ def parse_arguments(arguments):
         required=True,
     )
     parser.add_argument(
-        "--bands",
+        "--band",
         type=int,
-        help="Indices of raster bands to be read",
-        nargs="+",
+        help="Indices of raster band to be read",
         required=False,
     )
     parser.add_argument(
@@ -64,10 +65,26 @@ def snail_split(arguments=None):
 def snail_raster2split(arguments=None):
     args = parse_arguments(arguments)
 
-    raster_data = rasterio.open(args.raster)
+    if isinstance(args.raster, str):
+        args.raster = list(args.raster)
+
+    with rasterio.open(args.raster[0]) as dataset:
+        raster_width = dataset.width
+        raster_height = dataset.height
+        raster_transform = list(dataset.transform)
+    # Make key: filename dict with filename (without ext) as key
+    rasters = {splitext(k)[0]: v for (k, v) in zip(args.raster, args.raster)}
     vector_data = gpd.read_file(args.vector)
 
-    new_gdf = raster2split(vector_data, raster_data, args.bands)
+    new_gdf = raster2split(
+        vector_data,
+        rasters,
+        width=raster_width,
+        height=raster_height,
+        transform=raster_transform,
+        band_number=args.band,
+        inplace=True,
+    )
     new_gdf.to_file(args.output)
 
 
