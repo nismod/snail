@@ -1,3 +1,4 @@
+import os
 import unittest
 
 from affine import Affine
@@ -31,6 +32,21 @@ def make_raster_data():
     )
     new_dataset.write(data, 1)
     return new_dataset
+
+
+def write_raster_to_tempfile(fname, data):
+    with rasterio.open(
+        fname,
+        "w",
+        driver="GTiff",
+        width=data.shape[1],
+        height=data.shape[0],
+        count=1,
+        crs="+proj=latlong",
+        transform=Affine.identity(),
+        dtype=data.dtype,
+    ) as dst:
+        dst.write(data, 1)
 
 
 def get_couple_of_linestrings():
@@ -132,15 +148,39 @@ class TestSnailIntersections(unittest.TestCase):
             gdf["line index"].values, expected_gdf["line index"].values
         )
 
+
+class TestRaster2Split(unittest.TestCase):
+    def setUp(self):
+        self.fname = "test_raster.tif"
+        self.raster_data = np.random.randn(2, 2)
+        self.width = self.raster_data.shape[1]
+        self.height = self.raster_data.shape[0]
+        self.transform = list(Affine.identity())
+        write_raster_to_tempfile(fname=self.fname, data=self.raster_data)
+
+    def tearDown(self):
+        try:
+            os.remove(self.fname)
+        except FileNotFoundError:
+            pass
+
     def test_raster2split(self):
         vector_data = get_split_linestrings()
-
-        output_gdf = raster2split(vector_data, self.raster_dataset, bands=[1])
-
+        rasters = {"key": self.fname}
+        output_gdf = raster2split(
+            vector_data,
+            rasters,
+            width=self.width,
+            height=self.height,
+            transform=self.transform,
+        )
         # Expected raster values are points (0,1), (1,0) and (1,1) of the grid
-        data_array_indices = ([0, 1, 1], [0, 0, 1])
-        raster_data = self.raster_dataset.read(1)
-        expected_raster_values = np.tile(raster_data[data_array_indices], 2)
+        # x == columns and y == rows so elements [0,0], [0,1] and [1,1] of
+        # underlying data array
+        data_array_indices = ([0, 0, 1], [0, 1, 1])
+        expected_raster_values = np.tile(
+            self.raster_data[data_array_indices], 2
+        )
         assert_array_almost_equal(
-            output_gdf["band1"].values, expected_raster_values
+            output_gdf["key"].values, expected_raster_values
         )
