@@ -4,7 +4,7 @@ from affine import Affine
 import numpy as np
 from numpy.testing import assert_array_equal, assert_array_almost_equal
 import geopandas as gpd
-from rasterio.io import MemoryFile
+import rasterio
 from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import LinearRing, orient
 
@@ -19,7 +19,7 @@ from split_polygons_rings import expected_polygons_rings
 
 def make_raster_data():
     data = np.random.randn(2, 2)
-    memfile = MemoryFile()
+    memfile = rasterio.io.MemoryFile()
     new_dataset = memfile.open(
         driver="GTiff",
         width=data.shape[1],
