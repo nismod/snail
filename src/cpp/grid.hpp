@@ -2,6 +2,7 @@
 #define GRID_H
 
 #include <limits>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -80,9 +81,20 @@ struct Grid {
   /// grid lines / graticules.
   std::vector<geometry::Coord>
   findIntersections(const geometry::Line line) const {
+    // Create a vector of grid / graticule crossings to return to the caller.
+    std::vector<geometry::Coord> crossings;
+
     // First, calculate the run and rise of the line.
     double run = (line.end.x - line.start.x);
     double rise = (line.end.y - line.start.y);
+
+    // If the start and end point are the same, return early
+    if (run == 0 && rise == 0) {
+      return crossings;
+    }
+
+    // Append the start point of the line to the vector of crossings.
+    crossings.push_back(line.start);
 
     // Calculate the length of the line segment being passed in for testing.
     double length = line.length();
@@ -94,10 +106,8 @@ struct Grid {
     // Determine horizontal and vertical heading, in terms of cellsize unit.
     // The double comparison is necessary in case of negative cell sizes, which
     // are allowed in the definition of grid transforms.
-    // The run/rise comparison had better be >= or else we loop forever in some
-    // edge cases.
-    bool east = ((run >= 0) == (cellsize_x > 0));
-    bool north = ((rise >= 0) == (cellsize_y > 0));
+    bool east = ((run > 0) == (cellsize_x > 0));
+    bool north = ((rise > 0) == (cellsize_y > 0));
 
     // We will step east or west, north or south, according to heading
     double step_y = north? cellsize_y : -cellsize_y;
@@ -112,39 +122,69 @@ struct Grid {
     geometry::Coord pN(dN * run / rise, dN);
     geometry::Coord pE(dE, dE * rise / run);
 
-    // Create a vector of grid / graticule crossings to return to the caller.
-    std::vector<geometry::Coord> crossings;
+    // Consider each possible crossing point along horizontal line
+    if (rise == 0) {
+      while (pE.length() <= length) {
+        // std::cout << "  pE(" << pE.x << "," << pE.y << ") length "  << pE.length() << "\n";
 
-    // Append the start point of the line to the vector of crossings.
-    crossings.push_back(line.start);
-
-    // As long as there is a crossing point BEFORE the end of the line, we can
-    // keep looping.
-    while (pE.length() <= length || pN.length() <= length) {
-      // Add the closest crossing point to the vector of grid /
-      // graticule crossings.  If both crossing points overlap then we
-      // update both and it doesn't matter wich one we add to the
-      // vector of crossings.
-      if (pE == pN) {
-        crossings.push_back(line.start + pN);
-        // Update the distance to the next graticule.
-        dE += step_x;
-        dN += step_y;
-        // Calculate the position of the next crossings in both directions
-        pE = geometry::Coord(dE, dE * rise / run);
-        pN = geometry::Coord(dN * run / rise, dN);
-      } else if (pE.length() < pN.length()) {
+        // Add the closest crossing point
         crossings.push_back(line.start + pE);
-        // Update the distance to the next graticule.
+        // Update the distance to the next graticule
         dE += step_x;
         // Calculate the position of the next crossing
-        pE = geometry::Coord(dE, dE * rise / run);
-      } else if (pN.length() < pE.length()) {
+        pE = geometry::Coord(dE, 0);
+      }
+
+    // Consider each possible crossing point along vertical line
+    } else if (run == 0) {
+      while (pN.length() <= length) {
+
+        // Add the closest crossing point
         crossings.push_back(line.start + pN);
-        // Update the distance to the next graticule.
+        // Update the distance to the next graticule
         dN += step_y;
         // Calculate the position of the next crossing
-        pN = geometry::Coord(dN * run / rise, dN);
+        pN = geometry::Coord(0, dN);
+      }
+
+    // Consider each possible crossing point along line
+    } else {
+      while (pE.length() <= length || pN.length() <= length) {
+        // Add the closest crossing point to the vector of grid /
+        // graticule crossings.  If both crossing points overlap then we
+        // update both and it doesn't matter which one we add to the
+        // vector of crossings.
+        if (pE == pN) {
+          crossings.push_back(line.start + pN);
+          // Update the distance to the next graticule.
+          dE += step_x;
+          dN += step_y;
+          // Calculate the position of the next crossings in both directions
+          pE = geometry::Coord(dE, dE * rise / run);
+          pN = geometry::Coord(dN * run / rise, dN);
+        } else if (pE.length() < pN.length()) {
+          crossings.push_back(line.start + pE);
+          // Update the distance to the next graticule.
+          dE += step_x;
+          // Calculate the position of the next crossing
+          pE = geometry::Coord(dE, dE * rise / run);
+        } else if (pN.length() < pE.length()) {
+          crossings.push_back(line.start + pN);
+          // Update the distance to the next graticule.
+          dN += step_y;
+          // Calculate the position of the next crossing
+          pN = geometry::Coord(dN * run / rise, dN);
+        } else {
+          std::ostringstream msg;
+          msg << "Unexpected points while splitting line:\n";
+          msg << "  start(" << line.start.x << "," << line.start.y << ")\n";
+          msg << "  end(" << line.end.x << "," << line.end.y << ")\n";
+          msg << "  run: " << run << " rise: " << rise << "\n";
+          msg << "  pE(" << pE.x << "," << pE.y << ") length "  << pE.length() << "\n";
+          msg << "  pN(" << pN.x << "," << pN.y << ") length "  << pN.length() << "\n";
+          utils::Exception(msg.str());
+          break;
+        }
       }
     }
 

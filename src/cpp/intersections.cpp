@@ -77,18 +77,32 @@ std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
+
+  // Corners of geometry bbox as cell indices
+  geometry::Coord ll = grid.world_to_grid * geometry::Coord(minx, miny);
+  geometry::Coord ur = grid.world_to_grid * geometry::Coord(maxx, maxy);
+
   geometry::LineString line(exterior);
   std::vector<linestr> exterior_splits =
       operations::findIntersectionsLineString(line, grid);
-  std::vector<geometry::Coord> exterior_crossings;
+  std::vector<geometry::Coord> exterior_with_crossings;
   for (auto split : exterior_splits) {
-    exterior_crossings.push_back(split[0]);
+    exterior_with_crossings.insert(
+      exterior_with_crossings.end(), split.begin(), split.end());
   }
 
   std::vector<linestr> horiz_splits = operations::splitAlongGridlines(
-      exterior_crossings, ceil(miny), floor(maxy), operations::Direction::horizontal, grid);
+      exterior_with_crossings,
+      floor(std::min(ll.y, ur.y)),
+      ceil(std::max(ll.y, ur.y)) + 1,
+      operations::Direction::horizontal,
+      grid);
   std::vector<linestr> vert_splits = operations::splitAlongGridlines(
-      exterior_crossings, ceil(minx), floor(maxx), operations::Direction::vertical, grid);
+      exterior_with_crossings,
+      floor(std::min(ll.x, ur.x)),
+      ceil(std::max(ll.x, ur.x)) + 1,
+      operations::Direction::vertical,
+      grid);
 
   std::vector<linestr> all_splits;
   all_splits.insert(all_splits.end(), exterior_splits.begin(),
