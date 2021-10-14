@@ -1,7 +1,22 @@
+import logging
+import os
+
 import geopandas as gpd
 import rasterio
 from shapely.geometry import LineString, Polygon
 from shapely.ops import polygonize
+
+# optional progress bars
+if "SNAIL_PROGRESS" in os.environ and os.environ["SNAIL_PROGRESS"] in (
+    "1",
+    "TRUE",
+):
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        from snail.tqdm_standin import tqdm_standin as tqdm
+else:
+    from snail.tqdm_standin import tqdm_standin as tqdm
 
 from snail.core.intersections import split_linestring
 from snail.core.intersections import split_polygon
@@ -11,18 +26,19 @@ from snail.core.intersections import get_cell_indices
 def split_linestrings(vector_data, raster_data):
     all_splits = []
     all_idx = []
-    for idx, geom in zip(vector_data.index, vector_data.geometry):
-        if type(geom) != LineString:
-            msg = f"Incorrect geometry type {type(geom)}, expected LineString."
+    logging.info("Split linestrings")
+    for edge in tqdm(vector_data.itertuples(), total=len(vector_data)):
+        if type(edge.geometry) != LineString:
+            msg = f"Incorrect geometry type {type(edge.geometry)}, expected LineString."
             raise ValueError(msg)
         split_geoms = split_linestring(
-            geom,
+            edge.geometry,
             raster_data.width,
             raster_data.height,
             list(raster_data.transform),
         )
         all_splits.extend(split_geoms)
-        all_idx.extend([idx] * len(split_geoms))
+        all_idx.extend([edge.Index] * len(split_geoms))
 
     return gpd.GeoDataFrame({"line index": all_idx, "geometry": all_splits})
 
@@ -30,19 +46,20 @@ def split_linestrings(vector_data, raster_data):
 def split_polygons(vector_data, raster_data):
     all_splits = []
     all_idx = []
-    for idx, geom in zip(vector_data.index, vector_data.geometry):
-        if type(geom) != Polygon:
-            msg = f"Incorrect geometry type {type(geom)}, expected LineString."
+    logging.info("Split polygons")
+    for edge in tqdm(vector_data.itertuples(), total=len(vector_data)):
+        if type(edge.geometry) != Polygon:
+            msg = f"Incorrect geometry type {type(edge.geometry)}, expected Polygon."
             raise ValueError(msg)
         splits = split_polygon(
-            geom,
+            edge.geometry,
             raster_data.width,
             raster_data.height,
             list(raster_data.transform),
         )
         split_geoms = list(polygonize(splits))
         all_splits.extend(split_geoms)
-        all_idx.extend([idx] * len(split_geoms))
+        all_idx.extend([edge.Index] * len(split_geoms))
 
     return gpd.GeoDataFrame({"line index": all_idx, "geometry": all_splits})
 
