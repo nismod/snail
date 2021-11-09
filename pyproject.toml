@@ -1,7 +1,7 @@
 [build-system]
 requires = [
     "setuptools>=42",
-    "setuptools_scm",
+    "setuptools_scm>=6.2",
     "wheel",
     "pybind11>=2.8.0",
 ]
@@ -12,3 +12,5 @@ testpaths = ["tests"]
 
 [tool.black]
 line-length = 79
+
+[tool.setuptools_scm]
