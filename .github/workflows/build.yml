@@ -80,28 +80,3 @@ jobs:
       - name: Test with pytest
         run: |
           pytest --cov=snail --cov-report=term-missing tests
-
-  build-mingw64:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - name: Setup Python
-        uses: msys2/setup-msys2@v2
-        with:
-          update: true
-          install: >-
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-python-pip
-            git
-
-      - name: Checkout repository
-        uses: actions/checkout@v2
-
-      - name: Build and install
-        run: pip install .[dev]
-
-      - name: Test
-        run:  |
-          python -m pytest
