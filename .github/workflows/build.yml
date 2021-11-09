@@ -3,13 +3,11 @@ name: build
 on: [push]
 
 jobs:
-  build:
-
+  build-cpp:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, macos-latest, ubuntu-latest]
-        python-version: ["3.6", "3.10"]
+        platform: [macos-latest, ubuntu-latest]
 
     runs-on: ${{ matrix.platform }}
 
@@ -27,6 +25,39 @@ jobs:
 
       - name: Test C++
         run: ./build/run_tests
+
+
+  build-cpp-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Checkout submodules
+        run: git submodule update --init --recursive
+
+      - name: Build C++
+        run: |
+          cmake -Bbuild .
+          cmake --build build/ --target run_tests
+
+      - name: Test C++
+        run: ./build/Debug/run_tests.exe
+
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, macos-latest, ubuntu-latest]
+        python-version: ["3.6", "3.10"]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v2
