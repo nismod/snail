@@ -1,13 +1,13 @@
 import argparse
 from os.path import splitext
 
-from shapely.geometry import MultiLineString
+from shapely.geometry import LineString, MultiLineString, Polygon
 import geopandas as gpd
 import rasterio
 from pandas import read_csv
 from igraph import Graph
 
-from snail.multi_intersections import split, raster2split
+from snail.multi_intersections import split_linestrings, split_polygons, raster2split
 from snail.routing import shortest_paths
 
 
@@ -58,7 +58,14 @@ def snail_split(arguments=None):
     raster_data = rasterio.open(args.raster)
     vector_data = gpd.read_file(args.vector)
 
-    new_gdf = split(vector_data, raster_data)
+    geom = vector_data.iloc[0].geometry
+    if type(geom) is LineString:
+        new_gdf = split_linestrings(vector_data, raster_data)
+    elif type(geom) is Polygon:
+        new_gdf = split_polygons(vector_data, raster_data)
+    else:
+        raise ValueError(f"Could not process vector data of type {type(geom)}, expected Polygon or LineString")
+
     new_gdf.to_file(args.output)
 
 
