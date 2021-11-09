@@ -7,7 +7,11 @@ import rasterio
 from pandas import read_csv
 from igraph import Graph
 
-from snail.multi_intersections import split_linestrings, split_polygons, raster2split
+from snail.multi_intersections import (
+    split_linestrings,
+    split_polygons,
+    raster2split,
+)
 from snail.routing import shortest_paths
 
 
@@ -64,7 +68,9 @@ def snail_split(arguments=None):
     elif type(geom) is Polygon:
         new_gdf = split_polygons(vector_data, raster_data)
     else:
-        raise ValueError(f"Could not process vector data of type {type(geom)}, expected Polygon or LineString")
+        raise ValueError(
+            f"Could not process vector data of type {type(geom)}, expected Polygon or LineString"
+        )
 
     new_gdf.to_file(args.output)
 

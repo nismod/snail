@@ -64,8 +64,15 @@ def split_polygons(vector_data, raster_data):
     return gpd.GeoDataFrame({"line index": all_idx, "geometry": all_splits})
 
 
-def raster2split(vector_data, rasters, width, height, transform, band_number=1,
-                 inplace=False):
+def raster2split(
+    vector_data,
+    rasters,
+    width,
+    height,
+    transform,
+    band_number=1,
+    inplace=False,
+):
     """Associate raster data to split vector data.
 
     Positional arguments:
@@ -86,16 +93,12 @@ def raster2split(vector_data, rasters, width, height, transform, band_number=1,
     df = vector_data if inplace else vector_data.copy()
 
     def get_indices(geom):
-        x, y = get_cell_indices(
-            geom,
-            width,
-            height,
-            transform)
+        x, y = get_cell_indices(geom, width, height, transform)
         x = x % width
         y = y % height
         return [x, y]
 
-    df['cell_index'] = df.geometry.apply(get_indices)
+    df["cell_index"] = df.geometry.apply(get_indices)
     for key, fname in rasters.items():
         with rasterio.open(fname) as dataset:
             band_data = dataset.read(band_number)
