@@ -60,8 +60,19 @@ are not committed in the notebook files:
 
 ### C++ library
 
-The C++ library in `src/cpp` is under early development. It contains routines to
-quickly find intersections of lines with raster grids.
+The C++ library in `src/cpp` contains the core routines to find intersections of
+lines with raster grids.
+
+Before working on the C++ library, fetch source code for Catch2 unit testing
+library (this is included as a git submodule):
+
+    git submodule update --init --recursive
+
+Build the library and run tests:
+
+    cmake -Bbuild .
+    cmake --build build/
+    ./build/run_tests
 
 Run code style auto-formatting:
 
@@ -77,14 +88,3 @@ python installation. For example, with python via miniconda:
     clang-tidy --checks 'cppcoreguidelines-*' src/cpp/* -- \
         -I/home/username/miniconda3/include/python3.7m/ \
         -I./pybind11/include/
-
-Fetch source code for Catch2 unit testing library (this is included as a git
-submodule):
-
-    git submodule update --init --recursive
-
-Build and run the test application:
-
-    cmake -Bbuild .
-    cmake --build build/
-    ./build/run_tests
