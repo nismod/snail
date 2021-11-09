@@ -17,6 +17,30 @@
 This is a Python package to help with analysis of the potential impacts of
 climate hazards and other perils on infrastructure networks.
 
+## Installation
+
+Install using pip:
+
+    pip install nismod-snail
+
+This should bring all dependencies with it. If any of these cause difficulties,
+try using a [conda](https://docs.conda.io/en/latest/miniconda.html) environment:
+
+    conda env create -n snail_env \
+        python=3.8 geopandas shapely rasterio python-igraph
+    conda activate snail_env
+    pip install nismod-snail
+
+If all worked okay, you should be able to run python and import snail:
+
+    $ python
+    >>> import snail
+    >>> help(snail)
+    Help on package snail:
+
+    NAME
+        snail - snail - the spatial networks impact assessment library
+
 
 ## Development
 
