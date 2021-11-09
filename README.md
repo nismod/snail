@@ -17,6 +17,7 @@
 This is a Python package to help with analysis of the potential impacts of
 climate hazards and other perils on infrastructure networks.
 
+
 ## Development
 
 Clone this repository using [GitHub Desktop](https://desktop.github.com/) or on
@@ -58,6 +59,7 @@ are not committed in the notebook files:
 
     nbstripout --install
 
+
 ### C++ library
 
 The C++ library in `src/cpp` contains the core routines to find intersections of
@@ -88,3 +90,17 @@ python installation. For example, with python via miniconda:
     clang-tidy --checks 'cppcoreguidelines-*' src/cpp/* -- \
         -I/home/username/miniconda3/include/python3.7m/ \
         -I./pybind11/include/
+
+
+### Integration of C++ and Python using pybind11
+
+The `snail.core.intersections` module is built using [`pybind11` with
+`setuptools`](https://pybind11.readthedocs.io/en/stable/compiling.html#building-with-setuptools)
+
+- `src/cpp/intersections.cpp` defines the module interface using the
+  `PYBIND11_MODULE` macro
+- `pyproject.toml` defines the build requirements for snail, which includes
+  pybind11, wheel and setuptools
+- `setup.py` defines the `Pybind11Extension` module to build - both the C++
+  files to compile, and the location of the built module within the python
+  package
