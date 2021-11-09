@@ -4,6 +4,7 @@
 """
 from glob import glob
 
+# pybind11 will be available at setup time due to pyproject.toml
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 
 from setuptools import find_packages, setup
