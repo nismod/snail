@@ -55,9 +55,6 @@ setup(
         # eg: 'keyword1', 'keyword2', 'keyword3',
     ],
     python_requires=">=3.6",
-    setup_requires=[
-        'setuptools_scm'
-    ],
     install_requires=[
         'geopandas', 'shapely', 'rasterio', 'python-igraph'
     ],
