@@ -64,6 +64,7 @@ jobs:
           install: >-
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-python-pip
+            git
 
       - name: Checkout repository
         uses: actions/checkout@v2
