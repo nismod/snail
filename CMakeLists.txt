@@ -14,14 +14,16 @@ if (NOT SKBUILD)
     ${CPP_TESTS_DIR}/tests_intersections.cpp
     ${CPP_TESTS_DIR}/tests_transform.cpp
     ${CPP_SRC_DIR}/operations.cpp
-    )
+  )
   target_include_directories(run_tests PUBLIC ${CPP_SRC_DIR})
   target_link_libraries(run_tests PRIVATE Catch2::Catch2)
-endif()
 
-add_subdirectory(pybind11)
-pybind11_add_module(intersections
-  ${CPP_SRC_DIR}/intersections.cpp
-  ${CPP_SRC_DIR}/operations.cpp
-)
-install(TARGETS intersections LIBRARY DESTINATION .)
+else()
+  add_subdirectory(pybind11)
+  pybind11_add_module(intersections
+    ${CPP_SRC_DIR}/intersections.cpp
+    ${CPP_SRC_DIR}/operations.cpp
+  )
+  install(TARGETS intersections LIBRARY DESTINATION .)
+
+endif()
