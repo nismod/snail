@@ -26,7 +26,7 @@ def readme():
 
 
 setup(
-    name='snail',
+    name='nismod-snail',
     use_scm_version=True,
     license='MIT License',
     description='The spatial networks impact assessment library',
