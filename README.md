@@ -28,23 +28,24 @@ Change directory into the root of the project:
 
     cd snail
 
-Run this once, so python will recognise the source code as a package:
+Run this to install the source code as a package:
 
-    python setup.py develop
+    pip install .
 
-Install development packages:
+If you're working on snail itself, install it as "editable" along with test and
+development packages:
 
-    pip install pytest pytest-cov flake8 nbstripout
+    pip install -e .[dev]
 
 Run tests using [pytest](https://docs.pytest.org/en/latest/) and
 [pytest-cov](https://pytest-cov.readthedocs.io) to check coverage:
 
-    pytest --cov=snail --cov-report=term-missing tests
+    pytest --cov=snail --cov-report=term-missing
 
-Run a linter ([flake](https://flake8.pycqa.org/en/latest/)) to check code
+Run a formatter ([black](https://github.com/psf/black)) to fix code
 formatting:
 
-    flake8
+    black src/snail
 
 When working on the tutorial notebooks, it is recommended to install and
 configure [nbstripout](https://github.com/kynan/nbstripout) so data and outputs
@@ -54,8 +55,8 @@ are not committed in the notebook files:
 
 ### C++ library
 
-The C++ library in `src/cpp` is under early development. It contains routines to quickly find
-intersections of lines with raster grids.
+The C++ library in `src/cpp` is under early development. It contains routines to
+quickly find intersections of lines with raster grids.
 
 Run code style auto-formatting:
 
@@ -68,17 +69,17 @@ Run lints and checks:
 This may need some includes for `pybind11` - which will vary depending on your
 python installation. For example, with python via miniconda:
 
-    clang-tidy --checks 'cppcoreguidelines-*' src/cpp/* -- -I/home/username/miniconda3/include/python3.7m/ -I./pybind11/include/
+    clang-tidy --checks 'cppcoreguidelines-*' src/cpp/* -- \
+        -I/home/username/miniconda3/include/python3.7m/ \
+        -I./pybind11/include/
 
-Fetch source code for Catch2 unit testing library (this is included as a git submodule):
+Fetch source code for Catch2 unit testing library (this is included as a git
+submodule):
 
     git submodule update --init --recursive
 
-Build the test application:
+Build and run the test application:
 
     cmake -Bbuild .
     cmake --build build/
-
-Run the test application:
-
     ./build/run_tests
