@@ -76,8 +76,8 @@ Fetch source code for Catch2 unit testing library (this is included as a git sub
 
 Build the test application:
 
-    cmake --build build/
     cmake -Bbuild .
+    cmake --build build/
 
 Run the test application:
 
