@@ -28,6 +28,11 @@ Change directory into the root of the project:
 
     cd snail
 
+To create and activate a conda environment with snail's dependencies installed:
+
+    conda env create -f .environment.yml
+    conda activate snail-dev
+
 Run this to install the source code as a package:
 
     pip install .
