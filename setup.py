@@ -3,10 +3,18 @@
 """Setup snail package
 """
 from glob import glob
-from os.path import basename, splitext
 
-from setuptools import find_packages
-from skbuild import setup
+from pybind11.setup_helpers import Pybind11Extension, build_ext
+
+from setuptools import find_packages, setup
+
+
+ext_modules = [
+    Pybind11Extension(
+        "snail.core.intersections",
+        sorted(glob("src/cpp/*.cpp")),
+    ),
+]
 
 
 def readme():
@@ -26,9 +34,10 @@ setup(
     author='Tom Russell',
     author_email='tomalrussell@gmail.com',
     url='https://github.com/nismod/snail',
-    packages=find_packages('src'),
+    packages=find_packages(where='src'),
     package_dir={'': 'src'},
-    cmake_install_dir="src/snail/core",
+    ext_modules=ext_modules,
+    cmdclass={"build_ext": build_ext},
     include_package_data=True,
     zip_safe=False,
     classifiers=[
@@ -44,13 +53,15 @@ setup(
     keywords=[
         # eg: 'keyword1', 'keyword2', 'keyword3',
     ],
+    python_requires=">=3.6",
     setup_requires=[
         'setuptools_scm'
     ],
     install_requires=[
-        'affine', 'numpy', 'geopandas', 'shapely', 'rasterio', 'python-igraph'
+        'geopandas', 'shapely', 'rasterio', 'python-igraph'
     ],
     extras_require={
+        'test': ['affine', 'numpy', 'pytest'],
         # eg:
         #   'rst': ['docutils>=0.11'],
         #   ':python_version=="2.6"': ['argparse'],
