@@ -8,6 +8,7 @@ __pycache__
 *.egg-info
 .coverage
 venv
+dist
 
 # Editor
 .vscode
