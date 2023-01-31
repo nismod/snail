@@ -1,13 +1,7 @@
-"""Estimating the fragility and damages to roads 
+"""Estimating the fragility and damages to roads
 """
-
-import os
-import sys
 import pandas as pd
-import geopandas as gpd
 import numpy as np
-import convert_hazard_data as chd
-import network_intersections as ni
 from scipy import integrate
 from tqdm import tqdm
 
