@@ -1,41 +1,35 @@
 import argparse
 import logging
 import os
-import warnings
-
-from collections import namedtuple
-from os.path import splitext
+import sys
 
 import fiona
 import geopandas
 import numpy
 import pandas
 import rasterio
+from shapely.ops import linemerge
 
-from shapely.geometry import mapping, shape
-from shapely.ops import linemerge, polygonize
-from snail.core.intersections import (
-    get_cell_indices,
-    split_linestring,
-    split_polygon,
-)
-from snail.multi_intersections import (
+from snail.intersection import (
+    Transform,
+    apply_indices,
+    associate_raster,
     split_linestrings,
     split_polygons,
-    raster2split,
 )
 
 
 def snail(args=None):
     parser = argparse.ArgumentParser(prog="snail")
-    subparsers = parser.add_subparsers(help="additional help")
+    parser.add_argument("--verbose", "-v", action="count", default=0)
+    subparsers = parser.add_subparsers(help="Run a command")
 
     parser_split = subparsers.add_parser(
         "split", help="Split vector features on a regular grid"
     )
     parser_split.add_argument(
-        "-v",
-        "--vector",
+        "-f",
+        "--features",
         type=str,
         required=True,
         help="File with vector features to split",
@@ -52,22 +46,44 @@ def snail(args=None):
         "--raster",
         type=str,
         required=False,
-        nargs="+",
         help="Raster file/s to use as definition of splitting grid",
     )
     parser_split.add_argument(
         "-t",
         "--transform",
-        type=str,
+        type=float,
         required=False,
         nargs=6,
-        help="Transform definition of splitting grid",
+        help="""Affine transform of splitting grid.
+
+        For example, for a north-up image:
+            {top-left x coordinate} {cell width} {zero} {top-left y coordinate} {cell height} {zero}
+        """,
+    )
+    parser_split.add_argument(
+        "--width",
+        type=int,
+        required=False,
+        help="Width of splitting grid (number of columns)",
+    )
+    parser_split.add_argument(
+        "--height",
+        type=int,
+        required=False,
+        help="Height of splitting grid (number of rows)",
     )
     parser_split.add_argument(
         "-a",
         "--attribute",
         action="store_true",
         help="Attribute raster values to split output",
+    )
+    parser_split.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        required=True,
+        help="Output file",
     )
     parser_split.set_defaults(func=split)
 
@@ -82,324 +98,214 @@ def snail(args=None):
     )
     parser_process.set_defaults(func=process)
 
+    args = parser.parse_args(args)
 
-def split(args):
-    raster_data = rasterio.open(args.raster)
-    vector_data = geopandas.read_file(args.vector)
-
-    geom_type = vector_data.iloc[0].geometry.geom_type
-
-    if geom_type == "LineString":
-        new_gdf = split_linestrings(vector_data, raster_data)
-    elif geom_type == "Polygon":
-        new_gdf = split_polygons(vector_data, raster_data)
+    # Enable logging
+    if args.verbose > 2:
+        level = logging.DEBUG
+    elif args.verbose > 1:
+        level = logging.INFO
+    elif args.verbose > 0:
+        level = logging.WARNING
     else:
-        raise ValueError(
-            f"Could not process vector data of type {geom_type}, expected Polygon or LineString"
-        )
+        level = logging.ERROR
 
-    new_gdf.to_file(args.output)
+    logging.basicConfig(format="%(asctime)s %(message)s", level=level)
 
+    logging.info(args)
 
-def snail_raster2split(args):
-    if isinstance(args.raster, str):
-        args.raster = [
-            args.raster,
-        ]
-
-    with rasterio.open(args.raster[0]) as dataset:
-        raster_width = dataset.width
-        raster_height = dataset.height
-        raster_transform = list(dataset.transform)
-    # Make key: filename dict with filename (without ext) as key
-    rasters = {splitext(k)[0]: v for (k, v) in zip(args.raster, args.raster)}
-    vector_data = geopandas.read_file(args.vector)
-
-    new_gdf = raster2split(
-        vector_data,
-        rasters,
-        width=raster_width,
-        height=raster_height,
-        transform=raster_transform,
-        band_number=args.band,
-        inplace=True,
-    )
-    new_gdf.to_file(args.output)
-
-
-def process(args):
-    networks_csv = args.vectors
-    hazards_csv = args.rasters
-
-    # Ignore writing-to-parquet warnings
-    warnings.filterwarnings(
-        "ignore", message=".*initial implementation of Parquet.*"
-    )
-    # Ignore reading-geopackage warnings
-    warnings.filterwarnings(
-        "ignore", message=".*Sequential read of iterator was interrupted.*"
-    )
-
-    # Enable info logging
-    logging.basicConfig(format="%(asctime)s %(message)s", level=logging.INFO)
+    # Call the subcommand function
     logging.info("Start.")
-    main(".", networks_csv, hazards_csv)
+    args.func(args)
     logging.info("Done.")
 
 
-def main(data_path, networks_csv, hazards_csv):
-    # read transforms, record with hazards
-    hazards = pandas.read_csv(hazards_csv)
-    hazard_slug = os.path.basename(hazards_csv).replace(".csv", "")
-    hazard_transforms, transforms = read_transforms(hazards, data_path)
-    hazard_transforms.to_csv(
-        hazards_csv.replace(".csv", "__with_transforms.csv"), index=False
-    )
+def split(args):
+    if args.raster:
+        _, ext = os.path.splitext(args.raster)
+        if ext == "nc":
+            import xarray
+
+            ds = xarray.open_dataset(args.raster)
+            affine_transform = list(ds.rio.transform())
+            # TODO figure out width and height
+            # might need to specify data variable
+        else:
+            raster = rasterio.open(args.raster)
+            crs = raster.crs
+            width = raster.width
+            height = raster.height
+            affine_transform = list(raster.transform)
+    else:
+        crs = None
+        width = args.width
+        height = args.height
+        affine_transform = args.transform
+        if width is None or height is None or affine_transform is None:
+            sys.exit(
+                "Error: Expected either a raster file or transform, width and height of splitting grid"
+            )
+    transform = Transform(crs, width, height, affine_transform)
+    logging.info(f"Splitting grid {transform=}")
+
+    try:
+        features = geopandas.read_file(args.features)
+        geom_type = sample_geom_type(features)
+
+        if "Point" in geom_type:
+            splits = explode_multi(features)
+        elif "LineString" in geom_type:
+            splits = split_linestrings(features, transform)
+        elif "Polygon" in geom_type:
+            splits = split_polygons(features, transform)
+        else:
+            raise ValueError(
+                f"Could not process vector data of type {geom_type}"
+            )
+
+        splits = apply_indices(splits, transform)
+        if args.attribute and args.raster:
+            splits[os.path.basename(args.raster)] = associate_raster_file(
+                splits, args.raster
+            )
+
+        splits.to_file(args.output)
+
+    finally:
+        if args.raster:
+            raster.close()
+
+
+def process(args):
+    # read transforms
+    rasters = pandas.read_csv(args.rasters)
+    rasters, transforms = read_transforms(rasters)
 
     # read networks
-    networks = pandas.read_csv(networks_csv)
+    vector_layers = pandas.read_csv(args.vectors)
 
-    for network_path in networks.path:
-        fname = os.path.join(data_path, network_path)
-        out_fname = os.path.join(
-            data_path,
-            "..",
-            "results",
-            "hazard_asset_intersection",
-            os.path.basename(network_path).replace(
-                ".gpkg", f"_splits__{hazard_slug}.gpkg"
-            ),
+    for vector_layer in vector_layers.itertuples():
+        logging.info("Processing %s", os.path.basename(vector_layer.path))
+
+        features = geopandas.read_file(
+            vector_layer.path, layer=vector_layer.layer
         )
-        pq_fname_nodes = out_fname.replace(".gpkg", "__nodes.geoparquet")
-        pq_fname_edges = out_fname.replace(".gpkg", "__edges.geoparquet")
-        pq_fname_areas = out_fname.replace(".gpkg", "__areas.geoparquet")
+        geom_type = sample_geom_type(features)
+        logging.info(f"{geom_type} Features CRS {features.crs}")
 
-        # skip if output is there already (not using gpkg currently)
-        # if os.path.exists(out_fname):
-        #     logging.info("Skipping %s. Already exists: %s", os.path.basename(fname), out_fname)
-        #     continue
+        if "Point" in geom_type:
+            processed = process_nodes(features, transforms, rasters)
+        elif "LineString" in geom_type:
+            processed = process_edges(features, transforms, rasters)
+        elif "Polygon" in geom_type:
+            processed = process_areas(features, transforms, rasters)
+        else:
+            raise ValueError(
+                f"Could not process vector data of type {geom_type}"
+            )
 
-        logging.info("Processing %s", os.path.basename(fname))
-        layers = fiona.listlayers(fname)
-        logging.info("Layers: %s", layers)
-
-        if "nodes" in layers:
-            # skip if output is there already
-            if os.path.exists(pq_fname_nodes):
-                logging.info(
-                    "Skipping %s. Already exists: %s",
-                    os.path.basename(fname),
-                    pq_fname_nodes,
-                )
-            else:
-                # look up nodes cell index
-                nodes = geopandas.read_file(fname, layer="nodes")
-                logging.info("Node CRS %s", nodes.crs)
-                nodes = process_nodes(
-                    nodes, transforms, hazard_transforms, data_path
-                )
-                # nodes.to_file(out_fname, driver="GPKG", layer="nodes")
-                nodes.to_parquet(pq_fname_nodes)
-
-        if "edges" in layers:
-            # skip if output is there already
-            if os.path.exists(pq_fname_edges):
-                logging.info(
-                    "Skipping %s. Already exists: %s",
-                    os.path.basename(fname),
-                    pq_fname_edges,
-                )
-            else:
-                # split lines
-                edges = geopandas.read_file(fname, layer="edges")
-                logging.info("Edge CRS %s", edges.crs)
-                edges = process_edges(
-                    edges, transforms, hazard_transforms, data_path
-                )
-                # edges.to_file(out_fname, driver="GPKG", layer="edges")
-                edges.to_parquet(pq_fname_edges)
-
-        if "areas" in layers:
-            # skip if output is there already
-            if os.path.exists(pq_fname_areas):
-                logging.info(
-                    "Skipping %s. Already exists: %s",
-                    os.path.basename(fname),
-                    pq_fname_areas,
-                )
-            else:
-                # split polygons
-                areas = geopandas.read_file(fname, layer="areas")
-                logging.info("Area CRS %s", areas.crs)
-                areas = explode_multi(areas)
-                areas = process_areas(
-                    areas, transforms, hazard_transforms, data_path
-                )
-                # areas.to_file(out_fname, driver="GPKG", layer="areas")
-                areas.to_parquet(pq_fname_areas)
+        processed.to_parquet(vector_layer.output_path)
 
 
-# Helper class to store a raster transform and CRS
-Transform = namedtuple("Transform", ["crs", "width", "height", "transform"])
+def process_nodes(nodes, transforms, rasters):
+    # handle multipoints
+    nodes = explode_multi(nodes)
+
+    return process_features(nodes, transforms, rasters, lambda df, _: df)
 
 
-def associate_raster(
-    df, key, fname, cell_index_col="cell_index", band_number=1
-):
+def process_edges(edges, transforms, rasters):
+    # handle multilinestrings
+    edges.geometry = edges.geometry.apply(try_merge)
+    edges = explode_multi(edges)
+
+    return process_features(edges, transforms, rasters, split_linestrings)
+
+
+def process_areas(areas, transforms, rasters):
+    # handle multipolygons
+    areas = explode_multi(areas)
+
+    return process_features(areas, transforms, rasters, split_polygons)
+
+
+def process_features(features, transforms, rasters, split_func):
+    # lookup per transform
+    for i, t in enumerate(transforms):
+        # transform to grid CRS
+        crs_features = features.to_crs(t.crs)
+        crs_features = split_func(crs_features, t)
+        # save cell index for fast lookup of raster values
+        apply_indices(crs_features, t, f"i_{i}", f"j_{i}")
+        # transform back
+        features = crs_features.to_crs(features.crs)
+
+    # to prevent a fragmented dataframe (and a memory explosion), add series to a dict
+    # and then concat afterwards -- do not append to an existing dataframe
+    raster_data: dict[str, pandas.Series] = {}
+
+    # associate values
+    for raster in rasters.itertuples():
+        logging.info("Raster %s transform %s", raster.key, raster.transform_id)
+        raster_data[raster.key] = associate_raster_file(
+            features,
+            raster.path,
+            f"i_{raster.transform_id}",
+            f"j_{raster.transform_id}",
+        )
+
+    raster_data = pandas.DataFrame(raster_data)
+    features = pandas.concat([features, raster_data], axis="columns")
+
+    return features
+
+
+def associate_raster_file(
+    df: pandas.DataFrame,
+    fname: str,
+    index_i: str = "index_i",
+    index_j: str = "index_j",
+    band_number: int = 1,
+) -> pandas.Series:
+    # TODO handle NetCDF files
+
     with rasterio.open(fname) as dataset:
-        band_data = dataset.read(band_number)
-        df[key] = df[cell_index_col].apply(lambda i: band_data[i[1], i[0]])
+        band_data: numpy.ndarray = dataset.read(band_number)
+        raster_values = associate_raster(df, band_data, index_i, index_j)
+    return raster_values
 
 
-def read_transforms(hazards, data_path):
+def read_transforms(rasters):
     transforms = []
-    transform_id = 0
-    hazard_transforms = []
-    for hazard in hazards.itertuples():
-        hazard_path = hazard.path
-        with rasterio.open(
-            os.path.join(data_path, "hazards", hazard_path)
-        ) as dataset:
+    transform_ids = []
+
+    for raster in rasters.itertuples():
+        with rasterio.open(raster.path) as dataset:
             crs = dataset.crs
             width = dataset.width
             height = dataset.height
             transform = Transform(crs, width, height, tuple(dataset.transform))
+
         # add transform to list if not present
         if transform not in transforms:
             transforms.append(transform)
-            transform_id = transform_id + 1
 
-        # record hazard/transform details
-        hazard_transform_id = transforms.index(transform)
-        hazard_transform = hazard._asdict()
-        del hazard_transform["Index"]
-        hazard_transform["transform_id"] = hazard_transform_id
-        hazard_transform["width"] = transform.width
-        hazard_transform["height"] = transform.height
-        hazard_transform["crs"] = str(transform.crs)
-        hazard_transform["transform_0"] = transform.transform[0]
-        hazard_transform["transform_1"] = transform.transform[1]
-        hazard_transform["transform_2"] = transform.transform[2]
-        hazard_transform["transform_3"] = transform.transform[3]
-        hazard_transform["transform_4"] = transform.transform[4]
-        hazard_transform["transform_5"] = transform.transform[5]
-        hazard_transforms.append(hazard_transform)
-    hazard_transforms = pandas.DataFrame(hazard_transforms)
+        # record raster/transform details
+        transform_id = transforms.index(transform)
+        transform_ids.append(transform_id)
 
-    return hazard_transforms, transforms
+    rasters["transform_id"] = transform_ids
+    return rasters, transforms
 
 
-def process_nodes(nodes, transforms, hazard_transforms, data_path):
-    # lookup per transform
-    for i, t in enumerate(transforms):
-        # transform to grid
-        crs_df = nodes.to_crs(t.crs)
-        # save cell index for fast lookup of raster values
-        crs_df[f"cell_index_{i}"] = crs_df.geometry.progress_apply(
-            lambda geom: get_indices(geom, t)
-        )
-        # transform back
-        nodes = crs_df.to_crs(nodes.crs)
-
-    # associate hazard values
-    for hazard in hazard_transforms.itertuples():
-        logging.info("Hazard %s transform %s", hazard.key, hazard.transform_id)
-        fname = os.path.join(data_path, "hazards", hazard.path)
-        cell_index_col = f"cell_index_{hazard.transform_id}"
-        associate_raster(nodes, hazard.key, fname, cell_index_col)
-
-    # split and drop tuple columns so GPKG can save
-    for i, t in enumerate(transforms):
-        nodes = split_index_column(nodes, f"cell_index_{i}")
-        nodes.drop(columns=f"cell_index_{i}", inplace=True)
-    return nodes
+def sample_geom_type(df: geopandas.GeoDataFrame) -> str:
+    return df.iloc[0].geometry.geom_type
 
 
 def try_merge(geom):
     if geom.geom_type == "MultiLineString":
         geom = linemerge(geom)
     return geom
-
-
-def process_edges(edges, transforms, hazard_transforms, data_path):
-    # handle multilinestrings
-    edges.geometry = edges.geometry.apply(try_merge)
-    geom_types = edges.geometry.apply(lambda g: g.geom_type)
-    logging.info(geom_types.value_counts())
-    edges = explode_multi(edges)
-
-    # split edges per transform
-    for i, t in enumerate(transforms):
-        # transform to grid
-        crs_df = edges.to_crs(t.crs)
-        crs_df = split_df(crs_df, t)
-        # save cell index for fast lookup of raster values
-        crs_df[f"cell_index_{i}"] = crs_df.geometry.progress_apply(
-            lambda geom: get_indices(geom, t)
-        )
-        # transform back
-        edges = crs_df.to_crs(edges.crs)
-
-    # associate hazard values
-    for hazard in hazard_transforms.itertuples():
-        logging.info("Hazard %s transform %s", hazard.key, hazard.transform_id)
-        fname = os.path.join(data_path, "hazards", hazard.path)
-        cell_index_col = f"cell_index_{hazard.transform_id}"
-        associate_raster(edges, hazard.key, fname, cell_index_col)
-
-    # split and drop tuple columns so GPKG can save
-    for i, t in enumerate(transforms):
-        edges = split_index_column(edges, f"cell_index_{i}")
-        edges.drop(columns=f"cell_index_{i}", inplace=True)
-
-    return edges
-
-
-def split_df(df, t):
-    # split
-    core_splits = []
-    for edge in df.itertuples():
-        # split edge
-        splits = split_linestring(
-            edge.geometry, t.width, t.height, t.transform
-        )
-        # add to collection
-        for s in splits:
-            s_dict = edge._asdict()
-            del s_dict["Index"]
-            s_dict["geometry"] = s
-            core_splits.append(s_dict)
-    logging.info(f"Split {len(df)} edges into {len(core_splits)} pieces")
-    sdf = geopandas.GeoDataFrame(core_splits, crs=t.crs, geometry="geometry")
-    return sdf
-
-
-def process_areas(areas, transforms, hazard_transforms, data_path):
-    # split areas per transform
-    for i, t in enumerate(transforms):
-        # transform to grid
-        crs_df = areas.to_crs(t.crs)
-        crs_df = split_area_df(crs_df, t)
-        # save cell index for fast lookup of raster values
-        crs_df[f"cell_index_{i}"] = crs_df.geometry.progress_apply(
-            lambda geom: get_indices(geom, t)
-        )
-        # transform back
-        areas = crs_df.to_crs(areas.crs)
-
-    # associate hazard values
-    for hazard in hazard_transforms.itertuples():
-        logging.info("Hazard %s transform %s", hazard.key, hazard.transform_id)
-        fname = os.path.join(data_path, "hazards", hazard.path)
-        cell_index_col = f"cell_index_{hazard.transform_id}"
-        associate_raster(areas, hazard.key, fname, cell_index_col)
-
-    # split and drop tuple columns so GPKG can save
-    for i, t in enumerate(transforms):
-        areas = split_index_column(areas, f"cell_index_{i}")
-        areas.drop(columns=f"cell_index_{i}", inplace=True)
-
-    return areas
 
 
 def explode_multi(df):
@@ -419,57 +325,4 @@ def explode_multi(df):
             geoms.append(item.geometry)
 
     df = geopandas.GeoDataFrame(items, crs=df.crs, geometry=geoms)
-    return df
-
-
-def set_precision(geom, precision):
-    """Set geometry precision"""
-    geom_mapping = mapping(geom)
-    geom_mapping["coordinates"] = numpy.round(
-        numpy.array(geom_mapping["coordinates"]), precision
-    )
-    return shape(geom_mapping)
-
-
-def split_area_df(df, t):
-    # split
-    core_splits = []
-    for area in df.itertuples():
-        # split area
-        splits = split_polygon(area.geometry, t.width, t.height, t.transform)
-        # round to high precision (avoid floating point errors)
-        splits = [set_precision(s, 9) for s in splits]
-        # to polygons
-        splits = list(polygonize(splits))
-        # add to collection
-        for s in splits:
-            s_dict = area._asdict()
-            del s_dict["Index"]
-            s_dict["geometry"] = s
-            core_splits.append(s_dict)
-    logging.info(f"  Split {len(df)} areas into {len(core_splits)} pieces")
-    sdf = geopandas.GeoDataFrame(core_splits)
-    sdf.crs = t.crs
-    return sdf
-
-
-def get_indices(geom, t):
-    x, y = get_cell_indices(geom, t.width, t.height, t.transform)
-
-    # Raise error if cell index would be out of bounds
-    if x > t.width or x < 0:
-        raise ValueError
-    if y > t.height or y < 0:
-        raise ValueError
-
-    # Or - set out-of-bounds value (-1,-1) if cell index would be out of bounds
-    # if x > t.width or x < 0 or y > t.height or y < 0:
-    #     x = -1
-    #     y = -1
-    return (x, y)
-
-
-def split_index_column(df, prefix):
-    df[f"{prefix}_x"] = df[prefix].apply(lambda i: i[0])
-    df[f"{prefix}_y"] = df[prefix].apply(lambda i: i[1])
     return df
