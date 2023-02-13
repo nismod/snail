@@ -3,11 +3,11 @@ import logging
 import os
 import sys
 
-import fiona
 import geopandas
 import numpy
 import pandas
 import rasterio
+import xarray
 from shapely.ops import linemerge
 
 from snail.intersection import (
@@ -121,15 +121,22 @@ def snail(args=None):
 
 
 def split(args):
+    # raster variable name, might get set if reading a NetCDF
+    varname = None
+
     if args.raster:
         _, ext = os.path.splitext(args.raster)
         if ext == "nc":
-            import xarray
-
             ds = xarray.open_dataset(args.raster)
             affine_transform = list(ds.rio.transform())
-            # TODO figure out width and height
-            # might need to specify data variable
+            if args.raster_var:
+                varname = args.raster_var
+            else:
+                varname = next(iter(list(ds.keys())))
+            da = ds[varname]
+            # TODO fix gross assumption about dimensions
+            # time, lat, lon
+            _, height, width = da.shape
         else:
             raster = rasterio.open(args.raster)
             crs = raster.crs
@@ -166,7 +173,7 @@ def split(args):
         splits = apply_indices(splits, transform)
         if args.attribute and args.raster:
             splits[os.path.basename(args.raster)] = associate_raster_file(
-                splits, args.raster
+                splits, args.raster, variable_name=varname
             )
 
         splits.to_file(args.output)
@@ -266,13 +273,29 @@ def associate_raster_file(
     index_i: str = "index_i",
     index_j: str = "index_j",
     band_number: int = 1,
+    variable_name: str = None,
 ) -> pandas.Series:
-    # TODO handle NetCDF files
-
-    with rasterio.open(fname) as dataset:
-        band_data: numpy.ndarray = dataset.read(band_number)
-        raster_values = associate_raster(df, band_data, index_i, index_j)
+    band_data = read_band_data(fname, band_number, variable_name)
+    raster_values = associate_raster(df, band_data, index_i, index_j)
     return raster_values
+
+
+def read_band_data(
+    fname: str,
+    band_number: int = 1,
+    variable_name: str = None,
+) -> numpy.ndarray:
+    _, ext = os.path.splitext(fname)
+    if ext == "nc":
+        ds = xarray.open_dataset(fname)
+        da = ds[variable_name]
+        # TODO fix gross assumption about dimensions
+        # (time, lat, lon), so pick first time slice
+        band_data = da.data[0]
+    else:
+        with rasterio.open(fname) as dataset:
+            band_data: numpy.ndarray = dataset.read(band_number)
+    return band_data
 
 
 def read_transforms(rasters):

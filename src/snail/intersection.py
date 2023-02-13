@@ -146,8 +146,8 @@ def get_indices(
     i, j = get_cell_indices(geom, t.height, t.width, t.transform)
 
     # Raise error if cell index would be out of bounds
-    assert 0 <= i < t.height
-    assert 0 <= j < t.width
+    assert 0 <= i < t.width
+    assert 0 <= j < t.height
 
     # Or - special value (-1,-1) if cell would be out of bounds
     # if i > t.width or i < 0 or y > t.height or y < 0:
