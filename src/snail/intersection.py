@@ -50,7 +50,7 @@ def split_linestrings(df, t: Transform):
         splits = split_linestring(
             df.geometry[i], t.width, t.height, t.transform
         )
-        for s in splits:
+        for j, s in enumerate(splits):
             # splitting sometimes returns zero-length linestrings on edge of raster
             # see below for example linestring on eastern (lon=70W) extent of box
             # (Pdb) geometry.coords.xy
@@ -62,6 +62,7 @@ def split_linestrings(df, t: Transform):
             if not s.length == 0:
                 new_row = df.iloc[i].copy()
                 new_row.geometry = s
+                new_row["split"] = j
                 core_splits.append(new_row)
     logging.info(f"Split {len(df)} edges into {len(core_splits)} pieces")
     sdf = geopandas.GeoDataFrame(core_splits, crs=t.crs, geometry="geometry")

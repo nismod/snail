@@ -61,12 +61,14 @@ def snail(args=None):
         """,
     )
     parser_split.add_argument(
+        "-w",
         "--width",
         type=int,
         required=False,
         help="Width of splitting grid (number of columns)",
     )
     parser_split.add_argument(
+        "-g",
         "--height",
         type=int,
         required=False,
@@ -91,10 +93,24 @@ def snail(args=None):
         "process", help="Split vectors and attribute raster values"
     )
     parser_process.add_argument(
-        "-vs", "--vectors", type=str, help="CSV file with vector layers"
+        "-d",
+        "--directory",
+        type=str,
+        help="Path to data directory for vector and raster paths",
     )
     parser_process.add_argument(
-        "-rs", "--rasters", type=str, help="CSV file with raster layers"
+        "-fs",
+        "--features",
+        type=str,
+        required=True,
+        help="CSV file with vector layers",
+    )
+    parser_process.add_argument(
+        "-rs",
+        "--rasters",
+        type=str,
+        required=True,
+        help="CSV file with raster layers",
     )
     parser_process.set_defaults(func=process)
 
@@ -183,13 +199,42 @@ def split(args):
             raster.close()
 
 
+def join_dirname(path, dirname=False):
+    if dirname:
+        return os.path.join(dirname, path)
+    return path
+
+
+def format_key(row, colnames):
+    parts = []
+    for c in colnames:
+        parts.append(f"{c}:{row.loc[c]}")
+    key = "|".join(parts)
+    return key
+
+
 def process(args):
+    # data directory
+    dirname = args.directory
+
     # read transforms
     rasters = pandas.read_csv(args.rasters)
+    rasters.path = rasters.path.apply(join_dirname, args=(dirname,))
+    if "key" not in rasters.columns:
+        colnames = sorted(set(rasters.columns) ^ {"path"})
+        rasters["key"] = rasters.apply(format_key, args=(colnames,), axis=1)
+
     rasters, transforms = read_transforms(rasters)
 
     # read networks
-    vector_layers = pandas.read_csv(args.vectors)
+    vector_layers = pandas.read_csv(args.features)
+    vector_layers.path = vector_layers.path.apply(
+        join_dirname, args=(dirname,)
+    )
+    if "output_path" not in vector_layers.columns:
+        vector_layers["output_path"] = vector_layers.path.apply(
+            lambda p: f"{p}.processed.parquet"
+        )
 
     for vector_layer in vector_layers.itertuples():
         logging.info("Processing %s", os.path.basename(vector_layer.path))
@@ -239,11 +284,12 @@ def process_areas(areas, transforms, rasters):
 def process_features(features, transforms, rasters, split_func):
     # lookup per transform
     for i, t in enumerate(transforms):
+        logging.info("Splitting on transform %s %s", i, t)
         # transform to grid CRS
         crs_features = features.to_crs(t.crs)
         crs_features = split_func(crs_features, t)
         # save cell index for fast lookup of raster values
-        apply_indices(crs_features, t, f"i_{i}", f"j_{i}")
+        crs_features = apply_indices(crs_features, t, f"i_{i}", f"j_{i}")
         # transform back
         features = crs_features.to_crs(features.crs)
 
@@ -253,7 +299,11 @@ def process_features(features, transforms, rasters, split_func):
 
     # associate values
     for raster in rasters.itertuples():
-        logging.info("Raster %s transform %s", raster.key, raster.transform_id)
+        logging.info(
+            "Associating values from raster %s transform %s",
+            raster.key,
+            raster.transform_id,
+        )
         raster_data[raster.key] = associate_raster_file(
             features,
             raster.path,
@@ -303,6 +353,7 @@ def read_transforms(rasters):
     transform_ids = []
 
     for raster in rasters.itertuples():
+        logging.info("Reading metadata from raster %s", raster.path)
         with rasterio.open(raster.path) as dataset:
             crs = dataset.crs
             width = dataset.width
