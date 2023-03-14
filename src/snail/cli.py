@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
 import geopandas
 import numpy
@@ -237,11 +238,16 @@ def process(args):
         )
 
     for vector_layer in vector_layers.itertuples():
-        logging.info("Processing %s", os.path.basename(vector_layer.path))
+        vector_path = Path(vector_layer.path)
+        logging.info("Processing %s", vector_path.name)
 
-        features = geopandas.read_file(
-            vector_layer.path, layer=vector_layer.layer
-        )
+        if vector_path.suffix in (".parquet", ".geoparquet"):
+            features = geopandas.read_parquet(vector_path)
+        else:
+            features = geopandas.read_file(
+                vector_path, layer=vector_layer.layer
+            )
+
         geom_type = sample_geom_type(features)
         logging.info(f"{geom_type} Features CRS {features.crs}")
 
@@ -261,7 +267,7 @@ def process(args):
 
 def process_nodes(nodes, transforms, rasters):
     # handle multipoints
-    nodes = explode_multi(nodes)
+    # nodes = explode_multi(nodes)
 
     return process_features(nodes, transforms, rasters, lambda df, _: df)
 
@@ -310,6 +316,16 @@ def process_features(features, transforms, rasters, split_func):
             f"i_{raster.transform_id}",
             f"j_{raster.transform_id}",
         )
+
+        # if allowing out-of-range splits, assign nodata value
+        # TODO derive NODATA value
+        # TODO flag to allow out-of-range
+        # TODO push some of this into core library code?
+        nodata_value = numpy.nan
+        nodata_mask = features[
+            (f"i_{raster.transform_id}" < 0) | (f"j_{raster.transform_id}" < 0)
+        ]
+        raster_data.loc[nodata_mask, raster.key] = nodata_value
 
     raster_data = pandas.DataFrame(raster_data)
     features = pandas.concat([features, raster_data], axis="columns")
