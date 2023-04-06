@@ -174,10 +174,12 @@ def split(args):
 
     try:
         features = geopandas.read_file(args.features)
+        features_crs = features.crs
+        features = explode_multi(features)
         geom_type = sample_geom_type(features)
 
         if "Point" in geom_type:
-            splits = explode_multi(features)
+            splits = features
         elif "LineString" in geom_type:
             splits = split_linestrings(features, transform)
         elif "Polygon" in geom_type:
@@ -193,6 +195,7 @@ def split(args):
                 splits, args.raster, variable_name=varname
             )
 
+        splits.set_crs(features_crs, inplace=True)
         splits.to_file(args.output)
 
     finally:
