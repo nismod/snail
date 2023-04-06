@@ -1,13 +1,13 @@
 import logging
 import os
 from dataclasses import dataclass
+from itertools import product
 from typing import Tuple
 
 import geopandas
 import numpy
 import pandas
-from shapely.geometry import mapping, shape
-from shapely.ops import polygonize
+from shapely.geometry import mapping, shape, box
 
 from snail.core.intersections import (
     get_cell_indices,
@@ -69,11 +69,54 @@ def split_linestrings(df, t: Transform):
     return sdf
 
 
+def transform(i, j, a, b, c, d, e, f) -> Tuple[float]:
+    return (i * a + j * b + c, i * d + j * e + f)
+
+
 def split_polygons(df, t: Transform):
     core_splits = []
-    for area in df.itertuples():
+    ##
+    # Fairly slow but solid approach, loop over cells and
+    # use geopandas (shapely/GEOS) intersection
+    ##
+    a, b, c, d, e, f = t.transform
+    for i, j in tqdm(
+        product(range(t.width), range(t.height)), total=t.width * t.height
+    ):
+        ulx, uly = transform(i, j, a, b, c, d, e, f)
+        lrx, lry = transform(i + 1, j + 1, a, b, c, d, e, f)
+        cell_geom = box(ulx, uly, lrx, lry)
+        idx = df.geometry.sindex.query(cell_geom)
+        subset = df.iloc[idx].copy()
+        if len(subset):
+            subset.geometry = subset.intersection(cell_geom)
+            subset = subset[
+                ~(subset.geometry.is_empty | subset.geometry.isna())
+            ]
+            subset = subset.explode(index_parts=False)
+            subset = subset[subset.geometry.type == "Polygon"]
+            core_splits.append(subset)
+    sdf = pandas.concat(core_splits)
+    return sdf
+
+
+def split_polygons_experimental(df, t: Transform):
+    """Experimental `split_polygons` implementation, possibly fast/incorrect
+    with some inputs.
+    """
+    core_splits = []
+    ##
+    # Approach using snail::splitPolygon to produce a mesh of
+    # half-line pieces within the polygon interior, plus the boundary
+    # split into pieces, then passed to shapely (GEOS) polygonize
+    # - doesn't handle polygons with holes
+    # - polygonize doesn't always piece back together correctly, or leaves
+    #   gaps - perhaps especially for coarse grids (vs shape size)
+    # - should be possible to write all at the lower level
+    ##
+    for i in tqdm(range(len(df))):
         # split area
-        splits = split_polygon(area.geometry, t.width, t.height, t.transform)
+        splits = split_polygon(df.geometry[i], t.width, t.height, t.transform)
         # round to high precision (avoid floating point errors)
         splits = [
             set_precision(s, POLYGON_COORDINATE_PRECISION) for s in splits
@@ -81,11 +124,11 @@ def split_polygons(df, t: Transform):
         # to polygons
         splits = list(polygonize(splits))
         # add to collection
-        for s in splits:
-            s_dict = area._asdict()
-            del s_dict["Index"]
-            s_dict["geometry"] = s
-            core_splits.append(s_dict)
+        for j, s in enumerate(splits):
+            new_row = df.iloc[i].copy()
+            new_row.geometry = s
+            new_row["split"] = j
+            core_splits.append(new_row)
     logging.info(f"  Split {len(df)} areas into {len(core_splits)} pieces")
     sdf = geopandas.GeoDataFrame(core_splits)
     sdf.crs = t.crs
