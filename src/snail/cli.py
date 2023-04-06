@@ -407,7 +407,7 @@ def explode_multi(df):
             "MultiLineString",
             "MultiPolygon",
         ):
-            for part in item.geometry:
+            for part in item.geometry.geoms:
                 items.append(item._asdict())
                 geoms.append(part)
         else:
