@@ -1,6 +1,7 @@
 import logging
 from typing import List, Tuple
 
+import geopandas
 import numpy
 import pandas
 import rasterio
@@ -86,3 +87,16 @@ def read_transform(path):
         ]  # trim to 6 - we expect the first two rows of 3x3 matrix
     transform = Transform(crs, width, height, affine_transform)
     return transform
+
+
+def read_features(path, layer=None):
+    if path.suffix in (".parquet", ".geoparquet"):
+        features = geopandas.read_parquet(path)
+    else:
+        if layer:
+            features = geopandas.read_file(
+                path, layer=layer
+            )
+        else:
+            features = geopandas.read_file(path)
+    return features

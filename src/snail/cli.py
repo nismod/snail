@@ -21,6 +21,7 @@ from snail.intersection import (
 from snail.io import (
     associate_raster_file,
     associate_raster_files,
+    read_features,
     read_transform,
     read_transforms,
 )
@@ -200,7 +201,7 @@ def split(args):
             key = os.path.basename(args.raster)
 
         logging.info(
-            f"Attributing raster values, output in column %s from %s",
+            "Attributing raster values, output in column %s from %s",
             key,
             args.raster,
         )
@@ -215,12 +216,8 @@ def process(args):
     # data directory
     dirname = args.directory
 
-    # read transforms
-    try:
-        rasters = pandas.read_csv(args.rasters)
-    except FileNotFoundError:
-        logging.error("Rasters file not found: %s", args.rasters)
-        sys.exit()
+    # read rasters and transforms
+    rasters = _read_csv_or_quit(args.rasters)
 
     rasters.path = rasters.path.apply(_join_dirname, args=(dirname,))
     if "key" not in rasters.columns:
@@ -230,11 +227,7 @@ def process(args):
     rasters, transforms = read_transforms(rasters)
 
     # read networks
-    try:
-        vector_layers = pandas.read_csv(args.features)
-    except FileNotFoundError:
-        logging.error("Features file not found: %s", args.features)
-        sys.exit()
+    vector_layers = _read_csv_or_quit(args.features)
 
     vector_layers.path = vector_layers.path.apply(
         _join_dirname, args=(dirname,)
@@ -245,46 +238,47 @@ def process(args):
         )
 
     for vector_layer in vector_layers.itertuples():
-        vector_path = Path(vector_layer.path)
-        logging.info("Processing %s", vector_path.name)
+        _process_layer(vector_layer, transforms, rasters)
 
-        if vector_path.suffix in (".parquet", ".geoparquet"):
-            features = geopandas.read_parquet(vector_path)
-        else:
-            if "layer" in vector_layers.columns:
-                features = geopandas.read_file(
-                    vector_path, layer=vector_layer.layer
-                )
-            else:
-                features = geopandas.read_file(vector_path)
 
-        geom_type = _sample_geom_type(features)
-        logging.info("%s Features CRS %s", geom_type, features.crs)
+def _process_layer(vector_layer, transforms, rasters):
+    vector_path = Path(vector_layer.path)
+    layer = getattr(vector_layer, "layer", None)
+    logging.info("Processing %s", vector_path.name)
 
-        if "Point" in geom_type:
-            prepared = prepare_points(features)
-            split = split_features_for_rasters(
-                prepared, transforms, split_points
-            )
-            with_data = associate_raster_files(split, rasters)
-        elif "LineString" in geom_type:
-            prepared = prepare_linestrings(features)
-            split = split_features_for_rasters(
-                prepared, transforms, split_linestrings
-            )
-            with_data = associate_raster_files(split, rasters)
-        elif "Polygon" in geom_type:
-            prepared = prepare_polygons(features)
-            split = split_features_for_rasters(
-                prepared, transforms, split_polygons
-            )
-            with_data = associate_raster_files(split, rasters)
-        else:
-            raise ValueError(
-                f"Could not process vector data of type {geom_type}"
-            )
+    features = read_features(vector_path, layer)
+    geom_type = _sample_geom_type(features)
+    logging.info("%s Features CRS %s", geom_type, features.crs)
 
-        with_data.to_parquet(vector_layer.output_path)
+    if "Point" in geom_type:
+        prepared = prepare_points(features)
+        split = split_features_for_rasters(prepared, transforms, split_points)
+        with_data = associate_raster_files(split, rasters)
+    elif "LineString" in geom_type:
+        prepared = prepare_linestrings(features)
+        split = split_features_for_rasters(
+            prepared, transforms, split_linestrings
+        )
+        with_data = associate_raster_files(split, rasters)
+    elif "Polygon" in geom_type:
+        prepared = prepare_polygons(features)
+        split = split_features_for_rasters(
+            prepared, transforms, split_polygons
+        )
+        with_data = associate_raster_files(split, rasters)
+    else:
+        raise ValueError(f"Could not process vector data of type {geom_type}")
+
+    with_data.to_parquet(vector_layer.output_path)
+
+
+def _read_csv_or_quit(path) -> pandas.DataFrame:
+    try:
+        df = pandas.read_csv(path)
+    except FileNotFoundError:
+        logging.error("File not found: %s", path)
+        sys.exit()
+    return df
 
 
 def _sample_geom_type(df: geopandas.GeoDataFrame) -> str:
