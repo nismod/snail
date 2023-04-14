@@ -47,7 +47,8 @@ def get_split_polygons():
     expected_gdf = gpd.GeoDataFrame(
         {"col1": expected_idx, "geometry": expected_polygons}
     )
-    return expected_gdf
+    expected_gdf["index"] = 0
+    return expected_gdf.set_index("index")
 
 
 def get_split_linestrings():

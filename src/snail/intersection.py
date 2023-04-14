@@ -2,12 +2,13 @@ import logging
 import os
 from dataclasses import dataclass
 from itertools import product
-from typing import Tuple
+from typing import Callable, List, Tuple
 
 import geopandas
 import numpy
 import pandas
 from shapely.geometry import mapping, shape, box
+from shapely.ops import linemerge, polygonize
 
 from snail.core.intersections import (
     get_cell_indices,
@@ -27,6 +28,10 @@ if "SNAIL_PROGRESS" in os.environ and os.environ["SNAIL_PROGRESS"] in (
 else:
     from snail.tqdm_standin import tqdm_standin as tqdm
 
+# Use some high degree of precision to round polygon coordinates
+# when polygonizing split edges to help avoid floating point errors
+POLYGON_COORDINATE_PRECISION = 9
+
 
 @dataclass
 class Transform:
@@ -38,19 +43,64 @@ class Transform:
     transform: Tuple[float]
 
 
-# Use some high degree of precision to round polygon coordinates
-# when polygonizing split edges to help avoid floating point errors
-POLYGON_COORDINATE_PRECISION = 9
+def split_features_for_rasters(
+    features: geopandas.GeoDataFrame,
+    transforms: List[Transform],
+    split_func: Callable,
+):
+    # lookup per transform
+    for i, t in enumerate(transforms):
+        logging.info("Splitting on transform %s %s", i, t)
+        # transform to grid CRS
+        crs_features = features.to_crs(t.crs)
+        crs_features = split_func(crs_features, t)
+        # save cell index for fast lookup of raster values
+        crs_features = apply_indices(crs_features, t, f"i_{i}", f"j_{i}")
+        # transform back
+        features = crs_features.to_crs(features.crs)
+    return features
 
 
-def split_linestrings(df, t: Transform):
-    core_splits = []
-    for i in tqdm(range(len(df))):
+def prepare_points(features: geopandas.GeoDataFrame) -> geopandas.GeoDataFrame:
+    """Prepare points for splitting"""
+    return features.explode(ignore_index=True)
+
+
+def prepare_linestrings(
+    features: geopandas.GeoDataFrame,
+) -> geopandas.GeoDataFrame:
+    features.geometry = features.geometry.apply(_try_merge)
+    return features.explode(ignore_index=True)
+
+
+def prepare_polygons(
+    features: geopandas.GeoDataFrame,
+) -> geopandas.GeoDataFrame:
+    return features.explode(ignore_index=True)
+
+
+def split_points(
+    points: geopandas.GeoDataFrame, t: Transform
+) -> geopandas.GeoDataFrame:
+    """Split points along the grid defined by a transform
+
+    This is a no-op, written for equivalence when processing multiple
+    geometry types.
+    """
+    return points
+
+
+def split_linestrings(
+    linestring_features: geopandas.GeoDataFrame, t: Transform
+) -> geopandas.GeoDataFrame:
+    """Split linestrings along the grid defined by a transform"""
+    pieces = []
+    for i in tqdm(range(len(linestring_features))):
         # split edge
-        splits = split_linestring(
-            df.geometry[i], t.width, t.height, t.transform
+        geom_splits = split_linestring(
+            linestring_features.geometry[i], t.width, t.height, t.transform
         )
-        for j, s in enumerate(splits):
+        for j, s in enumerate(geom_splits):
             # splitting sometimes returns zero-length linestrings on edge of raster
             # see below for example linestring on eastern (lon=70W) extent of box
             # (Pdb) geometry.coords.xy
@@ -60,21 +110,26 @@ def split_linestrings(df, t: Transform):
             # as a hacky workaround, drop any splits with length 0
             # do we need a nudge off a cell boundary somewhere when performing the splits?
             if not s.length == 0:
-                new_row = df.iloc[i].copy()
+                new_row = linestring_features.iloc[i].copy()
                 new_row.geometry = s
                 new_row["split"] = j
-                core_splits.append(new_row)
-    logging.info(f"Split {len(df)} edges into {len(core_splits)} pieces")
-    sdf = geopandas.GeoDataFrame(core_splits, crs=t.crs, geometry="geometry")
-    return sdf
+                pieces.append(new_row)
+    logging.info(
+        f"Split {len(linestring_features)} edges into {len(pieces)} pieces"
+    )
+    splits_df = geopandas.GeoDataFrame(pieces, crs=t.crs, geometry="geometry")
+    return splits_df
 
 
-def transform(i, j, a, b, c, d, e, f) -> Tuple[float]:
+def _transform(i, j, a, b, c, d, e, f) -> Tuple[float]:
     return (i * a + j * b + c, i * d + j * e + f)
 
 
-def split_polygons(df, t: Transform):
-    core_splits = []
+def split_polygons(
+    polygon_features: geopandas.GeoDataFrame, t: Transform
+) -> geopandas.GeoDataFrame:
+    """Split polygons along the grid defined by a transform"""
+    pieces = []
     ##
     # Fairly slow but solid approach, loop over cells and
     # use geopandas (shapely/GEOS) intersection
@@ -83,28 +138,32 @@ def split_polygons(df, t: Transform):
     for i, j in tqdm(
         product(range(t.width), range(t.height)), total=t.width * t.height
     ):
-        ulx, uly = transform(i, j, a, b, c, d, e, f)
-        lrx, lry = transform(i + 1, j + 1, a, b, c, d, e, f)
+        ulx, uly = _transform(i, j, a, b, c, d, e, f)
+        lrx, lry = _transform(i + 1, j + 1, a, b, c, d, e, f)
         cell_geom = box(ulx, uly, lrx, lry)
-        idx = df.geometry.sindex.query(cell_geom)
-        subset = df.iloc[idx].copy()
+        idx = polygon_features.geometry.sindex.query(cell_geom)
+        subset = polygon_features.iloc[idx].copy()
         if len(subset):
             subset.geometry = subset.intersection(cell_geom)
             subset = subset[
                 ~(subset.geometry.is_empty | subset.geometry.isna())
             ]
-            subset = subset.explode(index_parts=False)
+            subset = subset.explode(ignore_index=True)
             subset = subset[subset.geometry.type == "Polygon"]
-            core_splits.append(subset)
-    sdf = pandas.concat(core_splits)
-    return sdf
+            pieces.append(subset)
+    splits_df = pandas.concat(pieces)
+    return splits_df
 
 
-def split_polygons_experimental(df, t: Transform):
-    """Experimental `split_polygons` implementation, possibly fast/incorrect
+def split_polygons_experimental(
+    polygon_features: geopandas.GeoDataFrame, t: Transform
+) -> geopandas.GeoDataFrame:
+    """Split polygons along the grid defined by a transform
+
+    Experimental implementation of `split_polygons`, possibly fast/incorrect
     with some inputs.
     """
-    core_splits = []
+    pieces = []
     ##
     # Approach using snail::splitPolygon to produce a mesh of
     # half-line pieces within the polygon interior, plus the boundary
@@ -114,29 +173,40 @@ def split_polygons_experimental(df, t: Transform):
     #   gaps - perhaps especially for coarse grids (vs shape size)
     # - should be possible to write all at the lower level
     ##
-    for i in tqdm(range(len(df))):
+    for i in tqdm(range(len(polygon_features))):
         # split area
-        splits = split_polygon(df.geometry[i], t.width, t.height, t.transform)
+        geom_splits = split_polygon(
+            polygon_features.geometry[i], t.width, t.height, t.transform
+        )
         # round to high precision (avoid floating point errors)
-        splits = [
-            set_precision(s, POLYGON_COORDINATE_PRECISION) for s in splits
+        geom_splits = [
+            _set_precision(s, POLYGON_COORDINATE_PRECISION)
+            for s in geom_splits
         ]
         # to polygons
-        splits = list(polygonize(splits))
+        geom_splits = list(polygonize(geom_splits))
         # add to collection
-        for j, s in enumerate(splits):
-            new_row = df.iloc[i].copy()
+        for j, s in enumerate(geom_splits):
+            new_row = polygon_features.iloc[i].copy()
             new_row.geometry = s
             new_row["split"] = j
-            core_splits.append(new_row)
-    logging.info(f"  Split {len(df)} areas into {len(core_splits)} pieces")
-    sdf = geopandas.GeoDataFrame(core_splits)
-    sdf.crs = t.crs
-    return sdf
+            pieces.append(new_row)
+    logging.info(
+        f"  Split {len(polygon_features)} areas into {len(pieces)} pieces"
+    )
+    splits_df = geopandas.GeoDataFrame(pieces)
+    splits_df.crs = t.crs
+    return splits_df
 
 
-def set_precision(geom, precision):
-    """Set geometry precision"""
+def _try_merge(geom):
+    if geom.geom_type == "MultiLineString":
+        geom = linemerge(geom)
+    return geom
+
+
+def _set_precision(geom, precision):
+    """Set geometry coordinate precision"""
     geom_mapping = mapping(geom)
     geom_mapping["coordinates"] = numpy.round(
         numpy.array(geom_mapping["coordinates"]), precision
@@ -145,7 +215,7 @@ def set_precision(geom, precision):
 
 
 def associate_raster(
-    df: pandas.DataFrame,
+    features: pandas.DataFrame,
     data: numpy.ndarray,
     index_i: str = "index_i",
     index_j: str = "index_j",
@@ -166,17 +236,22 @@ def associate_raster(
         pd.Series: Series of raster values, with same row indexing as df.
     """
     # 2D numpy indexing is j, i (i.e. row, column)
-    return pandas.Series(index=df.index, data=data[df[index_j], df[index_i]])
+    return pandas.Series(
+        index=features.index, data=data[features[index_j], features[index_i]]
+    )
 
 
 def apply_indices(
-    df, transform: Transform, index_i="index_i", index_j="index_j"
-):
+    features: geopandas.GeoDataFrame,
+    transform: Transform,
+    index_i="index_i",
+    index_j="index_j",
+) -> geopandas.GeoDataFrame:
     def f(geom, *args, **kwargs):
         return get_indices(geom, transform, index_i, index_j)
 
-    indices = df.geometry.apply(f, result_type="expand")
-    return pandas.concat([df, indices], axis="columns")
+    indices = features.geometry.apply(f, result_type="expand")
+    return pandas.concat([features, indices], axis="columns")
 
 
 def get_indices(

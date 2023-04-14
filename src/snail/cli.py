@@ -5,22 +5,29 @@ import sys
 from pathlib import Path
 
 import geopandas
-import numpy
 import pandas
-import rasterio
-import xarray
-from shapely.ops import linemerge
 
 from snail.intersection import (
     Transform,
     apply_indices,
-    associate_raster,
+    prepare_linestrings,
+    prepare_polygons,
+    prepare_points,
+    split_features_for_rasters,
     split_linestrings,
     split_polygons,
+    split_points,
+)
+from snail.io import (
+    associate_raster_file,
+    associate_raster_files,
+    read_transform,
+    read_transforms,
 )
 
 
 def snail(args=None):
+    """snail command"""
     parser = argparse.ArgumentParser(prog="snail")
     parser.add_argument("--verbose", "-v", action="count", default=0)
     subparsers = parser.add_subparsers(help="Run a command")
@@ -82,6 +89,13 @@ def snail(args=None):
         help="Attribute raster values to split output",
     )
     parser_split.add_argument(
+        "-c",
+        "--column",
+        type=str,
+        required=False,
+        help="Column name to use when attributing raster values, defaults to raster filename",
+    )
+    parser_split.add_argument(
         "-o",
         "--output",
         type=str,
@@ -127,9 +141,17 @@ def snail(args=None):
     else:
         level = logging.ERROR
 
-    logging.basicConfig(format="%(asctime)s %(message)s", level=level)
+    if args.verbose > 0:
+        logformat = "%(asctime)s %(levelname)s %(message)s"
+    else:
+        logformat = "%(message)s"
 
-    logging.info(args)
+    logging.basicConfig(
+        format=logformat,
+        level=level,
+    )
+
+    logging.debug("Called with %s", args)
 
     # Call the subcommand function
     logging.info("Start.")
@@ -138,12 +160,9 @@ def snail(args=None):
 
 
 def split(args):
+    """snail split command"""
     if args.raster:
-        with rasterio.open(args.raster) as raster:
-            crs = raster.crs
-            width = raster.width
-            height = raster.height
-            affine_transform = list(raster.transform)
+        transform = read_transform(args.raster)
     else:
         crs = None
         width = args.width
@@ -153,64 +172,72 @@ def split(args):
             sys.exit(
                 "Error: Expected either a raster file or transform, width and height of splitting grid"
             )
-    transform = Transform(crs, width, height, affine_transform)
+        transform = Transform(crs, width, height, affine_transform)
     logging.info(f"Splitting grid {transform=}")
 
     features = geopandas.read_file(args.features)
     features_crs = features.crs
-    features = explode_multi(features)
-    geom_type = sample_geom_type(features)
+    geom_type = _sample_geom_type(features)
 
     if "Point" in geom_type:
-        splits = features
+        prepared = prepare_points(features)
+        splits = split_points(prepared)
     elif "LineString" in geom_type:
-        splits = split_linestrings(features, transform)
+        prepared = prepare_linestrings(features)
+        splits = split_linestrings(prepared, transform)
     elif "Polygon" in geom_type:
-        splits = split_polygons(features, transform)
+        prepared = prepare_polygons(features)
+        splits = split_polygons(prepared, transform)
     else:
-        raise ValueError(f"Could not process vector data of type {geom_type}")
+        raise ValueError("Could not process vector data of type %s", geom_type)
 
     splits = apply_indices(splits, transform)
+
     if args.attribute and args.raster:
-        splits[os.path.basename(args.raster)] = associate_raster_file(
-            splits, args.raster
+        if args.column:
+            key = args.key
+        else:
+            key = os.path.basename(args.raster)
+
+        logging.info(
+            f"Attributing raster values, output in column %s from %s",
+            key,
+            args.raster,
         )
+        splits[key] = associate_raster_file(splits, args.raster)
 
     splits.set_crs(features_crs, inplace=True)
     splits.to_file(args.output)
 
 
-def join_dirname(path, dirname=False):
-    if dirname:
-        return os.path.join(dirname, path)
-    return path
-
-
-def format_key(row, colnames):
-    parts = []
-    for c in colnames:
-        parts.append(f"{c}:{row.loc[c]}")
-    key = "|".join(parts)
-    return key
-
-
 def process(args):
+    """snail process command"""
     # data directory
     dirname = args.directory
 
     # read transforms
-    rasters = pandas.read_csv(args.rasters)
-    rasters.path = rasters.path.apply(join_dirname, args=(dirname,))
+    try:
+        rasters = pandas.read_csv(args.rasters)
+    except FileNotFoundError:
+        logging.error("Rasters file not found: %s", args.rasters)
+        sys.exit()
+
+    rasters.path = rasters.path.apply(_join_dirname, args=(dirname,))
     if "key" not in rasters.columns:
         colnames = sorted(set(rasters.columns) ^ {"path"})
-        rasters["key"] = rasters.apply(format_key, args=(colnames,), axis=1)
+        rasters["key"] = rasters.apply(_format_key, args=(colnames,), axis=1)
 
     rasters, transforms = read_transforms(rasters)
 
     # read networks
-    vector_layers = pandas.read_csv(args.features)
+    try:
+        vector_layers = pandas.read_csv(args.features)
+    except FileNotFoundError:
+        logging.error("Features file not found: %s", args.features)
+        sys.exit()
+
     vector_layers.path = vector_layers.path.apply(
-        join_dirname, args=(dirname,)
+        _join_dirname, args=(dirname,)
     )
     if "output_path" not in vector_layers.columns:
         vector_layers["output_path"] = vector_layers.path.apply(
@@ -224,166 +251,55 @@ def process(args):
         if vector_path.suffix in (".parquet", ".geoparquet"):
             features = geopandas.read_parquet(vector_path)
         else:
-            features = geopandas.read_file(
-                vector_path, layer=vector_layer.layer
-            )
+            if "layer" in vector_layers.columns:
+                features = geopandas.read_file(
+                    vector_path, layer=vector_layer.layer
+                )
+            else:
+                features = geopandas.read_file(vector_path)
 
-        geom_type = sample_geom_type(features)
-        logging.info(f"{geom_type} Features CRS {features.crs}")
+        geom_type = _sample_geom_type(features)
+        logging.info("%s Features CRS %s", geom_type, features.crs)
 
         if "Point" in geom_type:
-            processed = process_nodes(features, transforms, rasters)
+            prepared = prepare_points(features)
+            split = split_features_for_rasters(
+                prepared, transforms, split_points
+            )
+            with_data = associate_raster_files(split, rasters)
         elif "LineString" in geom_type:
-            processed = process_edges(features, transforms, rasters)
+            prepared = prepare_linestrings(features)
+            split = split_features_for_rasters(
+                prepared, transforms, split_linestrings
+            )
+            with_data = associate_raster_files(split, rasters)
         elif "Polygon" in geom_type:
-            processed = process_areas(features, transforms, rasters)
+            prepared = prepare_polygons(features)
+            split = split_features_for_rasters(
+                prepared, transforms, split_polygons
+            )
+            with_data = associate_raster_files(split, rasters)
         else:
             raise ValueError(
                 f"Could not process vector data of type {geom_type}"
             )
 
-        processed.to_parquet(vector_layer.output_path)
+        with_data.to_parquet(vector_layer.output_path)
 
 
-def process_nodes(nodes, transforms, rasters):
-    # handle multipoints
-    # nodes = explode_multi(nodes)
-
-    return process_features(nodes, transforms, rasters, lambda df, _: df)
-
-
-def process_edges(edges, transforms, rasters):
-    # handle multilinestrings
-    edges.geometry = edges.geometry.apply(try_merge)
-    edges = explode_multi(edges)
-
-    return process_features(edges, transforms, rasters, split_linestrings)
-
-
-def process_areas(areas, transforms, rasters):
-    # handle multipolygons
-    areas = explode_multi(areas)
-
-    return process_features(areas, transforms, rasters, split_polygons)
-
-
-def process_features(features, transforms, rasters, split_func):
-    # lookup per transform
-    for i, t in enumerate(transforms):
-        logging.info("Splitting on transform %s %s", i, t)
-        # transform to grid CRS
-        crs_features = features.to_crs(t.crs)
-        crs_features = split_func(crs_features, t)
-        # save cell index for fast lookup of raster values
-        crs_features = apply_indices(crs_features, t, f"i_{i}", f"j_{i}")
-        # transform back
-        features = crs_features.to_crs(features.crs)
-
-    # to prevent a fragmented dataframe (and a memory explosion), add series to a dict
-    # and then concat afterwards -- do not append to an existing dataframe
-    raster_data: dict[str, pandas.Series] = {}
-
-    # associate values
-    for raster in rasters.itertuples():
-        logging.info(
-            "Associating values from raster %s transform %s",
-            raster.key,
-            raster.transform_id,
-        )
-        raster_data[raster.key] = associate_raster_file(
-            features,
-            raster.path,
-            f"i_{raster.transform_id}",
-            f"j_{raster.transform_id}",
-        )
-
-        # if allowing out-of-range splits, assign nodata value
-        # TODO derive NODATA value
-        # TODO flag to allow out-of-range
-        # TODO push some of this into core library code?
-        nodata_value = numpy.nan
-        nodata_mask = features[
-            (f"i_{raster.transform_id}" < 0) | (f"j_{raster.transform_id}" < 0)
-        ]
-        raster_data.loc[nodata_mask, raster.key] = nodata_value
-
-    raster_data = pandas.DataFrame(raster_data)
-    features = pandas.concat([features, raster_data], axis="columns")
-
-    return features
-
-
-def associate_raster_file(
-    df: pandas.DataFrame,
-    fname: str,
-    index_i: str = "index_i",
-    index_j: str = "index_j",
-    band_number: int = 1,
-    variable_name: str = None,
-) -> pandas.Series:
-    band_data = read_band_data(fname, band_number, variable_name)
-    raster_values = associate_raster(df, band_data, index_i, index_j)
-    return raster_values
-
-
-def read_band_data(
-    fname: str,
-    band_number: int = 1,
-) -> numpy.ndarray:
-    with rasterio.open(fname) as dataset:
-        band_data: numpy.ndarray = dataset.read(band_number)
-    return band_data
-
-
-def read_transforms(rasters):
-    transforms = []
-    transform_ids = []
-
-    for raster in rasters.itertuples():
-        logging.info("Reading metadata from raster %s", raster.path)
-        with rasterio.open(raster.path) as dataset:
-            crs = dataset.crs
-            width = dataset.width
-            height = dataset.height
-            transform = Transform(crs, width, height, tuple(dataset.transform))
-
-        # add transform to list if not present
-        if transform not in transforms:
-            transforms.append(transform)
-
-        # record raster/transform details
-        transform_id = transforms.index(transform)
-        transform_ids.append(transform_id)
-
-    rasters["transform_id"] = transform_ids
-    return rasters, transforms
-
-
-def sample_geom_type(df: geopandas.GeoDataFrame) -> str:
+def _sample_geom_type(df: geopandas.GeoDataFrame) -> str:
     return df.iloc[0].geometry.geom_type
 
 
-def try_merge(geom):
-    if geom.geom_type == "MultiLineString":
-        geom = linemerge(geom)
-    return geom
+def _join_dirname(path, dirname=False):
+    if dirname:
+        return os.path.join(dirname, path)
+    return path
 
 
-def explode_multi(df):
-    items = []
-    geoms = []
-    for item in df.itertuples(index=False):
-        if item.geometry.geom_type in (
-            "MultiPoint",
-            "MultiLineString",
-            "MultiPolygon",
-        ):
-            for part in item.geometry.geoms:
-                items.append(item._asdict())
-                geoms.append(part)
-        else:
-            items.append(item._asdict())
-            geoms.append(item.geometry)
-
-    df = geopandas.GeoDataFrame(items, crs=df.crs, geometry=geoms)
-    return df
+def _format_key(row, colnames):
+    parts = []
+    for c in colnames:
+        parts.append(f"{c}:{row.loc[c]}")
+    key = "|".join(parts)
+    return key
