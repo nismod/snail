@@ -22,8 +22,8 @@ from snail.io import (
     associate_raster_file,
     associate_raster_files,
     read_features,
-    read_transform,
-    read_transforms,
+    read_raster_metadata,
+    extend_rasters_metadata,
 )
 
 
@@ -88,6 +88,14 @@ def snail(args=None):
         "--attribute",
         action="store_true",
         help="Attribute raster values to split output",
+    )
+    parser_split.add_argument(
+        "-b",
+        "--band",
+        type=int,
+        required=False,
+        nargs="+",
+        help="Raster file band/s to use if attributing values",
     )
     parser_split.add_argument(
         "-c",
@@ -163,7 +171,7 @@ def snail(args=None):
 def split(args):
     """snail split command"""
     if args.raster:
-        transform = read_transform(args.raster)
+        transform, all_bands = read_raster_metadata(args.raster)
     else:
         crs = None
         width = args.width
@@ -195,17 +203,31 @@ def split(args):
     splits = apply_indices(splits, transform)
 
     if args.attribute and args.raster:
+        if args.band:
+            bands = args.band
+        else:
+            bands = all_bands
+
         if args.column:
-            key = args.key
+            key = args.column
         else:
             key = os.path.basename(args.raster)
 
-        logging.info(
-            "Attributing raster values, output in column %s from %s",
-            key,
-            args.raster,
-        )
-        splits[key] = associate_raster_file(splits, args.raster)
+        for band_index in bands:
+            if len(bands) == 1:
+                band_key = key
+            else:
+                band_key = f"{key}_{band_index}"
+
+            logging.info(
+                "Attributing raster values, output in column %s from %s band %s",
+                band_key,
+                args.raster,
+                band_index,
+            )
+            splits[key] = associate_raster_file(
+                splits, args.raster, band_number=int(band_index)
+            )
 
     splits.set_crs(features_crs, inplace=True)
     splits.to_file(args.output)
@@ -219,12 +241,21 @@ def process(args):
     # read rasters and transforms
     rasters = _read_csv_or_quit(args.rasters)
 
+    # fix up path relative to dirname
     rasters.path = rasters.path.apply(_join_dirname, args=(dirname,))
+
+    # generate "key" from metadata columns
     if "key" not in rasters.columns:
-        colnames = sorted(set(rasters.columns) ^ {"path"})
+        colnames = sorted(set(rasters.columns) - {"path", "bands"})
         rasters["key"] = rasters.apply(_format_key, args=(colnames,), axis=1)
 
-    rasters, transforms = read_transforms(rasters)
+    # parse "1,2,3" band indices to tuple if present
+    if "bands" in rasters.columns:
+        rasters.bands = rasters.bands.apply(
+            lambda c: tuple(int(b) for b in str(c).split(","))
+        )
+
+    rasters, transforms = extend_rasters_metadata(rasters)
 
     # read networks
     vector_layers = _read_csv_or_quit(args.features)
@@ -292,8 +323,13 @@ def _join_dirname(path, dirname=False):
 
 
 def _format_key(row, colnames):
-    parts = []
-    for c in colnames:
-        parts.append(f"{c}:{row.loc[c]}")
-    key = "|".join(parts)
+    if colnames:
+        # stitch together from metadata columns
+        parts = []
+        for c in colnames:
+            parts.append(f"{c}:{row.loc[c]}")
+        key = "|".join(parts)
+    else:
+        # fall back to path as key
+        key = row.loc["path"]
     return key

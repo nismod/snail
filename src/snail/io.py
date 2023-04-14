@@ -21,12 +21,14 @@ def associate_raster_files(features, rasters):
             raster.key,
             raster.transform_id,
         )
-        raster_data[raster.key] = associate_raster_file(
-            features,
-            raster.path,
-            f"i_{raster.transform_id}",
-            f"j_{raster.transform_id}",
-        )
+        for band_number in raster.bands:
+            raster_data[raster.key] = associate_raster_file(
+                features,
+                raster.path,
+                f"i_{raster.transform_id}",
+                f"j_{raster.transform_id}",
+                band_number,
+            )
 
     raster_data = pandas.DataFrame(raster_data)
     features = pandas.concat([features, raster_data], axis="columns")
@@ -55,15 +57,16 @@ def read_band_data(
     return band_data
 
 
-def read_transforms(
+def extend_rasters_metadata(
     rasters: pandas.DataFrame,
 ) -> Tuple[pandas.DataFrame, List[Transform]]:
     transforms = []
     transform_ids = []
+    raster_bands = []
 
     for raster in rasters.itertuples():
         logging.info("Reading metadata from raster %s", raster.path)
-        transform = read_transform(raster.path)
+        transform, bands = read_raster_metadata(raster.path)
 
         # add transform to list if not present
         if transform not in transforms:
@@ -72,12 +75,16 @@ def read_transforms(
         # record raster/transform details
         transform_id = transforms.index(transform)
         transform_ids.append(transform_id)
+        raster_bands.append(bands)
 
     rasters["transform_id"] = transform_ids
+    if "bands" not in rasters.columns:
+        rasters["bands"] = raster_bands
+
     return rasters, transforms
 
 
-def read_transform(path):
+def read_raster_metadata(path) -> Tuple[Transform, Tuple[int]]:
     with rasterio.open(path) as dataset:
         crs = dataset.crs
         width = dataset.width
@@ -85,8 +92,9 @@ def read_transform(path):
         affine_transform = tuple(dataset.transform)[
             :6
         ]  # trim to 6 - we expect the first two rows of 3x3 matrix
+        bands = dataset.indexes
     transform = Transform(crs, width, height, affine_transform)
-    return transform
+    return transform, bands
 
 
 def read_features(path, layer=None):
@@ -94,9 +102,7 @@ def read_features(path, layer=None):
         features = geopandas.read_parquet(path)
     else:
         if layer:
-            features = geopandas.read_file(
-                path, layer=layer
-            )
+            features = geopandas.read_file(path, layer=layer)
         else:
             features = geopandas.read_file(path)
     return features
