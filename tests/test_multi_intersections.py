@@ -70,7 +70,7 @@ def get_split_linestrings():
 class TestSnailIntersections(unittest.TestCase):
     def setUp(self):
         self.raster_dataset = Transform(
-            crs=None, width=2, height=2, transform=(1, 0, 0, 0, 1, 0)
+            crs=None, width=4, height=4, transform=(1, 0, 0, 0, 1, 0)
         )
 
     def test_split_linestrings(self):
@@ -98,7 +98,6 @@ class TestSnailIntersections(unittest.TestCase):
         vector_data = get_polygon_vector_data()
         gdf = split_polygons(vector_data, self.raster_dataset)
         expected_gdf = get_split_polygons()
-
         self.assertTrue(
             list(
                 gdf["geometry"]
