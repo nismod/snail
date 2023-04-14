@@ -70,6 +70,7 @@ setup(
             "pytest-cov",
             "pytest",
         ],
+        "docs": ["sphinx", "m2r2"]
         # eg:
         #   'rst': ['docutils>=0.11'],
         #   ':python_version=="2.6"': ['argparse'],

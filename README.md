@@ -7,7 +7,6 @@
 <img src="./images/snail.svg" alt="snail" />
 </p>
 
-
 [![Build](https://github.com/nismod/snail/actions/workflows/build.yml/badge.svg)](https://github.com/nismod/snail/actions/workflows/build.yml)
 
 > This code is under early development
@@ -40,7 +39,6 @@ If all worked okay, you should be able to run python and import snail:
 
     NAME
         snail - snail - the spatial networks impact assessment library
-
 
 ## Development
 
@@ -83,7 +81,6 @@ are not committed in the notebook files:
 
     nbstripout --install
 
-
 ### C++ library
 
 The C++ library in `src/cpp` contains the core routines to find intersections of
@@ -115,11 +112,10 @@ python installation. For example, with python via miniconda:
         -I/home/username/miniconda3/include/python3.7m/ \
         -I./pybind11/include/
 
-
 ### Integration of C++ and Python using pybind11
 
-The `snail.core.intersections` module is built using [`pybind11` with
-`setuptools`](https://pybind11.readthedocs.io/en/stable/compiling.html#building-with-setuptools)
+The `snail.core.intersections` module is built using `pybind11` with
+`setuptools` (see [docs](https://pybind11.readthedocs.io/en/stable/compiling.html#building-with-setuptools))
 
 - `src/cpp/intersections.cpp` defines the module interface using the
   `PYBIND11_MODULE` macro

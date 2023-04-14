@@ -23,3 +23,6 @@ data
 *.so
 build/*
 _skbuild
+
+# Docs
+docs/build
