@@ -138,24 +138,8 @@ def snail(args=None):
 
 
 def split(args):
-    # raster variable name, might get set if reading a NetCDF
-    varname = None
-
     if args.raster:
-        _, ext = os.path.splitext(args.raster)
-        if ext == "nc":
-            ds = xarray.open_dataset(args.raster)
-            affine_transform = list(ds.rio.transform())
-            if args.raster_var:
-                varname = args.raster_var
-            else:
-                varname = next(iter(list(ds.keys())))
-            da = ds[varname]
-            # TODO fix gross assumption about dimensions
-            # time, lat, lon
-            _, height, width = da.shape
-        else:
-            raster = rasterio.open(args.raster)
+        with rasterio.open(args.raster) as raster:
             crs = raster.crs
             width = raster.width
             height = raster.height
@@ -172,35 +156,28 @@ def split(args):
     transform = Transform(crs, width, height, affine_transform)
     logging.info(f"Splitting grid {transform=}")
 
-    try:
-        features = geopandas.read_file(args.features)
-        features_crs = features.crs
-        features = explode_multi(features)
-        geom_type = sample_geom_type(features)
+    features = geopandas.read_file(args.features)
+    features_crs = features.crs
+    features = explode_multi(features)
+    geom_type = sample_geom_type(features)
 
-        if "Point" in geom_type:
-            splits = features
-        elif "LineString" in geom_type:
-            splits = split_linestrings(features, transform)
-        elif "Polygon" in geom_type:
-            splits = split_polygons(features, transform)
-        else:
-            raise ValueError(
-                f"Could not process vector data of type {geom_type}"
-            )
+    if "Point" in geom_type:
+        splits = features
+    elif "LineString" in geom_type:
+        splits = split_linestrings(features, transform)
+    elif "Polygon" in geom_type:
+        splits = split_polygons(features, transform)
+    else:
+        raise ValueError(f"Could not process vector data of type {geom_type}")
 
-        splits = apply_indices(splits, transform)
-        if args.attribute and args.raster:
-            splits[os.path.basename(args.raster)] = associate_raster_file(
-                splits, args.raster, variable_name=varname
-            )
+    splits = apply_indices(splits, transform)
+    if args.attribute and args.raster:
+        splits[os.path.basename(args.raster)] = associate_raster_file(
+            splits, args.raster
+        )
 
-        splits.set_crs(features_crs, inplace=True)
-        splits.to_file(args.output)
-
-    finally:
-        if args.raster:
-            raster.close()
+    splits.set_crs(features_crs, inplace=True)
+    splits.to_file(args.output)
 
 
 def join_dirname(path, dirname=False):
@@ -352,18 +329,9 @@ def associate_raster_file(
 def read_band_data(
     fname: str,
     band_number: int = 1,
-    variable_name: str = None,
 ) -> numpy.ndarray:
-    _, ext = os.path.splitext(fname)
-    if ext == "nc":
-        ds = xarray.open_dataset(fname)
-        da = ds[variable_name]
-        # TODO fix gross assumption about dimensions
-        # (time, lat, lon), so pick first time slice
-        band_data = da.data[0]
-    else:
-        with rasterio.open(fname) as dataset:
-            band_data: numpy.ndarray = dataset.read(band_number)
+    with rasterio.open(fname) as dataset:
+        band_data: numpy.ndarray = dataset.read(band_number)
     return band_data
 
 
