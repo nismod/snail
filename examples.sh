@@ -32,7 +32,7 @@ snail -vv split \
 # parquet support for input features, output file
 
 # specify output column name
-# --output_column_name -ocn
+# --column -c
 # default to filename/band number
 
 
@@ -49,10 +49,10 @@ snail -vv \
     --directory .
 
 # csv
-# - band column to pick from raster  `band`   - band column optional, if present and a value is not numeric >0, error
-# - output labelling  `output_column_name`
-# - output_path column - parquet or other geo
-
+# - `bands` column as "1,2,3" or "1" to pick from raster `band`
+# - `bands` column is optional, if present and a value is not numeric > 0, error
+# - `column` column for output labelling, as in splits --column option
+# - `output_path` column - parquet or other geopandas.write_file-compatible path
 
 # optional handling of out-of-raster splits
 # assign nodata, warn or allow for index <0 >width/height
