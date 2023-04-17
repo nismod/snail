@@ -47,18 +47,27 @@ Once installed, you can use `snail` directly from the command line.
 Split features on a grid defined by its transform, width and height:
 
 ```bash
-snail split --features input.shp --transform 1 0 -180 0 -1 90 --width 360 --height 180 --output split.gpkg
+snail split \
+    --features input.shp \
+    --transform 1 0 -180 0 -1 90 \
+    --width 360 \
+    --height 180 \
+    --output split.gpkg
 ```
 
 Split features on a grid defined by a GeoTIFF, optionally adding the values from each raster band to each split feature as a new attribute:
 
 ```bash
-snail split --features lines.geojson --raster gridded_data.tif --attribute --output split_lines_with_raster_values.geojson
+snail split \
+    --features lines.geojson \
+    --raster gridded_data.tif \
+    --attribute \
+    --output split_lines_with_raster_values.geojson
 ```
 
 Split multiple vector feature files along the grids defined by multiple raster files, attributing all raster values:
 
-```
+```bash
 snail process -fs features.csv -rs rasters.csv
 ```
 
@@ -75,6 +84,7 @@ A note on `transform` - these six numbers define the transform from `i,j` cell i
 ```
 
 In cases without shear or rotation, `a` and `e` define scaling or grid cell size, while `c` and `f` define the offset or grid upper-left corner:
+
 ```
 | x_scale 0       x_offset |
 | 0       y_scale y_offset |
@@ -82,7 +92,6 @@ In cases without shear or rotation, `a` and `e` define scaling or grid cell size
 ```
 
 See [`rasterio/affine`](https://github.com/rasterio/affine#usage) and [GDAL Raster Data Model](https://gdal.org/user/raster_data_model.html#affine-geotransform) for more documentation.
-
 
 ## Development
 
