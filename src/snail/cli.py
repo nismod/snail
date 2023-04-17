@@ -1,144 +1,335 @@
 import argparse
-from os.path import splitext
+import logging
+import os
+import sys
+from pathlib import Path
 
-from shapely.geometry import LineString, MultiLineString, Polygon
-import geopandas as gpd
-import rasterio
-from pandas import read_csv
-from igraph import Graph
+import geopandas
+import pandas
 
-from snail.multi_intersections import (
+from snail.intersection import (
+    Transform,
+    apply_indices,
+    prepare_linestrings,
+    prepare_polygons,
+    prepare_points,
+    split_features_for_rasters,
     split_linestrings,
     split_polygons,
-    raster2split,
+    split_points,
 )
-from snail.routing import shortest_paths
+from snail.io import (
+    associate_raster_file,
+    associate_raster_files,
+    read_features,
+    read_raster_metadata,
+    extend_rasters_metadata,
+)
 
 
-def parse_arguments(arguments):
-    parser = argparse.ArgumentParser(description="the parser")
-    parser.add_argument(
+def snail(args=None):
+    """snail command"""
+    parser = argparse.ArgumentParser(prog="snail")
+    parser.add_argument("--verbose", "-v", action="count", default=0)
+    subparsers = parser.add_subparsers(help="Run a command")
+
+    parser_split = subparsers.add_parser(
+        "split", help="Split vector features on a regular grid"
+    )
+    parser_split.add_argument(
+        "-f",
+        "--features",
+        type=str,
+        required=True,
+        help="File with vector features to split",
+    )
+    parser_split.add_argument(
+        "-l",
+        "--layer",
+        type=str,
+        required=False,
+        help="Layer in file with vector features to split",
+    )
+    parser_split.add_argument(
         "-r",
         "--raster",
         type=str,
-        help="The path to the raster data file",
+        required=False,
+        help="Raster file/s to use as definition of splitting grid",
+    )
+    parser_split.add_argument(
+        "-t",
+        "--transform",
+        type=float,
+        required=False,
+        nargs=6,
+        help="""Affine transform of splitting grid.
+
+        For example, for a north-up image:
+            {top-left x coordinate} {cell width} {zero} {top-left y coordinate} {cell height} {zero}
+        """,
+    )
+    parser_split.add_argument(
+        "-w",
+        "--width",
+        type=int,
+        required=False,
+        help="Width of splitting grid (number of columns)",
+    )
+    parser_split.add_argument(
+        "-g",
+        "--height",
+        type=int,
+        required=False,
+        help="Height of splitting grid (number of rows)",
+    )
+    parser_split.add_argument(
+        "-a",
+        "--attribute",
+        action="store_true",
+        help="Attribute raster values to split output",
+    )
+    parser_split.add_argument(
+        "-b",
+        "--band",
+        type=int,
+        required=False,
         nargs="+",
-        required=True,
+        help="Raster file band/s to use if attributing values",
     )
-    parser.add_argument(
-        "-v",
-        "--vector",
+    parser_split.add_argument(
+        "-c",
+        "--column",
         type=str,
-        help="The path to the vector data file",
-        required=True,
+        required=False,
+        help="Column name to use when attributing raster values, defaults to raster filename",
     )
-    parser.add_argument(
+    parser_split.add_argument(
         "-o",
         "--output",
         type=str,
-        help="The path to the output vector data file",
         required=True,
+        help="Output file",
     )
-    parser.add_argument(
-        "--band",
-        type=int,
-        help="Indices of raster band to be read",
-        required=False,
+    parser_split.set_defaults(func=split)
+
+    parser_process = subparsers.add_parser(
+        "process", help="Split vectors and attribute raster values"
     )
-    parser.add_argument(
-        "--extremities",
+    parser_process.add_argument(
+        "-d",
+        "--directory",
         type=str,
-        help="Path to csv file for shortest paths extremities",
-        required=False,
+        help="Path to data directory for vector and raster paths",
+    )
+    parser_process.add_argument(
+        "-fs",
+        "--features",
+        type=str,
+        required=True,
+        help="CSV file with vector layers",
+    )
+    parser_process.add_argument(
+        "-rs",
+        "--rasters",
+        type=str,
+        required=True,
+        help="CSV file with raster layers",
+    )
+    parser_process.set_defaults(func=process)
+
+    args = parser.parse_args(args)
+
+    # Enable logging
+    if args.verbose > 2:
+        level = logging.DEBUG
+    elif args.verbose > 1:
+        level = logging.INFO
+    elif args.verbose > 0:
+        level = logging.WARNING
+    else:
+        level = logging.ERROR
+
+    if args.verbose > 0:
+        logformat = "%(asctime)s %(levelname)s %(message)s"
+    else:
+        logformat = "%(message)s"
+
+    logging.basicConfig(
+        format=logformat,
+        level=level,
     )
 
-    args = parser.parse_args(arguments)
-    return args
+    logging.debug("Called with %s", args)
+
+    # Call the subcommand function
+    logging.info("Start.")
+    args.func(args)
+    logging.info("Done.")
 
 
-def snail_split(arguments=None):
-    args = parse_arguments(arguments)
-
-    raster_data = rasterio.open(args.raster)
-    vector_data = gpd.read_file(args.vector)
-
-    geom = vector_data.iloc[0].geometry
-    if type(geom) is LineString:
-        new_gdf = split_linestrings(vector_data, raster_data)
-    elif type(geom) is Polygon:
-        new_gdf = split_polygons(vector_data, raster_data)
+def split(args):
+    """snail split command"""
+    if args.raster:
+        transform, all_bands = read_raster_metadata(args.raster)
     else:
-        raise ValueError(
-            f"Could not process vector data of type {type(geom)}, expected Polygon or LineString"
+        crs = None
+        width = args.width
+        height = args.height
+        affine_transform = args.transform
+        if width is None or height is None or affine_transform is None:
+            sys.exit(
+                "Error: Expected either a raster file or transform, width and height of splitting grid"
+            )
+        transform = Transform(crs, width, height, affine_transform)
+    logging.info(f"Splitting grid {transform=}")
+
+    features = geopandas.read_file(args.features)
+    features_crs = features.crs
+    geom_type = _sample_geom_type(features)
+
+    if "Point" in geom_type:
+        prepared = prepare_points(features)
+        splits = split_points(prepared)
+    elif "LineString" in geom_type:
+        prepared = prepare_linestrings(features)
+        splits = split_linestrings(prepared, transform)
+    elif "Polygon" in geom_type:
+        prepared = prepare_polygons(features)
+        splits = split_polygons(prepared, transform)
+    else:
+        raise ValueError("Could not process vector data of type %s", geom_type)
+
+    splits = apply_indices(splits, transform)
+
+    if args.attribute and args.raster:
+        if args.band:
+            bands = args.band
+        else:
+            bands = all_bands
+
+        if args.column:
+            key = args.column
+        else:
+            key = os.path.basename(args.raster)
+
+        for band_index in bands:
+            if len(bands) == 1:
+                band_key = key
+            else:
+                band_key = f"{key}_{band_index}"
+
+            logging.info(
+                "Attributing raster values, output in column %s from %s band %s",
+                band_key,
+                args.raster,
+                band_index,
+            )
+            splits[key] = associate_raster_file(
+                splits, args.raster, band_number=int(band_index)
+            )
+
+    splits.set_crs(features_crs, inplace=True)
+    splits.to_file(args.output)
+
+
+def process(args):
+    """snail process command"""
+    # data directory
+    dirname = args.directory
+
+    # read rasters and transforms
+    rasters = _read_csv_or_quit(args.rasters)
+
+    # fix up path relative to dirname
+    rasters.path = rasters.path.apply(_join_dirname, args=(dirname,))
+
+    # generate "key" from metadata columns
+    if "key" not in rasters.columns:
+        colnames = sorted(set(rasters.columns) - {"path", "bands"})
+        rasters["key"] = rasters.apply(_format_key, args=(colnames,), axis=1)
+
+    # parse "1,2,3" band indices to tuple if present
+    if "bands" in rasters.columns:
+        rasters.bands = rasters.bands.apply(
+            lambda c: tuple(int(b) for b in str(c).split(","))
         )
 
-    new_gdf.to_file(args.output)
+    rasters, transforms = extend_rasters_metadata(rasters)
 
+    # read networks
+    vector_layers = _read_csv_or_quit(args.features)
 
-def snail_raster2split(arguments=None):
-    args = parse_arguments(arguments)
-
-    if isinstance(args.raster, str):
-        args.raster = list(args.raster)
-
-    with rasterio.open(args.raster[0]) as dataset:
-        raster_width = dataset.width
-        raster_height = dataset.height
-        raster_transform = list(dataset.transform)
-    # Make key: filename dict with filename (without ext) as key
-    rasters = {splitext(k)[0]: v for (k, v) in zip(args.raster, args.raster)}
-    vector_data = gpd.read_file(args.vector)
-
-    new_gdf = raster2split(
-        vector_data,
-        rasters,
-        width=raster_width,
-        height=raster_height,
-        transform=raster_transform,
-        band_number=args.band,
-        inplace=True,
+    vector_layers.path = vector_layers.path.apply(
+        _join_dirname, args=(dirname,)
     )
-    new_gdf.to_file(args.output)
+    if "output_path" not in vector_layers.columns:
+        vector_layers["output_path"] = vector_layers.path.apply(
+            lambda p: f"{p}.processed.parquet"
+        )
+
+    for vector_layer in vector_layers.itertuples():
+        _process_layer(vector_layer, transforms, rasters)
 
 
-def snail_shortest_paths(arguments=None):
-    args = parse_arguments(arguments)
-    # Read vector data and create graph object
-    vector_data = gpd.read_file(args.vector)
-    # We assume the name of columns in geodataframe
-    edges = vector_data.loc[:, ["from_node", "to_node", "length_km"]]
-    graph = Graph.DataFrame(edges, directed=False)
-    # "extremities" argument must be the path to a csv file giving
-    # start and end points of shortest paths
-    # Ex:
-    # from,to
-    # node_3,node_243
-    # node_4576,node_943
-    # ...
-    extrm = read_csv(args.extremities)
-    extremities, paths = shortest_paths(
-        extrm.sources.tolist(),
-        extrm.destinations.tolist(),
-        graph,
-        weight="length_km",
-    )
-    # Assemble output dataframe containing origin and end nodes,
-    # length of shortest path, and geometry as a multi-LineString.
-    # A path is a list of edge ids, each one
-    # mapping back to the original vector data dataframe. We first
-    # build a sub geodataframe that consists of just the geometries
-    # making the path.
-    lengths = []
-    geoms = []
-    for path in paths:
-        sub_gdf = vector_data.iloc[path, :]
-        lengths.append(sub_gdf.length_km.sum())
-        geoms.append(MultiLineString([lstr for lstr in sub_gdf.geometry]))
-    gpd.GeoDataFrame(
-        {
-            "from_node": extrm.sources.to_list(),
-            "to_node": extrm.destinations.to_list(),
-            "length_km": lengths,
-            "geometry": geoms,
-        }
-    ).to_file(args.output)
+def _process_layer(vector_layer, transforms, rasters):
+    vector_path = Path(vector_layer.path)
+    layer = getattr(vector_layer, "layer", None)
+    logging.info("Processing %s", vector_path.name)
+
+    features = read_features(vector_path, layer)
+    geom_type = _sample_geom_type(features)
+    logging.info("%s Features CRS %s", geom_type, features.crs)
+
+    if "Point" in geom_type:
+        prepared = prepare_points(features)
+        split = split_features_for_rasters(prepared, transforms, split_points)
+        with_data = associate_raster_files(split, rasters)
+    elif "LineString" in geom_type:
+        prepared = prepare_linestrings(features)
+        split = split_features_for_rasters(
+            prepared, transforms, split_linestrings
+        )
+        with_data = associate_raster_files(split, rasters)
+    elif "Polygon" in geom_type:
+        prepared = prepare_polygons(features)
+        split = split_features_for_rasters(
+            prepared, transforms, split_polygons
+        )
+        with_data = associate_raster_files(split, rasters)
+    else:
+        raise ValueError(f"Could not process vector data of type {geom_type}")
+
+    with_data.to_parquet(vector_layer.output_path)
+
+
+def _read_csv_or_quit(path) -> pandas.DataFrame:
+    try:
+        df = pandas.read_csv(path)
+    except FileNotFoundError:
+        logging.error("File not found: %s", path)
+        sys.exit()
+    return df
+
+
+def _sample_geom_type(df: geopandas.GeoDataFrame) -> str:
+    return df.iloc[0].geometry.geom_type
+
+
+def _join_dirname(path, dirname=False):
+    if dirname:
+        return os.path.join(dirname, path)
+    return path
+
+
+def _format_key(row, colnames):
+    if colnames:
+        # stitch together from metadata columns
+        parts = []
+        for c in colnames:
+            parts.append(f"{c}:{row.loc[c]}")
+        key = "|".join(parts)
+    else:
+        # fall back to path as key
+        key = row.loc["path"]
+    return key

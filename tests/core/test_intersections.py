@@ -37,7 +37,7 @@ class TestIntersections(unittest.TestCase):
                 )
                 self.assertTrue(
                     [
-                        split.almost_equals(expected_split)
+                        split.equals_exact(expected_split, 0.5e-6)
                         for split, expected_split in zip(
                             splits, expected_splits
                         )

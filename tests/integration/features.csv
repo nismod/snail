@@ -1,0 +1,4 @@
+path,output_path
+lines.geojson,lines_split.parquet
+points.geojson,points_split.parquet
+polygons.geojson,polygons_split.parquet
