@@ -36,7 +36,7 @@ climate hazards on infrastructure networks.
 
 .. mdinclude:: ../../README.md
    :start-line: 20
-   :end-line: 130
+   :end-line: 85
 
 
 .. toctree::
