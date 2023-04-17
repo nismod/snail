@@ -40,6 +40,50 @@ If all worked okay, you should be able to run python and import snail:
     NAME
         snail - snail - the spatial networks impact assessment library
 
+## Using the `snail` command
+
+Once installed, you can use `snail` directly from the command line.
+
+Split features on a grid defined by its transform, width and height:
+
+```bash
+snail split --features input.shp --transform 1 0 -180 0 -1 90 --width 360 --height 180 --output split.gpkg
+```
+
+Split features on a grid defined by a GeoTIFF, optionally adding the values from each raster band to each split feature as a new attribute:
+
+```bash
+snail split --features lines.geojson --raster gridded_data.tif --attribute --output split_lines_with_raster_values.geojson
+```
+
+Split multiple vector feature files along the grids defined by multiple raster files, attributing all raster values:
+
+```
+snail process -fs features.csv -rs rasters.csv
+```
+
+Where at a minimum, each CSV has a column `path` with the path to each file.
+
+### Transform
+
+A note on `transform` - these six numbers define the transform from `i,j` cell index (column/row) coordinates in the rectangular grid to `x,y` geographic coordinates, in the coordinate reference system of the input and output files. They effectively form the first two rows of a 3x3 matrix:
+
+```
+| x |   | a  b  c | | i |
+| y | = | d  e  f | | j |
+| 1 |   | 0  0  1 | | 1 |
+```
+
+In cases without shear or rotation, `a` and `e` define scaling or grid cell size, while `c` and `f` define the offset or grid upper-left corner:
+```
+| x_scale 0       x_offset |
+| 0       y_scale y_offset |
+| 0       0       1        |
+```
+
+See [`rasterio/affine`](https://github.com/rasterio/affine#usage) and [GDAL Raster Data Model](https://gdal.org/user/raster_data_model.html#affine-geotransform) for more documentation.
+
+
 ## Development
 
 Clone this repository using [GitHub Desktop](https://desktop.github.com/) or on
