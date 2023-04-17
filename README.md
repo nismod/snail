@@ -7,7 +7,9 @@
 <img src="./images/snail.svg" alt="snail" />
 </p>
 
+[![PyPI version](https://img.shields.io/pypi/v/nismod-snail.svg)](https://pypi.org/project/nismod-snail/)
 [![Build](https://github.com/nismod/snail/actions/workflows/build.yml/badge.svg)](https://github.com/nismod/snail/actions/workflows/build.yml)
+[![License](https://img.shields.io/pypi/l/nismod-snail.svg)](https://opensource.org/licenses/MIT)
 
 > This code is under early development
 
