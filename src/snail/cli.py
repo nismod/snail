@@ -65,8 +65,8 @@ def snail(args=None):
         nargs=6,
         help="""Affine transform of splitting grid.
 
-        For example, for a north-up image:
-            {top-left x coordinate} {cell width} {zero} {top-left y coordinate} {cell height} {zero}
+        For example:
+            {cell width} {zero} {top-left x coordinate} {zero} {cell height} {top-left y coordinate}
         """,
     )
     parser_split.add_argument(
