@@ -138,7 +138,7 @@ are not committed in the notebook files:
 
 ### C++ library
 
-The C++ library in `src/cpp` contains the core routines to find intersections of
+The C++ library in `extension/src` contains the core routines to find intersections of
 lines with raster grids.
 
 Before working on the C++ library, fetch source code for Catch2 unit testing
@@ -148,31 +148,37 @@ library (this is included as a git submodule):
 
 Build the library and run tests:
 
-    cmake -Bbuild .
+    cmake -Bbuild ./extension
     cmake --build build/
     ./build/run_tests
 
 Run code style auto-formatting:
 
-    clang-format -i src/cpp/*.hpp
+    clang-format -i extension/src/*.{cpp,hpp}
 
 Run lints and checks:
 
-    clang-tidy --checks 'cppcoreguidelines-*' src/cpp/*.hpp
+    clang-tidy --checks 'cppcoreguidelines-*' extension/src/*.{cpp,hpp}
 
 This may need some includes for `pybind11` - which will vary depending on your
 python installation. For example, with python via miniconda:
 
-    clang-tidy --checks 'cppcoreguidelines-*' src/cpp/* -- \
-        -I/home/username/miniconda3/include/python3.7m/ \
+    clang-tidy --checks 'cppcoreguidelines-*' extension/src/* -- \
+        -I/home/username/miniconda3/include/python3.11/ \
         -I./pybind11/include/
+
+Or with c++ headers installed on a Linux machine:
+
+    clang-tidy --checks 'cppcoreguidelines-*' \
+        extension/src/*  \
+        -- -std=c++11  -I/usr/include/x86_64-linux-gnu/c++/11 -I/usr/include/c++/11
 
 ### Integration of C++ and Python using pybind11
 
 The `snail.core.intersections` module is built using `pybind11` with
 `setuptools` (see [docs](https://pybind11.readthedocs.io/en/stable/compiling.html#building-with-setuptools))
 
-- `src/cpp/intersections.cpp` defines the module interface using the
+- `extension/src/intersections.cpp` defines the module interface using the
   `PYBIND11_MODULE` macro
 - `pyproject.toml` defines the build requirements for snail, which includes
   pybind11, wheel and setuptools
