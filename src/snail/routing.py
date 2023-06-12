@@ -18,9 +18,9 @@ def shortest_paths(sources, destinations, graph, weight):
     shortest_paths = []
     for source_id in sources:
         source_node = graph.vs.find(name=source_id)
-        shortest_path = graph.get_shortest_paths(
+        shortest_paths = graph.get_shortest_paths(
             source_node, destinations, weights=weight, output="epath"
         )
-        shortest_paths.extend(shortest_path)
+        shortest_paths.extend(shortest_paths)
 
     return shortest_paths

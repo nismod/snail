@@ -31,7 +31,7 @@ start_node_idx = 15891
 sp = net.shortest_path(0, start_node_idx, imp_name="weight")
 edges = gdf.loc[:, ["from_node", "to_node"]]
 g = Graph.DataFrame(edges, directed=False)
-igraph_nodes = [g.vs.find(name="roadn_"+str(i)).index for i in sp]
+igraph_nodes = [g.vs.find(name="roadn_" + str(i)).index for i in sp]
 epath = g.get_eids(path=igraph_nodes, directed=False)
 
 base = gdf.plot()
