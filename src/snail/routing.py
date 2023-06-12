@@ -15,12 +15,12 @@ def shortest_paths(sources, destinations, graph, weight):
     paths.  For each (source, destination) pair, their is either 0, 1
     or several shortest paths.
     """
-    shortest_paths = []
+    all_shortest_paths = []
     for source_id in sources:
         source_node = graph.vs.find(name=source_id)
-        shortest_paths = graph.get_shortest_paths(
+        source_shortest_paths = graph.get_shortest_paths(
             source_node, destinations, weights=weight, output="epath"
         )
-        shortest_paths.extend(shortest_paths)
+        all_shortest_paths.extend(source_shortest_paths)
 
-    return shortest_paths
+    return all_shortest_paths
