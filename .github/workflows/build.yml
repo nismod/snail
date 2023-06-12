@@ -26,7 +26,6 @@ jobs:
       - name: Test C++
         run: ./build/run_tests
 
-
   build-cpp-windows:
     runs-on: windows-latest
 
@@ -45,12 +44,11 @@ jobs:
       - name: Test C++
         run: ./build/Debug/run_tests.exe
 
-
   build:
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, ubuntu-latest] # skipping windows-latest
+        platform: [macos-latest, ubuntu-latest, windows-latest]
         python-version: ["3.8", "3.11"]
 
     runs-on: ${{ matrix.platform }}
