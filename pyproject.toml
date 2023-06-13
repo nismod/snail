@@ -25,6 +25,7 @@ requires-python=">=3.8"
 dependencies=[
     "geopandas",
     "pyarrow",
+    "python-igraph",
     "rasterio",
     "shapely",
 ]
