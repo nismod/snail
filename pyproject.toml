@@ -1,6 +1,6 @@
 [project]
 name="nismod-snail"
-dynamic=["version"]
+version="0.3.1"
 license={file = "LICENSE"}
 description="The spatial networks impact assessment library"
 readme="README.md"
@@ -21,11 +21,10 @@ classifiers=[
     "Topic :: Utilities"
 ]
 keywords=[]
-requires-python=">=3.8",
+requires-python=">=3.8"
 dependencies=[
     "geopandas",
     "pyarrow",
-    "python-igraph",
     "rasterio",
     "shapely",
 ]
@@ -50,8 +49,12 @@ Repository = "https://github.com/nismod/snail.git"
 snail="snail.cli:snail"
 
 [build-system]
-requires = ["scikit-build-core", "pybind11"]
+requires = ["scikit-build-core>=0.3.3", "pybind11"]
 build-backend = "scikit_build_core.build"
+
+[tool.scikit-build]
+wheel.expand-macos-universal-tags = true
+wheel.packages = ["src/snail"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

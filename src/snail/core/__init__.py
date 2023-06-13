@@ -1,7 +1,7 @@
-from . import intersections
+from .intersections import (get_cell_indices, split_linestring, split_polygon)
 
 __all__ = [
-    intersections.get_cell_indices,
-    intersections.split_linestring,
-    intersections.split_polygon,
+    "get_cell_indices",
+    "split_linestring",
+    "split_polygon",
 ]
