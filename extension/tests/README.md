@@ -15,7 +15,7 @@ Run the tests with
 ./build/run_tests
 ```
 
-The test executable accepts a range of option (thanks to [Cath2](https://github.com/catchorg/Catch2)). You can list them with
+The test executable accepts a range of options (thanks to [Catch2](https://github.com/catchorg/Catch2)). You can list them with
 
 ```shell
 ./build/run_tests --help
