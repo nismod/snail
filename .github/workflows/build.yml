@@ -20,7 +20,7 @@ jobs:
 
       - name: Build C++
         run: |
-          cmake -Bbuild .
+          cmake -Bbuild ./extension
           cmake --build build/ --target run_tests
 
       - name: Test C++
@@ -38,7 +38,7 @@ jobs:
 
       - name: Build C++
         run: |
-          cmake -Bbuild .
+          cmake -Bbuild ./extension
           cmake --build build/ --target run_tests
 
       - name: Test C++
