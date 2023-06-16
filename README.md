@@ -167,21 +167,21 @@ python installation. For example, with python via miniconda:
         -I/home/username/miniconda3/include/python3.11/ \
         -I./pybind11/include/
 
-Or with c++ headers installed on a Linux machine:
+Or with C++ headers installed on a Linux machine:
 
-    clang-tidy --checks 'cppcoreguidelines-*' \
-        extension/src/*  \
-        -- -std=c++11  -I/usr/include/x86_64-linux-gnu/c++/11 -I/usr/include/c++/11
+    clang-tidy --checks 'cppcoreguidelines-*' extension/src/* -- \
+        -std=c++14  \
+        -I/usr/include/x86_64-linux-gnu/c++/11 \
+        -I/usr/include/c++/11 \
+        -I{$PWD}/extension/extern/pybind11/include \
+        -I/usr/include/python3.10
 
 ### Integration of C++ and Python using pybind11
 
 The `snail.core.intersections` module is built using `pybind11` with
-`setuptools` (see [docs](https://pybind11.readthedocs.io/en/stable/compiling.html#building-with-setuptools))
+`scikit-build-core` (see [docs](https://scikit-build-core.readthedocs.io/en/latest/))
 
 - `extension/src/intersections.cpp` defines the module interface using the
   `PYBIND11_MODULE` macro
 - `pyproject.toml` defines the build requirements for snail, which includes
-  pybind11, wheel and setuptools
-- `setup.py` defines the `Pybind11Extension` module to build - both the C++
-  files to compile, and the location of the built module within the python
-  package
+  pybind11 and scikit-build-core
