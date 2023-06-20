@@ -24,10 +24,13 @@ keywords=[]
 requires-python=">=3.8"
 dependencies=[
     "geopandas",
+    "matplotlib",
+    "pandera",
     "pyarrow",
     "python-igraph",
     "rasterio",
     "shapely",
+    "scipy"
 ]
 
 [project.optional-dependencies]
