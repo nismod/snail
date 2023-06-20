@@ -237,9 +237,14 @@ def associate_raster(
         pd.Series: Series of raster values, with same row indexing as df.
     """
     # 2D numpy indexing is j, i (i.e. row, column)
-    return pandas.Series(
+    with_data = pandas.Series(
         index=features.index, data=data[features[index_j], features[index_i]]
     )
+    # set NaN for out-of-bounds
+    with_data[
+        (features[index_i] == -1) | (features[index_j] == -1)
+    ] = numpy.nan
+    return with_data
 
 
 def apply_indices(
@@ -270,7 +275,7 @@ def get_indices(
     # assert 0 <= j < t.height
 
     # Or - special value (-1,-1) if cell would be out of bounds
-    if i > t.width or i < 0 or j > t.height or j < 0:
+    if i >= t.width or i < 0 or j >= t.height or j < 0:
         i = -1
         j = -1
     return pandas.Series(index=(index_i, index_j), data=[i, j])
