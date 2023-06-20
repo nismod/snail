@@ -173,6 +173,7 @@ def split_polygons_experimental(
     #   gaps - perhaps especially for coarse grids (vs shape size)
     # - should be possible to write all at the lower level
     ##
+    polygon_features["split"] = 0
     for i in tqdm(range(len(polygon_features))):
         # split area
         geom_splits = split_polygon(
