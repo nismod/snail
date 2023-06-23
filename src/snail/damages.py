@@ -18,15 +18,15 @@ class DamageCurve(ABC):
         pass
 
 
-class LinearDamageCurveSchema(pandera.DataFrameModel):
+class PiecewiseLinearDamageCurveSchema(pandera.DataFrameModel):
     intensity: Series[float]
     damage: Series[float]
 
 
-class LinearDamageCurve(DamageCurve):
+class PiecewiseLinearDamageCurve(DamageCurve):
     """A piecewise-linear damage curve"""
 
-    def __init__(self, curve: DataFrame[LinearDamageCurveSchema]):
+    def __init__(self, curve: DataFrame[PiecewiseLinearDamageCurveSchema]):
         curve = curve.copy()
         self.intensity, self.damage = self.clip_curve_data(
             curve.intensity, curve.damage
@@ -49,7 +49,7 @@ class LinearDamageCurve(DamageCurve):
     def translate_y(self, y: float):
         damage = self.damage + y
 
-        return LinearDamageCurve(
+        return PiecewiseLinearDamageCurve(
             pandas.DataFrame(
                 {
                     "intensity": self.intensity,
@@ -61,7 +61,7 @@ class LinearDamageCurve(DamageCurve):
     def scale_y(self, y: float):
         damage = self.damage * y
 
-        return LinearDamageCurve(
+        return PiecewiseLinearDamageCurve(
             pandas.DataFrame(
                 {
                     "intensity": self.intensity,
@@ -73,7 +73,7 @@ class LinearDamageCurve(DamageCurve):
     def translate_x(self, x: float):
         intensity = self.intensity + x
 
-        return LinearDamageCurve(
+        return PiecewiseLinearDamageCurve(
             pandas.DataFrame(
                 {
                     "intensity": intensity,
@@ -85,7 +85,7 @@ class LinearDamageCurve(DamageCurve):
     def scale_x(self, x: float):
         intensity = self.intensity * x
 
-        return LinearDamageCurve(
+        return PiecewiseLinearDamageCurve(
             pandas.DataFrame(
                 {
                     "intensity": intensity,

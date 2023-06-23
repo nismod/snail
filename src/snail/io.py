@@ -6,7 +6,7 @@ import numpy
 import pandas
 import rasterio
 
-from snail.intersection import Transform, associate_raster
+from snail.intersection import GridDefinition, associate_raster
 
 
 def associate_raster_files(features, rasters):
@@ -59,7 +59,7 @@ def read_band_data(
 
 def extend_rasters_metadata(
     rasters: pandas.DataFrame,
-) -> Tuple[pandas.DataFrame, List[Transform]]:
+) -> Tuple[pandas.DataFrame, List[GridDefinition]]:
     transforms = []
     transform_ids = []
     raster_bands = []
@@ -84,7 +84,7 @@ def extend_rasters_metadata(
     return rasters, transforms
 
 
-def read_raster_metadata(path) -> Tuple[Transform, Tuple[int]]:
+def read_raster_metadata(path) -> Tuple[GridDefinition, Tuple[int]]:
     with rasterio.open(path) as dataset:
         crs = dataset.crs
         width = dataset.width
@@ -93,7 +93,7 @@ def read_raster_metadata(path) -> Tuple[Transform, Tuple[int]]:
             :6
         ]  # trim to 6 - we expect the first two rows of 3x3 matrix
         bands = dataset.indexes
-    transform = Transform(crs, width, height, affine_transform)
+    transform = GridDefinition(crs, width, height, affine_transform)
     return transform, bands
 
 

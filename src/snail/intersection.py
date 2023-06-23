@@ -34,7 +34,7 @@ POLYGON_COORDINATE_PRECISION = 9
 
 
 @dataclass
-class Transform:
+class GridDefinition:
     """Store a raster transform and CRS"""
 
     crs: str
@@ -45,7 +45,7 @@ class Transform:
 
 def split_features_for_rasters(
     features: geopandas.GeoDataFrame,
-    transforms: List[Transform],
+    transforms: List[GridDefinition],
     split_func: Callable,
 ):
     # lookup per transform
@@ -80,7 +80,7 @@ def prepare_polygons(
 
 
 def split_points(
-    points: geopandas.GeoDataFrame, t: Transform
+    points: geopandas.GeoDataFrame, t: GridDefinition
 ) -> geopandas.GeoDataFrame:
     """Split points along the grid defined by a transform
 
@@ -91,7 +91,7 @@ def split_points(
 
 
 def split_linestrings(
-    linestring_features: geopandas.GeoDataFrame, t: Transform
+    linestring_features: geopandas.GeoDataFrame, t: GridDefinition
 ) -> geopandas.GeoDataFrame:
     """Split linestrings along the grid defined by a transform"""
     pieces = []
@@ -126,7 +126,7 @@ def _transform(i, j, a, b, c, d, e, f) -> Tuple[float]:
 
 
 def split_polygons(
-    polygon_features: geopandas.GeoDataFrame, t: Transform
+    polygon_features: geopandas.GeoDataFrame, t: GridDefinition
 ) -> geopandas.GeoDataFrame:
     """Split polygons along the grid defined by a transform"""
     pieces = []
@@ -156,7 +156,7 @@ def split_polygons(
 
 
 def split_polygons_experimental(
-    polygon_features: geopandas.GeoDataFrame, t: Transform
+    polygon_features: geopandas.GeoDataFrame, t: GridDefinition
 ) -> geopandas.GeoDataFrame:
     """Split polygons along the grid defined by a transform
 
@@ -249,7 +249,7 @@ def associate_raster(
 
 def apply_indices(
     features: geopandas.GeoDataFrame,
-    transform: Transform,
+    transform: GridDefinition,
     index_i="index_i",
     index_j="index_j",
 ) -> geopandas.GeoDataFrame:
@@ -261,7 +261,7 @@ def apply_indices(
 
 
 def get_indices(
-    geom, t: Transform, index_i="index_i", index_j="index_j"
+    geom, t: GridDefinition, index_i="index_i", index_j="index_j"
 ) -> pandas.Series:
     """Given a geometry, find the cell index (i, j) of its midpoint
     for the enclosing raster transform.

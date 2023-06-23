@@ -8,7 +8,7 @@ import geopandas
 import pandas
 
 from snail.intersection import (
-    Transform,
+    GridDefinition,
     apply_indices,
     prepare_linestrings,
     prepare_polygons,
@@ -181,7 +181,7 @@ def split(args):
             sys.exit(
                 "Error: Expected either a raster file or transform, width and height of splitting grid"
             )
-        transform = Transform(crs, width, height, affine_transform)
+        transform = GridDefinition(crs, width, height, affine_transform)
     logging.info(f"Splitting grid {transform=}")
 
     features = geopandas.read_file(args.features)
