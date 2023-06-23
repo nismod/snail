@@ -1,5 +1,7 @@
 import geopandas as gpd
+import numpy as np
 import pytest
+from hilbertcurve.hilbertcurve import HilbertCurve
 from numpy.testing import assert_array_equal
 from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import LinearRing, orient
@@ -61,7 +63,6 @@ def polygon():
 @pytest.fixture
 def polygon_split():
     rings = [
-        [(1.0, 0.875), (0.9, 1.0), (1.0, 1.0), (1.0, 0.875)],
         [
             (0.9, 1.0),
             (0.5, 1.5),
@@ -78,6 +79,7 @@ def polygon_split():
             (0.5, 3.0),
             (0.9, 3.0),
         ],
+        [(1.0, 0.875), (0.9, 1.0), (1.0, 1.0), (1.0, 0.875)],
         [(0.5, 3.0), (0.5, 3.5), (0.9, 3.0), (0.5, 3.0)],
         [
             (2.0, 0.875),
@@ -87,7 +89,6 @@ def polygon_split():
             (2.0, 1.0),
             (2.0, 0.875),
         ],
-        [(2.0, 1.0), (1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 1.0)],
         [
             (1.0, 2.875),
             (1.5, 2.25),
@@ -96,6 +97,7 @@ def polygon_split():
             (1.0, 2.0),
             (1.0, 2.875),
         ],
+        [(2.0, 1.0), (1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 1.0)],
         [(2.1, 1.0), (2.0, 0.875), (2.0, 1.0), (2.1, 1.0)],
         [
             (2.5, 2.0),
@@ -151,11 +153,27 @@ class TestSnailIntersections:
         assert_array_equal(actual["col1"].values, expected_gdf["col1"].values)
 
     def test_split_polygons(self, grid, polygon, polygon_split):
-        actual = split_polygons(polygon, grid)
-        expected = polygon_split
+        actual = sort_polygons(split_polygons(polygon, grid))
+        expected = sort_polygons(polygon_split)
 
         for i in range(len(actual)):
             actual_geom = actual.iloc[i, 1]
             expected_geom = expected.iloc[i, 1]
             assert actual_geom.equals(expected_geom)
         assert_array_equal(actual["col1"].values, expected["col1"].values)
+
+
+def sort_polygons(df):
+    iterations = 6  # all coords must be <= (2**p - 1) ; 2**6 - 1 == 63
+    ndimensions = 2
+    hilbert_curve = HilbertCurve(iterations, ndimensions)
+    points = df.geometry.centroid
+    coords = np.array(
+        list(zip(points.x.values.tolist(), points.y.values.tolist()))
+    )
+    int_coords = (coords * 10).astype(int)
+    distances = hilbert_curve.distances_from_points(int_coords)
+    df["hilbert_distance"] = distances
+    return df.sort_values(by="hilbert_distance").drop(
+        columns="hilbert_distance"
+    )

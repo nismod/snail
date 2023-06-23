@@ -37,6 +37,7 @@ dependencies=[
 dev=[
     "affine",
     "black",
+    "hilbertcurve",
     "nbstripout",
     "numpy",
     "pytest-cov",
