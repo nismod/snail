@@ -3,7 +3,7 @@ import numpy
 import pandas
 import pytest
 from numpy.testing import assert_allclose
-from snail.damages import DamageCurve, LinearDamageCurve
+from snail.damages import DamageCurve, PiecewiseLinearDamageCurve
 
 
 @pytest.fixture
@@ -11,7 +11,7 @@ def curve():
     curve_data = pandas.DataFrame(
         {"intensity": [0.0, 10, 20, 30], "damage": [0, 0.1, 0.2, 1.0]}
     )
-    return LinearDamageCurve(curve_data)
+    return PiecewiseLinearDamageCurve(curve_data)
 
 
 def test_linear_curve(curve):
