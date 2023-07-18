@@ -185,3 +185,17 @@ The `snail.core.intersections` module is built using `pybind11` with
   `PYBIND11_MODULE` macro
 - `pyproject.toml` defines the build requirements for snail, which includes
   pybind11 and scikit-build-core
+
+## Acknowledgments
+
+> MIT License
+>
+> Copyright (c) 2020-23 Tom Russell and all [snail contributors](https://github.com/nismod/snail/graphs/contributors)
+
+This library is developed by researchers in the [Oxford Programme for Sustainable 
+Infrastructure Systems](https://opsis.eci.ox.ac.uk/) at the University of Oxford,
+funded by multiple research projects.
+
+This research received funding from the FCDO Climate Compatible Growth Programme. 
+The views expressed here do not necessarily reflect the UK government's official 
+policies.
