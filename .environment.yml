@@ -7,12 +7,23 @@ dependencies:
   - affine
   - black
   - geopandas
+  - jupyter
+  - matplotlib
   - nbstripout
+  - networkx
   - numpy
+  - pandera
   - pip
+  - pyarrow
   - pytest
   - pytest-cov
   - rasterio
+  - seaborn
   - shapely
+  - scipy
   - pip:
+    - hilbertcurve
+    - irv_autopkg_client
     - python-igraph
+    - snkit
+    - tqdm
