@@ -215,8 +215,8 @@ def _set_precision(geom, precision):
     return shape(geom_mapping)
 
 
-def associate_raster(
-    features: pandas.DataFrame,
+def get_raster_values_for_splits(
+    splits: pandas.DataFrame,
     data: numpy.ndarray,
     index_i: str = "index_i",
     index_j: str = "index_j",
@@ -228,22 +228,30 @@ def associate_raster(
 
     N.B. This will pass through no data values from the raster (no filtering).
 
-    Args:
-        df: Table of features, each with cell indices
-            to look up raster pixel. Indices must be stored under columns with
-            names referenced by index_i and index_j.
-        fname: Filename of raster file to read data from
-    Returns:
-        pd.Series: Series of raster values, with same row indexing as df.
+    Parameters
+    ----------
+    splits: pandas.DataFrame
+        Table of features, each with cell indices
+        to look up raster pixel. Indices must be stored under columns with
+        names referenced by index_i and index_j.
+    data:  numpy.ndarray
+        Raster data (2D array)
+    index_i: str
+        Column name for i-indices
+    index_j: str
+        Column name for j-indices
+
+    Returns
+    -------
+    pd.Series
+        Series of raster values, with same row indexing as df.
     """
     # 2D numpy indexing is j, i (i.e. row, column)
     with_data = pandas.Series(
-        index=features.index, data=data[features[index_j], features[index_i]]
+        index=splits.index, data=data[splits[index_j], splits[index_i]]
     )
     # set NaN for out-of-bounds
-    with_data[
-        (features[index_i] == -1) | (features[index_j] == -1)
-    ] = numpy.nan
+    with_data[(splits[index_i] == -1) | (splits[index_j] == -1)] = numpy.nan
     return with_data
 
 

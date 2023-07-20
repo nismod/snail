@@ -10,6 +10,7 @@ import pandas
 from snail.intersection import (
     GridDefinition,
     apply_indices,
+    get_raster_values_for_splits,
     prepare_linestrings,
     prepare_polygons,
     prepare_points,
@@ -19,7 +20,7 @@ from snail.intersection import (
     split_points,
 )
 from snail.io import (
-    associate_raster_file,
+    read_raster_band_data,
     associate_raster_files,
     read_features,
     read_raster_metadata,
@@ -225,9 +226,10 @@ def split(args):
                 args.raster,
                 band_index,
             )
-            splits[key] = associate_raster_file(
-                splits, args.raster, band_number=int(band_index)
+            band_data = read_raster_band_data(
+                args.raster, band_number=int(band_index)
             )
+            splits[key] = get_raster_values_for_splits(splits, band_data)
 
     splits.set_crs(features_crs, inplace=True)
     splits.to_file(args.output)
