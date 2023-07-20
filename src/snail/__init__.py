@@ -1,6 +1,5 @@
 """snail - the spatial networks impact assessment library
 """
-import pkg_resources
 
 # Import things to define what is accessible directly on snail, when a client
 # writes::
@@ -10,8 +9,10 @@ import pkg_resources
 # from snail.network import Network
 
 try:
-    __version__ = pkg_resources.get_distribution(__name__).version
-except pkg_resources.DistributionNotFound:
+    from importlib.metadata import version
+
+    __version__ = version("nismod-snail")
+except:
     __version__ = "unknown"
 
 
