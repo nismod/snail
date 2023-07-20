@@ -45,12 +45,12 @@ class GridDefinition:
 
 def split_features_for_rasters(
     features: geopandas.GeoDataFrame,
-    transforms: List[GridDefinition],
+    grids: List[GridDefinition],
     split_func: Callable,
 ):
     # lookup per transform
-    for i, t in enumerate(transforms):
-        logging.info("Splitting on transform %s %s", i, t)
+    for i, t in enumerate(grids):
+        logging.info("Splitting on grid %s %s", i, t)
         # transform to grid CRS
         crs_features = features.to_crs(t.crs)
         crs_features = split_func(crs_features, t)
@@ -80,9 +80,9 @@ def prepare_polygons(
 
 
 def split_points(
-    points: geopandas.GeoDataFrame, t: GridDefinition
+    points: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split points along the grid defined by a transform
+    """Split points along a grid
 
     This is a no-op, written for equivalence when processing multiple
     geometry types.
@@ -91,14 +91,19 @@ def split_points(
 
 
 def split_linestrings(
-    linestring_features: geopandas.GeoDataFrame, t: GridDefinition
+    linestring_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split linestrings along the grid defined by a transform"""
+    """Split linestrings along a grid"""
+    # TODO check for MultiLineString
+    # throw error or coerce (df.explode)
     pieces = []
     for i in tqdm(range(len(linestring_features))):
         # split edge
         geom_splits = split_linestring(
-            linestring_features.geometry[i], t.width, t.height, t.transform
+            linestring_features.geometry[i],
+            grid.width,
+            grid.height,
+            grid.transform,
         )
         for j, s in enumerate(geom_splits):
             # splitting sometimes returns zero-length linestrings on edge of raster
@@ -117,7 +122,9 @@ def split_linestrings(
     logging.info(
         f"Split {len(linestring_features)} edges into {len(pieces)} pieces"
     )
-    splits_df = geopandas.GeoDataFrame(pieces, crs=t.crs, geometry="geometry")
+    splits_df = geopandas.GeoDataFrame(
+        pieces, crs=grid.crs, geometry="geometry"
+    )
     return splits_df
 
 
@@ -126,17 +133,18 @@ def _transform(i, j, a, b, c, d, e, f) -> Tuple[float]:
 
 
 def split_polygons(
-    polygon_features: geopandas.GeoDataFrame, t: GridDefinition
+    polygon_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split polygons along the grid defined by a transform"""
+    """Split polygons along a grid"""
     pieces = []
     ##
     # Fairly slow but solid approach, loop over cells and
     # use geopandas (shapely/GEOS) intersection
     ##
-    a, b, c, d, e, f = t.transform
+    a, b, c, d, e, f = grid.transform
     for i, j in tqdm(
-        product(range(t.width), range(t.height)), total=t.width * t.height
+        product(range(grid.width), range(grid.height)),
+        total=grid.width * grid.height,
     ):
         ulx, uly = _transform(i, j, a, b, c, d, e, f)
         lrx, lry = _transform(i + 1, j + 1, a, b, c, d, e, f)
@@ -156,9 +164,9 @@ def split_polygons(
 
 
 def split_polygons_experimental(
-    polygon_features: geopandas.GeoDataFrame, t: GridDefinition
+    polygon_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split polygons along the grid defined by a transform
+    """Split polygons along a grid
 
     Experimental implementation of `split_polygons`, possibly fast/incorrect
     with some inputs.
@@ -177,7 +185,10 @@ def split_polygons_experimental(
     for i in tqdm(range(len(polygon_features))):
         # split area
         geom_splits = split_polygon(
-            polygon_features.geometry[i], t.width, t.height, t.transform
+            polygon_features.geometry[i],
+            grid.width,
+            grid.height,
+            grid.transform,
         )
         # round to high precision (avoid floating point errors)
         geom_splits = [
@@ -196,7 +207,7 @@ def split_polygons_experimental(
         f"  Split {len(polygon_features)} areas into {len(pieces)} pieces"
     )
     splits_df = geopandas.GeoDataFrame(pieces)
-    splits_df.crs = t.crs
+    splits_df.crs = grid.crs
     return splits_df
 
 
@@ -257,33 +268,33 @@ def get_raster_values_for_splits(
 
 def apply_indices(
     features: geopandas.GeoDataFrame,
-    transform: GridDefinition,
+    grid: GridDefinition,
     index_i="index_i",
     index_j="index_j",
 ) -> geopandas.GeoDataFrame:
     def f(geom, *args, **kwargs):
-        return get_indices(geom, transform, index_i, index_j)
+        return get_indices(geom, grid, index_i, index_j)
 
     indices = features.geometry.apply(f, result_type="expand")
     return pandas.concat([features, indices], axis="columns")
 
 
 def get_indices(
-    geom, t: GridDefinition, index_i="index_i", index_j="index_j"
+    geom, grid: GridDefinition, index_i="index_i", index_j="index_j"
 ) -> pandas.Series:
     """Given a geometry, find the cell index (i, j) of its midpoint
-    for the enclosing raster transform.
+    for the enclosing grid.
 
     N.B. There is no checking whether a geometry spans more than one cell.
     """
-    i, j = get_cell_indices(geom, t.height, t.width, t.transform)
+    i, j = get_cell_indices(geom, grid.height, grid.width, grid.transform)
 
     # Raise error if cell index would be out of bounds
     # assert 0 <= i < t.width
     # assert 0 <= j < t.height
 
     # Or - special value (-1,-1) if cell would be out of bounds
-    if i >= t.width or i < 0 or j >= t.height or j < 0:
+    if i >= grid.width or i < 0 or j >= grid.height or j < 0:
         i = -1
         j = -1
     return pandas.Series(index=(index_i, index_j), data=[i, j])
