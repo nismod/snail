@@ -25,6 +25,7 @@ requires-python=">=3.8"
 dependencies=[
     "geopandas",
     "matplotlib",
+    "openpyxl",
     "pandera",
     "pyarrow",
     "python-igraph",

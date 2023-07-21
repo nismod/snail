@@ -12,6 +12,7 @@ dependencies:
   - nbstripout
   - networkx
   - numpy
+  - openpyxl
   - pandera
   - pip
   - pyarrow

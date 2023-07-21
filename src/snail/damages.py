@@ -7,6 +7,16 @@ from scipy.interpolate import interp1d
 from pandera.typing import DataFrame, Series
 
 
+# TODO csv reader with # as comment character
+
+# TODO excel reader with example file
+
+# TODO check `nismod/east-africa-transport` and `nismod/jamaica-infrastructure`
+# manipulations of damage curves
+
+# TODO set thresholds - see Raghav code
+
+
 class DamageCurve(ABC):
     """A damage curve"""
 
@@ -26,6 +36,9 @@ class PiecewiseLinearDamageCurveSchema(pandera.DataFrameModel):
 class PiecewiseLinearDamageCurve(DamageCurve):
     """A piecewise-linear damage curve"""
 
+    intensity: Series[float]
+    damage: Series[float]
+
     def __init__(self, curve: DataFrame[PiecewiseLinearDamageCurveSchema]):
         curve = curve.copy()
         self.intensity, self.damage = self.clip_curve_data(
@@ -41,6 +54,101 @@ class PiecewiseLinearDamageCurve(DamageCurve):
             bounds_error=False,
             copy=False,
         )
+
+    def __eq__(self, other):
+        damage_eq = (self.damage == other.damage).all()
+        intensity_eq = (self.intensity == other.intensity).all()
+        return damage_eq and intensity_eq
+
+    @classmethod
+    def from_csv(
+        cls,
+        fname,
+        intensity_col="intensity",
+        damage_col="damage_ratio",
+        comment="#",
+        **kwargs,
+    ):
+        """Read a damage curve from a CSV file.
+
+        By default, the CSV should have columns named "intensity" and "damage_ratio",
+        with any additional header lines commented out by "#".
+
+        Any additional keyword arguments are passed through to ``pandas.read_csv``
+
+        Parameters
+        ----------
+        fname: str, path object or file-like object
+        intensity_col: str, default "intensity"
+            Column name to read hazard intensity values
+        damage_col: str, default "damage_ratio"
+            Column name to read damage values
+        comment: str, default "#"
+            Indicates remainder of the line in the CSV should not be parsed.
+            If found at the beginning of a line, the line will be ignored
+            altogether.
+        kwargs:
+            see pandas.read_csv documentation
+
+        Returns
+        -------
+        PiecewiseLinearDamageCurve
+        """
+        curve_data = pandas.read_csv(fname, comment=comment, **kwargs).rename(
+            columns={
+                intensity_col: "intensity",
+                damage_col: "damage",
+            }
+        )
+        return PiecewiseLinearDamageCurve(curve_data)
+
+    @classmethod
+    def from_excel(
+        cls,
+        fname,
+        sheet_name=0,
+        intensity_col="intensity",
+        damage_col="damage_ratio",
+        comment="#",
+        **kwargs,
+    ):
+        """Read a damage curve from an Excel file.
+
+        By default, the file should have columns named "intensity" and "damage_ratio",
+        with any additional header lines commented out by "#".
+
+        Any additional keyword arguments are passed through to ``pandas.read_excel``
+
+        Parameters
+        ----------
+        fname: str, path object or file-like object
+        sheet_name: str, int
+            Strings are used for sheet names. Integers are used in zero-indexed sheet
+            positions (chart sheets do not count as a sheet position).
+        intensity_col: str, default "intensity"
+            Column name to read hazard intensity values
+        damage_col: str, default "damage_ratio"
+            Column name to read damage values
+        comment: str, default "#"
+            Indicates remainder of the line in the CSV should not be parsed.
+            If found at the beginning of a line, the line will be ignored
+            altogether.
+        kwargs:
+            see pandas.read_csv documentation
+
+        Returns
+        -------
+        PiecewiseLinearDamageCurve
+        """
+        curve_data = pandas.read_excel(
+            fname, sheet_name=sheet_name, comment=comment, **kwargs
+        ).rename(
+            columns={
+                intensity_col: "intensity",
+                damage_col: "damage",
+            }
+        )
+        return PiecewiseLinearDamageCurve(curve_data)
 
     def damage_fraction(self, exposure: numpy.array) -> numpy.array:
         """Evaluate damage fraction for exposure to a given hazard intensity"""
@@ -151,6 +259,3 @@ class PiecewiseLinearDamageCurve(DamageCurve):
         ax.set_xlabel("Hazard Intensity")
 
         return ax
-
-
-# set thresholds - see Raghav code

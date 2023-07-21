@@ -1,4 +1,6 @@
 """Test damage assessment"""
+import os
+
 import numpy
 import pandas
 import pytest
@@ -17,6 +19,84 @@ def curve():
 def test_linear_curve(curve):
     # check inheritance
     assert isinstance(curve, DamageCurve)
+
+
+def test_equality(curve):
+    curve_copy = PiecewiseLinearDamageCurve(
+        pandas.DataFrame(
+            {
+                "intensity": [0.0, 10, 20, 30],
+                "damage": [0, 0.1, 0.2, 1.0],
+            }
+        )
+    )
+    assert curve == curve_copy
+
+
+def test_read_csv(curve):
+    fname = os.path.join(
+        os.path.dirname(__file__),
+        "integration",
+        "piecewise-linear-damage-curve.csv",
+    )
+    curve_from_file = PiecewiseLinearDamageCurve.from_csv(fname)
+    assert curve == curve_from_file
+
+
+def test_read_csv_arguments():
+    fname = os.path.join(
+        os.path.dirname(__file__),
+        "integration",
+        "paved-road-flood-depth-damage.csv",
+    )
+    actual = PiecewiseLinearDamageCurve.from_csv(
+        fname,
+        intensity_col="inundation_depth_(m)",
+        damage_col="road_unpaved",
+        sep="\t",
+    )
+    expected = PiecewiseLinearDamageCurve(
+        pandas.DataFrame(
+            {
+                "intensity": [0, 1, 2, 3, 4, 5],
+                "damage": [0, 0.28, 0.46, 0.64, 0.82, 1],
+            }
+        )
+    )
+    assert actual == expected
+
+
+def test_read_excel(curve):
+    fname = os.path.join(
+        os.path.dirname(__file__),
+        "integration",
+        "piecewise-linear-damage-curve.xlsx",
+    )
+    curve_from_file = PiecewiseLinearDamageCurve.from_excel(fname)
+    assert curve == curve_from_file
+
+
+def test_read_excel_arguments():
+    fname = os.path.join(
+        os.path.dirname(__file__),
+        "integration",
+        "paved-road-flood-depth-damage.xlsx",
+    )
+    actual = PiecewiseLinearDamageCurve.from_excel(
+        fname,
+        sheet_name="flood",
+        intensity_col="inundation_depth_(m)",
+        damage_col="road_unpaved",
+    )
+    expected = PiecewiseLinearDamageCurve(
+        pandas.DataFrame(
+            {
+                "intensity": [0, 1, 2, 3, 4, 5],
+                "damage": [0, 0.28, 0.46, 0.64, 0.82, 1],
+            }
+        )
+    )
+    assert actual == expected
 
 
 def test_linear_curve_pass_through(curve):

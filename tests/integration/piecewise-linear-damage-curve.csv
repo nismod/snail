@@ -1,0 +1,13 @@
+# Example damage curve,
+# - use # to add comment lines to a damage curve CSV
+# - default column names are "intensity" and ""damage_ratio"
+# - "damage_ratio" must be in the range [0, 1]
+# - ""intensity"" must be in some hazard/peril units and should be
+# documented in the header. E.g. "intensity is 10 minute mean surface
+# wind speeds in m/s" or "intensity is flood depth in metres"
+# - the header can also record source/citation details
+intensity,damage_ratio
+0,0
+10,0.1
+20,0.2
+30,1
