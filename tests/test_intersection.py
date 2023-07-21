@@ -1,8 +1,11 @@
+import os
+
 import geopandas as gpd
 import numpy as np
 import pytest
 from hilbertcurve.hilbertcurve import HilbertCurve
 from numpy.testing import assert_array_equal
+from rasterio.crs import CRS
 from shapely.geometry import LineString, Polygon
 from shapely.geometry.polygon import LinearRing, orient
 
@@ -131,6 +134,36 @@ def grid():
     return GridDefinition(
         crs=None, width=4, height=4, transform=(1, 0, 0, 0, 1, 0)
     )
+
+
+def test_grid_from_extent(grid):
+    actual = GridDefinition.from_extent(
+        xmin=0, ymin=0, xmax=4, ymax=4, cell_width=1, cell_height=1, crs=None
+    )
+    assert actual == grid
+
+
+def test_grid_from_raster():
+    fname = os.path.join(
+        os.path.dirname(__file__),
+        "integration",
+        "range.tif",
+    )
+    actual = GridDefinition.from_raster(fname)
+    expected = GridDefinition(
+        crs=CRS.from_epsg(4326),
+        width=23,
+        height=14,
+        transform=(
+            0.008333333347826087,
+            0.0,
+            -1.341666667,
+            0.0,
+            -0.008333333285714315,
+            51.808333333,
+        ),
+    )
+    assert actual == expected
 
 
 class TestSnailIntersections:

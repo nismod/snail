@@ -1,4 +1,5 @@
 import logging
+import math
 import os
 from dataclasses import dataclass
 from itertools import product
@@ -7,6 +8,7 @@ from typing import Callable, List, Tuple
 import geopandas
 import numpy
 import pandas
+import rasterio
 from shapely.geometry import mapping, shape, box
 from shapely.ops import linemerge, polygonize
 
@@ -33,14 +35,69 @@ else:
 POLYGON_COORDINATE_PRECISION = 9
 
 
-@dataclass
+@dataclass(frozen=True)
 class GridDefinition:
-    """Store a raster transform and CRS"""
+    """Store a raster transform and CRS
+
+    A note on `transform` - these six numbers define the transform from `i,j`
+    cell index (column/row) coordinates in the rectangular grid to `x,y`
+    geographic coordinates, in the coordinate reference system of the input and
+    output files. They effectively form the first two rows of a 3x3 matrix:
+
+
+    ```
+    | x |   | a  b  c | | i |
+    | y | = | d  e  f | | j |
+    | 1 |   | 0  0  1 | | 1 |
+    ```
+
+    In cases without shear or rotation, `a` and `e` define scaling or grid cell
+    size, while `c` and `f` define the offset or grid upper-left corner:
+
+    ```
+    | x_scale 0       x_offset |
+    | 0       y_scale y_offset |
+    | 0       0       1        |
+    ```
+    """
 
     crs: str
     width: int
     height: int
     transform: Tuple[float]
+
+    @classmethod
+    def from_rasterio_dataset(cls, dataset):
+        crs = dataset.crs
+        width = dataset.width
+        height = dataset.height
+        # trim transform to 6 - we expect the first two rows of 3x3 matrix
+        transform = tuple(dataset.transform)[:6]
+        return GridDefinition(crs, width, height, transform)
+
+    @classmethod
+    def from_raster(cls, fname):
+        with rasterio.open(fname) as dataset:
+            grid = GridDefinition.from_rasterio_dataset(dataset)
+        return grid
+
+    @classmethod
+    def from_extent(
+        cls,
+        xmin: float,
+        ymin: float,
+        xmax: float,
+        ymax: float,
+        cell_width: float,
+        cell_height: float,
+        crs,
+    ):
+        return GridDefinition(
+            crs=crs,
+            width=math.ceil((xmax - xmin) / cell_width),
+            height=math.ceil((ymax - ymin) / cell_height),
+            transform=(cell_width, 0, xmin, 0, cell_height, ymin),
+        )
 
 
 def split_features_for_rasters(

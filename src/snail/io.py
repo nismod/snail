@@ -97,13 +97,8 @@ def extend_rasters_metadata(
 
 def read_raster_metadata(path) -> Tuple[GridDefinition, Tuple[int]]:
     with rasterio.open(path) as dataset:
-        crs = dataset.crs
-        width = dataset.width
-        height = dataset.height
-        # trim affine_transform to 6 - we expect the first two rows of 3x3 matrix
-        affine_transform = tuple(dataset.transform)[:6]
         bands = dataset.indexes
-    grid = GridDefinition(crs, width, height, affine_transform)
+        grid = GridDefinition.from_rasterio_dataset(dataset)
     return grid, bands
 
 
