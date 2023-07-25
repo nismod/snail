@@ -106,13 +106,13 @@ def split_features_for_rasters(
     split_func: Callable,
 ):
     # lookup per transform
-    for i, t in enumerate(grids):
-        logging.info("Splitting on grid %s %s", i, t)
+    for i, grid in enumerate(grids):
+        logging.info("Splitting on grid %s %s", i, grid)
         # transform to grid CRS
-        crs_features = features.to_crs(t.crs)
-        crs_features = split_func(crs_features, t)
+        crs_features = features.to_crs(grid.crs)
+        crs_features = split_func(crs_features, grid)
         # save cell index for fast lookup of raster values
-        crs_features = apply_indices(crs_features, t, f"i_{i}", f"j_{i}")
+        crs_features = apply_indices(crs_features, grid, f"i_{i}", f"j_{i}")
         # transform back
         features = crs_features.to_crs(features.crs)
     return features
