@@ -2,7 +2,9 @@ import logging
 import math
 import os
 from dataclasses import dataclass
+from functools import partial
 from itertools import product
+from multiprocessing import Pool, cpu_count
 from typing import Callable, List, Tuple
 
 import geopandas
@@ -198,26 +200,47 @@ def split_polygons(
     # Fairly slow but solid approach, loop over cells and
     # use geopandas (shapely/GEOS) intersection
     ##
-    a, b, c, d, e, f = grid.transform
-    for i, j in tqdm(
-        product(range(grid.width), range(grid.height)),
-        total=grid.width * grid.height,
-    ):
-        ulx, uly = _transform(i, j, a, b, c, d, e, f)
-        lrx, lry = _transform(i + 1, j + 1, a, b, c, d, e, f)
-        cell_geom = box(ulx, uly, lrx, lry)
-        idx = polygon_features.geometry.sindex.query(cell_geom)
-        subset = polygon_features.iloc[idx].copy()
-        if len(subset):
-            subset.geometry = subset.intersection(cell_geom)
-            subset = subset[
-                ~(subset.geometry.is_empty | subset.geometry.isna())
-            ]
-            subset = subset.explode(ignore_index=True)
-            subset = subset[subset.geometry.type == "Polygon"]
-            pieces.append(subset)
+    num_processes = max(1, cpu_count() - 2)
+    logging.info(f"Running with {num_processes=}")
+    pool = Pool(processes=num_processes)
+    partial_func = partial(
+        _intersect_boxes,
+        grid=grid,
+        features=polygon_features,
+        num_processes=num_processes,
+    )
+    pieces = pool.imap(
+        func=partial_func,
+        iterable=range(num_processes),
+    )
+
     splits_df = pandas.concat(pieces)
     return splits_df
+
+
+def _intersect_boxes(n, grid, features, num_processes):
+    for k in tqdm(
+        range(math.ceil((grid.width * grid.height) / num_processes))
+    ):
+        idx = k * num_processes + n
+        ij = idx_to_ij(idx, grid.width, grid.height)
+        _intersect_box(ij, grid, features)
+
+
+def _intersect_box(ij, grid, features):
+    i, j = ij
+    a, b, c, d, e, f = grid.transform
+    ulx, uly = _transform(i, j, a, b, c, d, e, f)
+    lrx, lry = _transform(i + 1, j + 1, a, b, c, d, e, f)
+    cell_geom = box(ulx, uly, lrx, lry)
+    idx = features.geometry.sindex.query(cell_geom)
+    subset = features.iloc[idx].copy()
+    if len(subset):
+        subset.geometry = subset.intersection(cell_geom)
+        subset = subset[~(subset.geometry.is_empty | subset.geometry.isna())]
+        subset = subset.explode(ignore_index=True)
+        subset = subset[subset.geometry.type == "Polygon"]
+    return subset
 
 
 def split_polygons_experimental(
@@ -355,3 +378,11 @@ def get_indices(
         i = -1
         j = -1
     return pandas.Series(index=(index_i, index_j), data=[i, j])
+
+
+def idx_to_ij(idx: int, width: int, height: int):
+    return numpy.unravel_index(idx, (height, width))
+
+
+def ij_to_idx(ij: tuple[int], width: int, height: int):
+    return numpy.ravel_multi_index(ij, (height, width))
