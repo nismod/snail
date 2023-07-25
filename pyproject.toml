@@ -28,6 +28,7 @@ dependencies=[
     "openpyxl",
     "pandera",
     "pyarrow",
+    "pyogrio",
     "python-igraph",
     "rasterio",
     "shapely",

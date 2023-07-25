@@ -106,8 +106,14 @@ def read_features(path, layer=None):
     if path.suffix in (".parquet", ".geoparquet"):
         features = geopandas.read_parquet(path)
     else:
+        try:
+            import pyogrio
+
+            engine = "pyogrio"
+        except ImportError:
+            engine = "fiona"
         if layer:
-            features = geopandas.read_file(path, layer=layer)
+            features = geopandas.read_file(path, layer=layer, engine=engine)
         else:
-            features = geopandas.read_file(path)
+            features = geopandas.read_file(path, engine=engine)
     return features

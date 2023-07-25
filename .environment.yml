@@ -16,6 +16,7 @@ dependencies:
   - pandera
   - pip
   - pyarrow
+  - pyogrio
   - pytest
   - pytest-cov
   - rasterio
