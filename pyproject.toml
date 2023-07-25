@@ -47,6 +47,7 @@ dev=[
 ]
 docs=["sphinx", "m2r2"]
 tutorials=[
+    "contextily",
     "irv_autopkg_client",
     "jupyter",
     "networkx",

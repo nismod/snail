@@ -6,6 +6,7 @@ dependencies:
   - python=3.11
   - affine
   - black
+  - contextily
   - geopandas
   - jupyter
   - matplotlib
