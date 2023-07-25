@@ -2,16 +2,14 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from functools import partial
-from itertools import product
-from multiprocessing import Pool, cpu_count
 from typing import Callable, List, Tuple
 
 import geopandas
 import numpy
 import pandas
 import rasterio
-from shapely.geometry import mapping, shape, box
+from shapely import box
+from shapely.geometry import mapping, shape
 from shapely.ops import linemerge, polygonize
 
 from snail.core.intersections import (
@@ -195,52 +193,29 @@ def split_polygons(
     polygon_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
     """Split polygons along a grid"""
-    pieces = []
     ##
-    # Fairly slow but solid approach, loop over cells and
+    # Fairly slow but solid approach, generate cells as boxes and
     # use geopandas (shapely/GEOS) intersection
     ##
-    num_processes = max(1, cpu_count() - 2)
-    logging.info(f"Running with {num_processes=}")
-    pool = Pool(processes=num_processes)
-    partial_func = partial(
-        _intersect_boxes,
-        grid=grid,
-        features=polygon_features,
-        num_processes=num_processes,
-    )
-    pieces = pool.imap(
-        func=partial_func,
-        iterable=range(num_processes),
-    )
-
-    splits_df = pandas.concat(pieces)
-    return splits_df
+    box_geoms = generate_grid_boxes(grid)
+    splits = polygon_features.overlay(box_geoms, how="intersection")
+    splits = splits[~(splits.geometry.is_empty | splits.geometry.isna())]
+    splits = splits.explode(ignore_index=True)
+    splits = splits[splits.geometry.type == "Polygon"]
+    return splits
 
 
-def _intersect_boxes(n, grid, features, num_processes):
-    for k in tqdm(
-        range(math.ceil((grid.width * grid.height) / num_processes))
-    ):
-        idx = k * num_processes + n
-        ij = idx_to_ij(idx, grid.width, grid.height)
-        _intersect_box(ij, grid, features)
-
-
-def _intersect_box(ij, grid, features):
-    i, j = ij
+def generate_grid_boxes(grid):
     a, b, c, d, e, f = grid.transform
-    ulx, uly = _transform(i, j, a, b, c, d, e, f)
-    lrx, lry = _transform(i + 1, j + 1, a, b, c, d, e, f)
-    cell_geom = box(ulx, uly, lrx, lry)
-    idx = features.geometry.sindex.query(cell_geom)
-    subset = features.iloc[idx].copy()
-    if len(subset):
-        subset.geometry = subset.intersection(cell_geom)
-        subset = subset[~(subset.geometry.is_empty | subset.geometry.isna())]
-        subset = subset.explode(ignore_index=True)
-        subset = subset[subset.geometry.type == "Polygon"]
-    return subset
+    idx = numpy.arange(grid.width * grid.height)
+    i, j = numpy.unravel_index(idx, (grid.height, grid.width))
+    ulx = i * a + j * b + c
+    uly = i * d + j * e + f
+    lrx = (i + 1) * a + (j + 1) * b + c
+    lry = (i + 1) * d + (j + 1) * e + f
+    return geopandas.GeoDataFrame(
+        data={}, geometry=box(ulx, lry, lrx, uly), crs=grid.crs
+    )
 
 
 def split_polygons_experimental(
