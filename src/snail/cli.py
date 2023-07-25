@@ -172,7 +172,7 @@ def snail(args=None):
 def split(args):
     """snail split command"""
     if args.raster:
-        transform, all_bands = read_raster_metadata(args.raster)
+        grid, all_bands = read_raster_metadata(args.raster)
     else:
         crs = None
         width = args.width
@@ -182,26 +182,35 @@ def split(args):
             sys.exit(
                 "Error: Expected either a raster file or transform, width and height of splitting grid"
             )
-        transform = GridDefinition(crs, width, height, affine_transform)
-    logging.info(f"Splitting grid {transform=}")
+        grid = GridDefinition(crs, width, height, affine_transform)
+    logging.info(f"Splitting {grid=}")
 
-    features = geopandas.read_file(args.features)
+    features = read_features(Path(args.features))
     features_crs = features.crs
     geom_type = _sample_geom_type(features)
 
     if "Point" in geom_type:
+        logging.info(f"Preparing points")
         prepared = prepare_points(features)
-        splits = split_points(prepared)
+        logging.info(f"Splitting points")
+        splits = split_features_for_rasters(prepared, [grid], split_points)
     elif "LineString" in geom_type:
+        logging.info(f"Preparing linestrings")
         prepared = prepare_linestrings(features)
-        splits = split_linestrings(prepared, transform)
+        logging.info(f"Splitting linestrings")
+        splits = split_features_for_rasters(
+            prepared, [grid], split_linestrings
+        )
     elif "Polygon" in geom_type:
+        logging.info(f"Preparing polygons")
         prepared = prepare_polygons(features)
-        splits = split_polygons(prepared, transform)
+        logging.info(f"Splitting polygons")
+        splits = split_features_for_rasters(prepared, [grid], split_polygons)
     else:
         raise ValueError("Could not process vector data of type %s", geom_type)
 
-    splits = apply_indices(splits, transform)
+    logging.info(f"Applying indices")
+    splits = apply_indices(splits, grid)
 
     if args.attribute and args.raster:
         if args.band:
