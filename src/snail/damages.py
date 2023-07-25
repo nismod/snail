@@ -7,14 +7,8 @@ from scipy.interpolate import interp1d
 from pandera.typing import DataFrame, Series
 
 
-# TODO csv reader with # as comment character
-
-# TODO excel reader with example file
-
 # TODO check `nismod/east-africa-transport` and `nismod/jamaica-infrastructure`
 # manipulations of damage curves
-
-# TODO set thresholds - see Raghav code
 
 
 class DamageCurve(ABC):
