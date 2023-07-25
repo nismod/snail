@@ -355,9 +355,9 @@ def get_indices(
     return pandas.Series(index=(index_i, index_j), data=[i, j])
 
 
-def idx_to_ij(idx: int, width: int, height: int):
+def idx_to_ij(idx: int, width: int, height: int) -> Tuple[int]:
     return numpy.unravel_index(idx, (height, width))
 
 
-def ij_to_idx(ij: tuple[int], width: int, height: int):
+def ij_to_idx(ij: Tuple[int], width: int, height: int):
     return numpy.ravel_multi_index(ij, (height, width))
