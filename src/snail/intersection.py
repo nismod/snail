@@ -1,13 +1,15 @@
 import logging
+import math
 import os
 from dataclasses import dataclass
-from itertools import product
 from typing import Callable, List, Tuple
 
 import geopandas
 import numpy
 import pandas
-from shapely.geometry import mapping, shape, box
+import rasterio
+from shapely import box
+from shapely.geometry import mapping, shape
 from shapely.ops import linemerge, polygonize
 
 from snail.core.intersections import (
@@ -33,29 +35,84 @@ else:
 POLYGON_COORDINATE_PRECISION = 9
 
 
-@dataclass
-class Transform:
-    """Store a raster transform and CRS"""
+@dataclass(frozen=True)
+class GridDefinition:
+    """Store a raster transform and CRS
+
+    A note on `transform` - these six numbers define the transform from `i,j`
+    cell index (column/row) coordinates in the rectangular grid to `x,y`
+    geographic coordinates, in the coordinate reference system of the input and
+    output files. They effectively form the first two rows of a 3x3 matrix:
+
+
+    ```
+    | x |   | a  b  c | | i |
+    | y | = | d  e  f | | j |
+    | 1 |   | 0  0  1 | | 1 |
+    ```
+
+    In cases without shear or rotation, `a` and `e` define scaling or grid cell
+    size, while `c` and `f` define the offset or grid upper-left corner:
+
+    ```
+    | x_scale 0       x_offset |
+    | 0       y_scale y_offset |
+    | 0       0       1        |
+    ```
+    """
 
     crs: str
     width: int
     height: int
     transform: Tuple[float]
 
+    @classmethod
+    def from_rasterio_dataset(cls, dataset):
+        crs = dataset.crs
+        width = dataset.width
+        height = dataset.height
+        # trim transform to 6 - we expect the first two rows of 3x3 matrix
+        transform = tuple(dataset.transform)[:6]
+        return GridDefinition(crs, width, height, transform)
+
+    @classmethod
+    def from_raster(cls, fname):
+        with rasterio.open(fname) as dataset:
+            grid = GridDefinition.from_rasterio_dataset(dataset)
+        return grid
+
+    @classmethod
+    def from_extent(
+        cls,
+        xmin: float,
+        ymin: float,
+        xmax: float,
+        ymax: float,
+        cell_width: float,
+        cell_height: float,
+        crs,
+    ):
+        return GridDefinition(
+            crs=crs,
+            width=math.ceil((xmax - xmin) / cell_width),
+            height=math.ceil((ymax - ymin) / cell_height),
+            transform=(cell_width, 0, xmin, 0, cell_height, ymin),
+        )
+
 
 def split_features_for_rasters(
     features: geopandas.GeoDataFrame,
-    transforms: List[Transform],
+    grids: List[GridDefinition],
     split_func: Callable,
 ):
     # lookup per transform
-    for i, t in enumerate(transforms):
-        logging.info("Splitting on transform %s %s", i, t)
+    for i, grid in enumerate(grids):
+        logging.info("Splitting on grid %s %s", i, grid)
         # transform to grid CRS
-        crs_features = features.to_crs(t.crs)
-        crs_features = split_func(crs_features, t)
+        crs_features = features.to_crs(grid.crs)
+        crs_features = split_func(crs_features, grid)
         # save cell index for fast lookup of raster values
-        crs_features = apply_indices(crs_features, t, f"i_{i}", f"j_{i}")
+        crs_features = apply_indices(crs_features, grid, f"i_{i}", f"j_{i}")
         # transform back
         features = crs_features.to_crs(features.crs)
     return features
@@ -80,9 +137,9 @@ def prepare_polygons(
 
 
 def split_points(
-    points: geopandas.GeoDataFrame, t: Transform
+    points: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split points along the grid defined by a transform
+    """Split points along a grid
 
     This is a no-op, written for equivalence when processing multiple
     geometry types.
@@ -91,14 +148,19 @@ def split_points(
 
 
 def split_linestrings(
-    linestring_features: geopandas.GeoDataFrame, t: Transform
+    linestring_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split linestrings along the grid defined by a transform"""
+    """Split linestrings along a grid"""
+    # TODO check for MultiLineString
+    # throw error or coerce (df.explode)
     pieces = []
     for i in tqdm(range(len(linestring_features))):
         # split edge
         geom_splits = split_linestring(
-            linestring_features.geometry[i], t.width, t.height, t.transform
+            linestring_features.geometry[i],
+            grid.width,
+            grid.height,
+            grid.transform,
         )
         for j, s in enumerate(geom_splits):
             # splitting sometimes returns zero-length linestrings on edge of raster
@@ -117,7 +179,9 @@ def split_linestrings(
     logging.info(
         f"Split {len(linestring_features)} edges into {len(pieces)} pieces"
     )
-    splits_df = geopandas.GeoDataFrame(pieces, crs=t.crs, geometry="geometry")
+    splits_df = geopandas.GeoDataFrame(
+        pieces, crs=grid.crs, geometry="geometry"
+    )
     return splits_df
 
 
@@ -126,39 +190,38 @@ def _transform(i, j, a, b, c, d, e, f) -> Tuple[float]:
 
 
 def split_polygons(
-    polygon_features: geopandas.GeoDataFrame, t: Transform
+    polygon_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split polygons along the grid defined by a transform"""
-    pieces = []
+    """Split polygons along a grid"""
     ##
-    # Fairly slow but solid approach, loop over cells and
+    # Fairly slow but solid approach, generate cells as boxes and
     # use geopandas (shapely/GEOS) intersection
     ##
-    a, b, c, d, e, f = t.transform
-    for i, j in tqdm(
-        product(range(t.width), range(t.height)), total=t.width * t.height
-    ):
-        ulx, uly = _transform(i, j, a, b, c, d, e, f)
-        lrx, lry = _transform(i + 1, j + 1, a, b, c, d, e, f)
-        cell_geom = box(ulx, uly, lrx, lry)
-        idx = polygon_features.geometry.sindex.query(cell_geom)
-        subset = polygon_features.iloc[idx].copy()
-        if len(subset):
-            subset.geometry = subset.intersection(cell_geom)
-            subset = subset[
-                ~(subset.geometry.is_empty | subset.geometry.isna())
-            ]
-            subset = subset.explode(ignore_index=True)
-            subset = subset[subset.geometry.type == "Polygon"]
-            pieces.append(subset)
-    splits_df = pandas.concat(pieces)
-    return splits_df
+    box_geoms = generate_grid_boxes(grid)
+    splits = polygon_features.overlay(box_geoms, how="intersection")
+    splits = splits[~(splits.geometry.is_empty | splits.geometry.isna())]
+    splits = splits.explode(ignore_index=True)
+    splits = splits[splits.geometry.type == "Polygon"]
+    return splits
+
+
+def generate_grid_boxes(grid):
+    a, b, c, d, e, f = grid.transform
+    idx = numpy.arange(grid.width * grid.height)
+    i, j = numpy.unravel_index(idx, (grid.height, grid.width))
+    ulx = i * a + j * b + c
+    uly = i * d + j * e + f
+    lrx = (i + 1) * a + (j + 1) * b + c
+    lry = (i + 1) * d + (j + 1) * e + f
+    return geopandas.GeoDataFrame(
+        data={}, geometry=box(ulx, lry, lrx, uly), crs=grid.crs
+    )
 
 
 def split_polygons_experimental(
-    polygon_features: geopandas.GeoDataFrame, t: Transform
+    polygon_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split polygons along the grid defined by a transform
+    """Split polygons along a grid
 
     Experimental implementation of `split_polygons`, possibly fast/incorrect
     with some inputs.
@@ -177,7 +240,10 @@ def split_polygons_experimental(
     for i in tqdm(range(len(polygon_features))):
         # split area
         geom_splits = split_polygon(
-            polygon_features.geometry[i], t.width, t.height, t.transform
+            polygon_features.geometry[i],
+            grid.width,
+            grid.height,
+            grid.transform,
         )
         # round to high precision (avoid floating point errors)
         geom_splits = [
@@ -196,7 +262,7 @@ def split_polygons_experimental(
         f"  Split {len(polygon_features)} areas into {len(pieces)} pieces"
     )
     splits_df = geopandas.GeoDataFrame(pieces)
-    splits_df.crs = t.crs
+    splits_df.crs = grid.crs
     return splits_df
 
 
@@ -215,8 +281,8 @@ def _set_precision(geom, precision):
     return shape(geom_mapping)
 
 
-def associate_raster(
-    features: pandas.DataFrame,
+def get_raster_values_for_splits(
+    splits: pandas.DataFrame,
     data: numpy.ndarray,
     index_i: str = "index_i",
     index_j: str = "index_j",
@@ -228,54 +294,70 @@ def associate_raster(
 
     N.B. This will pass through no data values from the raster (no filtering).
 
-    Args:
-        df: Table of features, each with cell indices
-            to look up raster pixel. Indices must be stored under columns with
-            names referenced by index_i and index_j.
-        fname: Filename of raster file to read data from
-    Returns:
-        pd.Series: Series of raster values, with same row indexing as df.
+    Parameters
+    ----------
+    splits: pandas.DataFrame
+        Table of features, each with cell indices
+        to look up raster pixel. Indices must be stored under columns with
+        names referenced by index_i and index_j.
+    data:  numpy.ndarray
+        Raster data (2D array)
+    index_i: str
+        Column name for i-indices
+    index_j: str
+        Column name for j-indices
+
+    Returns
+    -------
+    pd.Series
+        Series of raster values, with same row indexing as df.
     """
     # 2D numpy indexing is j, i (i.e. row, column)
     with_data = pandas.Series(
-        index=features.index, data=data[features[index_j], features[index_i]]
+        index=splits.index, data=data[splits[index_j], splits[index_i]]
     )
     # set NaN for out-of-bounds
-    with_data[
-        (features[index_i] == -1) | (features[index_j] == -1)
-    ] = numpy.nan
+    with_data[(splits[index_i] == -1) | (splits[index_j] == -1)] = numpy.nan
     return with_data
 
 
 def apply_indices(
     features: geopandas.GeoDataFrame,
-    transform: Transform,
+    grid: GridDefinition,
     index_i="index_i",
     index_j="index_j",
 ) -> geopandas.GeoDataFrame:
     def f(geom, *args, **kwargs):
-        return get_indices(geom, transform, index_i, index_j)
+        return get_indices(geom, grid, index_i, index_j)
 
     indices = features.geometry.apply(f, result_type="expand")
     return pandas.concat([features, indices], axis="columns")
 
 
 def get_indices(
-    geom, t: Transform, index_i="index_i", index_j="index_j"
+    geom, grid: GridDefinition, index_i="index_i", index_j="index_j"
 ) -> pandas.Series:
     """Given a geometry, find the cell index (i, j) of its midpoint
-    for the enclosing raster transform.
+    for the enclosing grid.
 
     N.B. There is no checking whether a geometry spans more than one cell.
     """
-    i, j = get_cell_indices(geom, t.height, t.width, t.transform)
+    i, j = get_cell_indices(geom, grid.height, grid.width, grid.transform)
 
     # Raise error if cell index would be out of bounds
     # assert 0 <= i < t.width
     # assert 0 <= j < t.height
 
     # Or - special value (-1,-1) if cell would be out of bounds
-    if i >= t.width or i < 0 or j >= t.height or j < 0:
+    if i >= grid.width or i < 0 or j >= grid.height or j < 0:
         i = -1
         j = -1
     return pandas.Series(index=(index_i, index_j), data=[i, j])
+
+
+def idx_to_ij(idx: int, width: int, height: int) -> Tuple[int]:
+    return numpy.unravel_index(idx, (height, width))
+
+
+def ij_to_idx(ij: Tuple[int], width: int, height: int):
+    return numpy.ravel_multi_index(ij, (height, width))

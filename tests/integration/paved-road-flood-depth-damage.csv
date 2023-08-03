@@ -1,0 +1,8 @@
+# Unpaved road flood depth/damage curve
+inundation_depth_(m)	road_unpaved	unrelated
+0	0	a
+1	0.28	b
+2	0.46	c
+3	0.64	d
+4	0.82	e
+5	1	f

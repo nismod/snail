@@ -1,6 +1,6 @@
 [project]
 name="nismod-snail"
-version="0.3.2"
+version="0.4.0"
 license={file = "LICENSE"}
 description="The spatial networks impact assessment library"
 readme="README.md"
@@ -24,22 +24,37 @@ keywords=[]
 requires-python=">=3.8"
 dependencies=[
     "geopandas",
+    "matplotlib",
+    "openpyxl",
+    "pandera",
     "pyarrow",
+    "pyogrio",
     "python-igraph",
     "rasterio",
     "shapely",
+    "scipy"
 ]
 
 [project.optional-dependencies]
 dev=[
     "affine",
     "black",
+    "hilbertcurve",
     "nbstripout",
     "numpy",
     "pytest-cov",
     "pytest",
 ]
 docs=["sphinx", "m2r2"]
+tutorials=[
+    "contextily",
+    "irv_autopkg_client",
+    "jupyter",
+    "networkx",
+    "seaborn",
+    "snkit",
+    "tqdm",
+]
 
 [project.urls]
 Homepage = "https://github.com/nismod/snail"

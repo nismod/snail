@@ -6,49 +6,60 @@ import numpy
 import pandas
 import rasterio
 
-from snail.intersection import Transform, associate_raster
+from snail.intersection import GridDefinition, get_raster_values_for_splits
 
 
-def associate_raster_files(features, rasters):
+def associate_raster_files(splits, rasters):
+    """Read values from a list of raster files for a set of indexed split geometries
+
+    Parameters
+    ----------
+    splits: pandas.DataFrame
+        split geometries with raster indices in columns named "i_{grid_id}", "j_{grid_id}"
+        for each grid_id in `rasters`
+
+    rasters: pandas.DataFrame
+        table of raster metadata with columns: key, grid_id, path, bands
+
+    Returns
+    -------
+    pandas.DataFrame
+        split geometries with raster data values at indexed locations
+    """
     # to prevent a fragmented dataframe (and a memory explosion), add series to a dict
     # and then concat afterwards -- do not append to an existing dataframe
     raster_data: dict[str, pandas.Series] = {}
 
     # associate values
-    for raster in rasters.itertuples():
+    for raster, band_number, band_data in read_rasters(rasters):
         logging.info(
-            "Associating values from raster %s transform %s",
+            "Associating values from raster %s grid %s band %s",
             raster.key,
-            raster.transform_id,
+            raster.grid_id,
+            band_number,
         )
-        for band_number in raster.bands:
-            raster_data[raster.key] = associate_raster_file(
-                features,
-                raster.path,
-                f"i_{raster.transform_id}",
-                f"j_{raster.transform_id}",
-                band_number,
-            )
+        raster_data[raster.key] = get_raster_values_for_splits(
+            splits,
+            band_data,
+            f"i_{raster.grid_id}",
+            f"j_{raster.grid_id}",
+        )
 
     raster_data = pandas.DataFrame(raster_data)
-    features = pandas.concat([features, raster_data], axis="columns")
+    splits = pandas.concat([splits, raster_data], axis="columns")
 
-    return features
-
-
-def associate_raster_file(
-    df: pandas.DataFrame,
-    fname: str,
-    index_i: str = "index_i",
-    index_j: str = "index_j",
-    band_number: int = 1,
-) -> pandas.Series:
-    band_data = read_band_data(fname, band_number)
-    raster_values = associate_raster(df, band_data, index_i, index_j)
-    return raster_values
+    return splits
 
 
-def read_band_data(
+def read_rasters(rasters):
+    for raster in rasters.itertuples():
+        for band_number in raster.bands:
+            yield raster, band_number, read_raster_band_data(
+                raster.path, band_number
+            )
+
+
+def read_raster_band_data(
     fname: str,
     band_number: int = 1,
 ) -> numpy.ndarray:
@@ -59,50 +70,50 @@ def read_band_data(
 
 def extend_rasters_metadata(
     rasters: pandas.DataFrame,
-) -> Tuple[pandas.DataFrame, List[Transform]]:
-    transforms = []
-    transform_ids = []
+) -> Tuple[pandas.DataFrame, List[GridDefinition]]:
+    grids = []
+    grid_ids = []
     raster_bands = []
 
     for raster in rasters.itertuples():
         logging.info("Reading metadata from raster %s", raster.path)
-        transform, bands = read_raster_metadata(raster.path)
+        grid, bands = read_raster_metadata(raster.path)
 
         # add transform to list if not present
-        if transform not in transforms:
-            transforms.append(transform)
+        if grid not in grids:
+            grids.append(grid)
 
         # record raster/transform details
-        transform_id = transforms.index(transform)
-        transform_ids.append(transform_id)
+        grid_id = grids.index(grid)
+        grid_ids.append(grid_id)
         raster_bands.append(bands)
 
-    rasters["transform_id"] = transform_ids
+    rasters["grid_id"] = grid_ids
     if "bands" not in rasters.columns:
         rasters["bands"] = raster_bands
 
-    return rasters, transforms
+    return rasters, grids
 
 
-def read_raster_metadata(path) -> Tuple[Transform, Tuple[int]]:
+def read_raster_metadata(path) -> Tuple[GridDefinition, Tuple[int]]:
     with rasterio.open(path) as dataset:
-        crs = dataset.crs
-        width = dataset.width
-        height = dataset.height
-        affine_transform = tuple(dataset.transform)[
-            :6
-        ]  # trim to 6 - we expect the first two rows of 3x3 matrix
         bands = dataset.indexes
-    transform = Transform(crs, width, height, affine_transform)
-    return transform, bands
+        grid = GridDefinition.from_rasterio_dataset(dataset)
+    return grid, bands
 
 
 def read_features(path, layer=None):
     if path.suffix in (".parquet", ".geoparquet"):
         features = geopandas.read_parquet(path)
     else:
+        try:
+            import pyogrio
+
+            engine = "pyogrio"
+        except ImportError:
+            engine = "fiona"
         if layer:
-            features = geopandas.read_file(path, layer=layer)
+            features = geopandas.read_file(path, layer=layer, engine=engine)
         else:
-            features = geopandas.read_file(path)
+            features = geopandas.read_file(path, engine=engine)
     return features
