@@ -1,6 +1,6 @@
 [project]
 name="nismod-snail"
-version="0.4.0"
+version="0.4.1"
 license={file = "LICENSE"}
 description="The spatial networks impact assessment library"
 readme="README.md"
