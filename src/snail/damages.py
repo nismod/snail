@@ -94,7 +94,7 @@ class PiecewiseLinearDamageCurve(DamageCurve):
                 damage_col: "damage",
             }
         )
-        return PiecewiseLinearDamageCurve(curve_data)
+        return cls(curve_data)
 
     @classmethod
     def from_excel(
@@ -142,7 +142,47 @@ class PiecewiseLinearDamageCurve(DamageCurve):
                 damage_col: "damage",
             }
         )
-        return PiecewiseLinearDamageCurve(curve_data)
+        return cls(curve_data)
+
+    @classmethod
+    def interpolate(
+        cls,
+        a,
+        b,
+        factor: float,
+    ):
+        """Interpolate damage values between two curves
+
+        ```
+        new_curve_damage = a_damage + ((b_damage - a_damage) * factor)
+        ```
+
+        Parameters
+        ----------
+        a: PiecewiseLinearDamageCurve
+        b: PiecewiseLinearDamageCurve
+        factor: float
+            Interpolation factor, used to calculate the new curve
+
+        Returns
+        -------
+        PiecewiseLinearDamageCurve
+        """
+        # find the sorted, unique values of intensity used by both curves
+        intensity = numpy.unique(numpy.concatenate((a.intensity, b.intensity)))
+        # calculate the damage fraction at each intensity
+        a_damage = a.damage_fraction(intensity)
+        b_damage = b.damage_fraction(intensity)
+        # interpolate at each point
+        damage = a_damage + ((b_damage - a_damage) * factor)
+        return cls(
+            pandas.DataFrame(
+                {
+                    "intensity": intensity,
+                    "damage": damage,
+                }
+            )
+        )
 
     def damage_fraction(self, exposure: numpy.array) -> numpy.array:
         """Evaluate damage fraction for exposure to a given hazard intensity"""

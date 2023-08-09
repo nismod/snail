@@ -192,3 +192,40 @@ def test_linear_curve_scale_x_down(curve):
 
     expected = numpy.array([0, 1, 2, 3])
     assert_allclose(decreased.intensity, expected)
+
+
+def test_interpolation(curve):
+    curve_050 = curve.scale_y(0.5)
+    curve_100 = curve
+    expected = curve.scale_y(0.75)
+    actual = PiecewiseLinearDamageCurve.interpolate(curve_050, curve_100, 0.5)
+    assert actual == expected
+
+
+def test_interpolation_unaligned():
+    a = PiecewiseLinearDamageCurve(
+        pandas.DataFrame(
+            {
+                "intensity": [0.0, 10.0],
+                "damage": [0.0, 1.0],
+            }
+        )
+    )
+    b = PiecewiseLinearDamageCurve(
+        pandas.DataFrame(
+            {
+                "intensity": [0.0, 5.0, 10.0],
+                "damage": [0.0, 0.1, 0.8],
+            }
+        )
+    )
+    expected = PiecewiseLinearDamageCurve(
+        pandas.DataFrame(
+            {
+                "intensity": [0.0, 5.0, 10.0],
+                "damage": [0.0, 0.3, 0.9],
+            }
+        )
+    )
+    actual = PiecewiseLinearDamageCurve.interpolate(a, b, 0.5)
+    assert actual == expected
