@@ -208,13 +208,13 @@ def split_polygons(
 def generate_grid_boxes(grid):
     a, b, c, d, e, f = grid.transform
     idx = numpy.arange(grid.width * grid.height)
-    i, j = numpy.unravel_index(idx, (grid.height, grid.width))
-    ulx = i * a + j * b + c
-    uly = i * d + j * e + f
-    lrx = (i + 1) * a + (j + 1) * b + c
-    lry = (i + 1) * d + (j + 1) * e + f
+    i, j = numpy.unravel_index(idx, (grid.width, grid.height))
+    xmin = i * a + j * b + c
+    ymax = i * d + j * e + f
+    xmax = (i + 1) * a + (j + 1) * b + c
+    ymin = (i + 1) * d + (j + 1) * e + f
     return geopandas.GeoDataFrame(
-        data={}, geometry=box(ulx, lry, lrx, uly), crs=grid.crs
+        data={}, geometry=box(xmin, ymin, xmax, ymax), crs=grid.crs
     )
 
 
@@ -327,6 +327,14 @@ def apply_indices(
     index_i="index_i",
     index_j="index_j",
 ) -> geopandas.GeoDataFrame:
+    if features.empty:
+        logging.info("Returning empty dataframe")
+        # return an empty dataframe with the expected columns
+        empty_df = features.copy()
+        empty_df[index_i] = numpy.array([], dtype="int64")
+        empty_df[index_j] = numpy.array([], dtype="int64")
+        return empty_df
+
     def f(geom, *args, **kwargs):
         return get_indices(geom, grid, index_i, index_j)
 
