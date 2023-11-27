@@ -192,14 +192,14 @@ def split(args):
     geom_type = _sample_geom_type(features)
 
     if "Point" in geom_type:
-        logging.info(f"Preparing points")
+        logging.info("Preparing points")
         prepared = prepare_points(features)
-        logging.info(f"Splitting points")
+        logging.info("Splitting points")
         splits = split_features_for_rasters(prepared, [grid], split_points)
     elif "LineString" in geom_type:
-        logging.info(f"Preparing linestrings")
+        logging.info("Preparing linestrings")
         prepared = prepare_linestrings(features)
-        logging.info(f"Splitting linestrings")
+        logging.info("Splitting linestrings")
         splits = split_features_for_rasters(
             prepared, [grid], split_linestrings
         )
@@ -219,7 +219,7 @@ def split(args):
     else:
         raise ValueError("Could not process vector data of type %s", geom_type)
 
-    logging.info(f"Applying indices")
+    logging.info("Applying indices")
     splits = apply_indices(splits, grid)
 
     if args.attribute and args.raster:
