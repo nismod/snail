@@ -18,6 +18,7 @@ from snail.intersection import (
     split_linestrings,
     split_polygons,
     split_points,
+    split_polygons_experimental,
 )
 from snail.io import (
     read_raster_band_data,
@@ -32,6 +33,7 @@ def snail(args=None):
     """snail command"""
     parser = argparse.ArgumentParser(prog="snail")
     parser.add_argument("--verbose", "-v", action="count", default=0)
+    parser.add_argument("-x", "--experimental", action="store_true")
     subparsers = parser.add_subparsers(help="Run a command")
 
     parser_split = subparsers.add_parser(
@@ -202,10 +204,18 @@ def split(args):
             prepared, [grid], split_linestrings
         )
     elif "Polygon" in geom_type:
-        logging.info(f"Preparing polygons")
+        logging.info("Preparing polygons")
         prepared = prepare_polygons(features)
-        logging.info(f"Splitting polygons")
-        splits = split_features_for_rasters(prepared, [grid], split_polygons)
+        if args.experimental:
+            logging.info("Splitting polygons (experimental)")
+            splits = split_features_for_rasters(
+                prepared, [grid], split_polygons_experimental
+            )
+        else:
+            logging.info("Splitting polygons")
+            splits = split_features_for_rasters(
+                prepared, [grid], split_polygons
+            )
     else:
         raise ValueError("Could not process vector data of type %s", geom_type)
 
@@ -280,10 +290,10 @@ def process(args):
         )
 
     for vector_layer in vector_layers.itertuples():
-        _process_layer(vector_layer, transforms, rasters)
+        _process_layer(vector_layer, transforms, rasters, args.experimental)
 
 
-def _process_layer(vector_layer, transforms, rasters):
+def _process_layer(vector_layer, transforms, rasters, experimental=False):
     vector_path = Path(vector_layer.path)
     layer = getattr(vector_layer, "layer", None)
     logging.info("Processing %s", vector_path.name)
@@ -304,9 +314,15 @@ def _process_layer(vector_layer, transforms, rasters):
         with_data = associate_raster_files(split, rasters)
     elif "Polygon" in geom_type:
         prepared = prepare_polygons(features)
-        split = split_features_for_rasters(
-            prepared, transforms, split_polygons
-        )
+        if experimental:
+            logging.info("Split polygons (experimental)")
+            split = split_features_for_rasters(
+                prepared, transforms, split_polygons_experimental
+            )
+        else:
+            split = split_features_for_rasters(
+                prepared, transforms, split_polygons
+            )
         with_data = associate_raster_files(split, rasters)
     else:
         raise ValueError(f"Could not process vector data of type {geom_type}")
