@@ -1,17 +1,17 @@
 [project]
-name="nismod-snail"
-version="0.4.1"
-license={file = "LICENSE"}
-description="The spatial networks impact assessment library"
-readme="README.md"
-authors=[
-    {name="Tom Russell", email="tomalrussell@gmail.com"},
-    {name="Thibault Lestang"},
-    {name="Raghav Pant"},
-    {name="Lena Fuldauer"},
+name = "nismod-snail"
+version = "0.5.0"
+license = { file = "LICENSE" }
+description = "The spatial networks impact assessment library"
+readme = "README.md"
+authors = [
+    { name = "Tom Russell", email = "tomalrussell@gmail.com" },
+    { name = "Thibault Lestang" },
+    { name = "Raghav Pant" },
+    { name = "Lena Fuldauer" },
 ]
-maintainers=[{name="Tom Russell", email="tomalrussell@gmail.com"}]
-classifiers=[
+maintainers = [{ name = "Tom Russell", email = "tomalrussell@gmail.com" }]
+classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
@@ -20,9 +20,9 @@ classifiers=[
     "Topic :: Scientific/Engineering :: GIS",
     "Topic :: Utilities"
 ]
-keywords=[]
-requires-python=">=3.8"
-dependencies=[
+keywords = []
+requires-python = ">=3.8"
+dependencies = [
     "geopandas",
     "matplotlib",
     "openpyxl",
@@ -36,7 +36,7 @@ dependencies=[
 ]
 
 [project.optional-dependencies]
-dev=[
+dev = [
     "affine",
     "black",
     "hilbertcurve",
@@ -45,8 +45,8 @@ dev=[
     "pytest-cov",
     "pytest",
 ]
-docs=["sphinx", "m2r2"]
-tutorials=[
+docs = ["sphinx", "m2r2"]
+tutorials = [
     "contextily",
     "irv_autopkg_client",
     "jupyter",
@@ -62,7 +62,7 @@ Documentation = "https://nismod.github.io/snail/"
 Repository = "https://github.com/nismod/snail.git"
 
 [project.scripts]
-snail="snail.cli:snail"
+snail = "snail.cli:snail"
 
 [build-system]
 requires = ["scikit-build-core>=0.3.3", "pybind11"]
