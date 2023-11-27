@@ -1,3 +1,4 @@
+import importlib.util
 import logging
 from typing import List, Tuple
 
@@ -106,12 +107,11 @@ def read_features(path, layer=None):
     if path.suffix in (".parquet", ".geoparquet"):
         features = geopandas.read_parquet(path)
     else:
-        try:
-            import pyogrio
-
+        if importlib.util.find_spec("pyogrio"):
             engine = "pyogrio"
-        except ImportError:
+        else:
             engine = "fiona"
+
         if layer:
             features = geopandas.read_file(path, layer=layer, engine=engine)
         else:

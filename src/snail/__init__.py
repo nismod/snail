@@ -12,7 +12,7 @@ try:
     from importlib.metadata import version
 
     __version__ = version("nismod-snail")
-except:
+except Exception:
     __version__ = "unknown"
 
 

@@ -12,7 +12,7 @@ from shapely import box
 from shapely.geometry import mapping, shape
 from shapely.ops import linemerge, polygonize
 
-from snail.core.intersections import (
+from snail.core.intersections import (  # type: ignore
     get_cell_indices,
     split_linestring,
     split_polygon,
@@ -96,7 +96,7 @@ class GridDefinition:
             crs=crs,
             width=math.ceil((xmax - xmin) / cell_width),
             height=math.ceil((ymax - ymin) / cell_height),
-            transform=(cell_width, 0, xmin, 0, cell_height, ymin),
+            transform=(cell_width, 0.0, xmin, 0.0, cell_height, ymin),
         )
 
 

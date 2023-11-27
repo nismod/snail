@@ -177,11 +177,11 @@ class TestSnailIntersections:
         # Ideally we'd like to use geopandas.assert_geodataframe_equal to
         # to compare both expected and actual geodfs, but this function offers
         # little control over tolerance. When using option "check_less_precise",
-        # it used GeoSeries.geom_almost_equals under the hood, which has an kwarg
-        # "decimal". But assert_geodataframe_equal does not recognise kwarg "decimal".
+        # it uses GeoSeries.geom_equals_exact under the hood, which has an kwarg
+        # "tolerance". But assert_geodataframe_equal does not recognise kwarg "tolerance".
         assert (
             actual["geometry"]
-            .geom_almost_equals(expected_gdf["geometry"], decimal=3)
+            .geom_equals_exact(expected_gdf["geometry"], tolerance=1e-3)
             .values.all()
         )
         assert_array_equal(actual["col1"].values, expected_gdf["col1"].values)
