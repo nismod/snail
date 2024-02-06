@@ -12,7 +12,7 @@
 #include "transform.hpp"
 #include "operations.hpp"
 
-#define TOL 0.001
+#define TOL 0.00001
 
 using linestr = std::vector<snail::geometry::Coord>;
 
@@ -46,8 +46,8 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   Config case1;
   case1.linestring = {{0.5, 0.5}, {0.75, 0.5}, {1.5, 0.5}, {1.5, 1.5}};
   case1.expected_splits = {{{0.5, 0.5}, {0.75, 0.5}, {1., 0.5}},
-			   {{1., 0.5}, {1.5, 0.5}, {1.5, 1.}},
-			   {{1.5, 1.}, {1.5, 1.5}}};
+                           {{1., 0.5}, {1.5, 0.5}, {1.5, 1.}},
+                           {{1.5, 1.}, {1.5, 1.5}}};
 
   // Linestring points are marked by o:
   // Intersection points are marked by (o):
@@ -72,8 +72,8 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   Config case2;
   case2.linestring = {{0.5, 0.5}, {0.75, 0.5}, {1.5, 1.5}};
   case2.expected_splits = {{{0.5, 0.5}, {0.75, 0.5}, {1., 0.8333}},
-			   {{1., 0.8333}, {1.125, 1.}},
-			   {{1.125, 1.}, {1.5, 1.5}}};
+                           {{1., 0.8333}, {1.125, 1.}},
+                           {{1.125, 1.}, {1.5, 1.5}}};
 
   // Linestring points are marked by o:
   // Intersection points are marked by (o):
@@ -97,8 +97,7 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   // (0,0)         (1,0)          (2,0)
   Config case3;
   case3.linestring = {{1.0, 0.5}, {1.5, 1.0}, {1.5, 2.0}};
-  case3.expected_splits = {{{1.0, 0.5}, {1.5, 1.0}},
-			   {{1.5, 1.0}, {1.5, 2.0}}};
+  case3.expected_splits = {{{1.0, 0.5}, {1.5, 1.0}}, {{1.5, 1.0}, {1.5, 2.0}}};
 
   // Linestring points are marked by o:
   // Intersection points are marked by (o):
@@ -122,8 +121,7 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   // (0,0)         (1,0)          (2,0)
   Config case4;
   case4.linestring = {{0.5, 0.5}, {1.5, 1.5}};
-  case4.expected_splits = {{{0.5, 0.5}, {1.0, 1.0}},
-			   {{1.0, 1.0}, {1.5, 1.5}}};
+  case4.expected_splits = {{{0.5, 0.5}, {1.0, 1.0}}, {{1.0, 1.0}, {1.5, 1.5}}};
 
   // vertical along gridline
   Config case5;
@@ -150,14 +148,10 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 
   // V shape with floating point error
   Config case8;
-  case8.linestring = {
-    {0.5,1.1}, {1.5, 0.9}, {2.5, 1.1}
-  };
-  case8.expected_splits = {
-    {{0.5,1.1}, {1.,1.}},
-    {{1.,1.}, {1.5,0.9}, {2.,1.}},
-    {{2.,1.}, {2.5,1.1}}
-  };
+  case8.linestring = {{0.5, 1.1}, {1.5, 0.9}, {2.5, 1.1}};
+  case8.expected_splits = {{{0.5, 1.1}, {1., 1.}},
+                           {{1., 1.}, {1.5, 0.9}, {2., 1.}},
+                           {{2., 1.}, {2.5, 1.1}}};
 
   // Linestring points are marked by o:
   // Intersection points are marked by (o):
@@ -184,18 +178,10 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   case9.expected_splits = {{{0, 0}, {0.5, 0.5}}};
 
   // TODO case7, case8
-  auto test_data = GENERATE_COPY(
-    case1,
-    case2,
-    case3,
-    case4,
-    case5,
-    case6,
-    // case7,
-    // case8,
-    case9
-  );
-
+  auto test_data = GENERATE_COPY(case1, case2, case3, case4, case5, case6,
+                                 // case7,
+                                 // case8,
+                                 case9);
 
   std::vector<linestr> expected_splits = test_data.expected_splits;
 
@@ -236,7 +222,6 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
     }
   }
 }
-
 
 TEST_CASE("Split with different grid", "[decomposition]") {
   Config case1;
@@ -293,9 +278,9 @@ struct SplitGridConfig {
   std::vector<linestr> expected_splits;
   int min_level = 0;
   int max_level = 2;
-  snail::operations::Direction direction = snail::operations::Direction::horizontal;
+  snail::operations::Direction direction =
+      snail::operations::Direction::horizontal;
 };
-
 
 TEST_CASE("Exterior ring splits to gridlines", "[decomposition]") {
   // Linestring points are marked by o:
@@ -320,20 +305,16 @@ TEST_CASE("Exterior ring splits to gridlines", "[decomposition]") {
   // +---------------+--------------+
   // (0,0)         (1,0)          (2,0)
   SplitGridConfig case1;
-  case1.exterior_crossings = {
-    {0.5, 0.5}, {1., 0.5}, {1.5, 1.}, {1., 1.}
-  };
+  case1.exterior_crossings = {{0.5, 0.5}, {1., 0.5}, {1.5, 1.}, {1., 1.}};
   case1.expected_splits = {
       {{1., 1.}, {1.5, 1.}},
   };
   case1.direction = snail::operations::Direction::horizontal;
 
   SplitGridConfig case2;
-  case2.exterior_crossings = {
-    {0.5, 0.5}, {1., 0.5}, {1.5, 1.}, {1., 1.}
-  };
+  case2.exterior_crossings = {{0.5, 0.5}, {1., 0.5}, {1.5, 1.}, {1., 1.}};
   case2.expected_splits = {
-    {{1., 0.5}, {1., 1.}},
+      {{1., 0.5}, {1., 1.}},
   };
   case2.direction = snail::operations::Direction::vertical;
 
@@ -373,14 +354,11 @@ TEST_CASE("Exterior ring splits to gridlines", "[decomposition]") {
 
   // Kite shape
   SplitGridConfig case4;
-  case4.exterior_crossings = {
-    {0.5, 1.25}, {1.,1.}, {1.5, 0.75}, {2.,1.}, {2.5, 1.25},
-    {2.25,1.}, {2.,0.75}, {1.5, 0.25}, {1.,0.75}, {0.75, 1.}
-  };
-  case4.expected_splits = {
-    {{0.75, 1.0}, {1.0, 1.0}},
-    {{2.0, 1.0}, {2.25, 1.0}}
-  };
+  case4.exterior_crossings = {{0.5, 1.25}, {1., 1.},   {1.5, 0.75}, {2., 1.},
+                              {2.5, 1.25}, {2.25, 1.}, {2., 0.75},  {1.5, 0.25},
+                              {1., 0.75},  {0.75, 1.}};
+  case4.expected_splits = {{{0.75, 1.0}, {1.0, 1.0}},
+                           {{2.0, 1.0}, {2.25, 1.0}}};
   case4.direction = snail::operations::Direction::horizontal;
 
   auto test_data = GENERATE_COPY(case1, case2, case3, case4);
@@ -391,12 +369,8 @@ TEST_CASE("Exterior ring splits to gridlines", "[decomposition]") {
   snail::grid::Grid grid(2, 2, snail::transform::Affine());
 
   std::vector<linestr> splits = snail::operations::splitAlongGridlines(
-    test_data.exterior_crossings,
-    test_data.min_level,
-    test_data.max_level,
-    test_data.direction,
-    grid
-  );
+      test_data.exterior_crossings, test_data.min_level, test_data.max_level,
+      test_data.direction, grid);
   // Test that we're getting the expected number of splits
   REQUIRE(splits.size() == expected_splits.size());
   // Test that each one of the splits have the expected size
@@ -415,29 +389,26 @@ TEST_CASE("Exterior ring splits to gridlines", "[decomposition]") {
   }
 }
 
-TEST_CASE("Exterior ring to gridlines with fractional grid", "[decomposition]") {
+TEST_CASE("Exterior ring to gridlines with fractional grid",
+          "[decomposition]") {
   // Using Affine transform with fractional cell size
   snail::grid::Grid grid(
-      2, 2,
-      snail::transform::Affine(0.5, 0.0, 0.0, 0.0, 0.5, 0.0));
+      2, 2, snail::transform::Affine(0.5, 0.0, 0.0, 0.0, 0.5, 0.0));
 
   std::vector<linestr> splits = snail::operations::splitAlongGridlines(
-    {
-      {.3,.3},{.3,.5},{.3,.8},
-      {.5,.8},{.8,.8},
-      {.8,.5},{.8,.3},
-      {.5,.3}
-    },
-    0, 2,
-    snail::operations::Direction::horizontal,
-    grid
-  );
-  std::vector<linestr> expected_splits = {
-    {
-      {{.3,.5},{.5,.5}},
-      {{.5,.5},{.8,.5}},
-    }
-  };
+      {{.3, .3},
+       {.3, .5},
+       {.3, .8},
+       {.5, .8},
+       {.8, .8},
+       {.8, .5},
+       {.8, .3},
+       {.5, .3}},
+      0, 2, snail::operations::Direction::horizontal, grid);
+  std::vector<linestr> expected_splits = {{
+      {{.3, .5}, {.5, .5}},
+      {{.5, .5}, {.8, .5}},
+  }};
   // Test that we're getting the expected number of splits
   REQUIRE(splits.size() == expected_splits.size());
   // Test that each one of the splits have the expected size
@@ -454,4 +425,102 @@ TEST_CASE("Exterior ring to gridlines with fractional grid", "[decomposition]") 
       REQUIRE(std::abs(point.y - expected_point.y) < TOL);
     }
   }
+}
+
+TEST_CASE("Split polygon", "[decomposition]") {
+  linestr exterior = {
+      {-0.0062485600499826, 51.61041647955},
+      {-0.0062485600499826, 51.602083146149994},
+      {0.0020847733500204, 51.602083146149994},
+      {-0.0062485600499826, 51.61041647955},
+  };
+  snail::geometry::LineString line(exterior);
+
+  std::vector<linestr> expected_splits = {
+      {
+          {-0.0062485600499826, 51.61041647955},
+          {-0.0062485600499826, 51.602083146149994},
+          {0.0, 51.602083146149994},
+      },
+      {
+          {0.0, 51.602083146149994},
+          {0.0020847733500204, 51.602083146149994},
+          {0.0, 51.60416791950},
+      },
+      {
+          {0.0, 51.60416791950},
+          {-0.0062485600499826, 51.61041647955},
+      }};
+
+  double minx = -0.0062485600499826;
+  double maxx = 0.0020847733500204;
+  double miny = 51.602083146149994;
+  double maxy = 51.61041647955;
+
+  int nrows = 36082;
+  int ncols = 18000;
+  snail::transform::Affine transform(1000.0, 0.0, -18041000.0, 0.0, -1000.0,
+                                     9000000.0);
+  snail::grid::Grid grid(ncols, nrows, transform);
+
+  snail::geometry::Coord ll =
+      grid.world_to_grid * snail::geometry::Coord(minx, miny);
+  snail::geometry::Coord ur =
+      grid.world_to_grid * snail::geometry::Coord(maxx, maxy);
+
+  std::vector<linestr> splits =
+      snail::operations::findIntersectionsLineString(line, grid);
+
+  // DEBUG
+  // /*
+  std::cout.precision(18);
+  for (int i = 0; i < splits.size(); i++) {
+    std::cout << "Split" << i << "\n";
+    for (int j = 0; j < splits[i].size(); j++) {
+      snail::geometry::Coord point = splits[i][j];
+      std::cout << "  " << point.x << "," << point.y << "\n";
+    }
+  }
+  // */
+
+  // Test that we're getting the expected number of splits
+  REQUIRE(splits.size() == expected_splits.size());
+  // Test that each one of the splits have the expected size
+  for (int i = 0; i < splits.size(); i++) {
+    REQUIRE(splits[i].size() == expected_splits[i].size());
+  }
+  // Test that each one of the splits are made of the expected points
+  for (int i = 0; i < splits.size(); i++) {
+    for (int j = 0; j < splits[i].size(); j++) {
+      snail::geometry::Coord point = splits[i][j];
+      snail::geometry::Coord expected_point = expected_splits[i][j];
+
+      // std::cout << "Actual" << i << "\n";
+      // std::cout << "  " << point.x << "," << point.y << "\n";
+      // std::cout << "Expected" << i << "\n";
+      // std::cout << "  " << expected_point.x << "," << expected_point.y <<
+      // "\n";
+      REQUIRE(std::abs(point.x - expected_point.x) < TOL);
+      REQUIRE(std::abs(point.y - expected_point.y) < TOL);
+    }
+  }
+
+  //
+  // Step 2
+  //
+  std::vector<snail::geometry::Coord> exterior_with_crossings;
+  for (auto split : splits) {
+    exterior_with_crossings.insert(exterior_with_crossings.end(), split.begin(),
+                                   split.end());
+  }
+
+  std::vector<linestr> horiz_splits = snail::operations::splitAlongGridlines(
+      exterior_with_crossings, floor(std::min(ll.y, ur.y)),
+      ceil(std::max(ll.y, ur.y)) + 1, snail::operations::Direction::horizontal,
+      grid);
+
+  std::vector<linestr> vert_splits = snail::operations::splitAlongGridlines(
+      exterior_with_crossings, floor(std::min(ll.x, ur.x)),
+      ceil(std::max(ll.x, ur.x)) + 1, snail::operations::Direction::vertical,
+      grid);
 }
