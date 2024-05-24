@@ -29,14 +29,14 @@ struct Grid {
   std::vector<double> data;
 
   Grid()
-      : ncols{0}, nrows{0},
-        grid_to_world{Affine()}, data{std::vector<double>()} {
+      : ncols{0}, nrows{0}, grid_to_world{Affine()},
+        data{std::vector<double>()} {
     world_to_grid = ~grid_to_world;
   };
 
   Grid(size_t ncols, size_t nrows, Affine grid_to_world)
-      : ncols{ncols}, nrows{nrows},
-        grid_to_world{grid_to_world}, data{std::vector<double>()} {
+      : ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world},
+        data{std::vector<double>()} {
     world_to_grid = ~grid_to_world;
   };
 
@@ -125,8 +125,6 @@ struct Grid {
     // Consider each possible crossing point along horizontal line
     if (rise == 0) {
       while (pE.length() <= length) {
-        // std::cout << "  pE(" << pE.x << "," << pE.y << ") length "  <<
-        // pE.length() << "\n";
 
         // Add the closest crossing point
         crossings.push_back(line.start + pE);
