@@ -155,7 +155,7 @@ struct Grid {
         // graticule crossings.  If both crossing points overlap then we
         // update both and it doesn't matter which one we add to the
         // vector of crossings.
-        if (pE == pN) {
+        if (pE.length() == pN.length()) {
           crossings.push_back(line.start + pN);
           // Update the distance to the next graticule.
           dE += step_x;
