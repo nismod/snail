@@ -88,19 +88,33 @@ def test_get_cell_indices(test_linestring, expected):
     assert cell_indices == expected
 
 
-@pytest.mark.xfail
-def test_split_polygons():
+def test_split_polygons_issue_53():
+    # reduced test case
+    polygon = Polygon(
+        (
+            [-0.1, 2],
+            [-0.1, 1],
+            [0.1, 1],
+        )
+    )
+
+    snail.core.intersections.split_polygon(
+        polygon,
+        2,
+        2,
+        (10.0, 0.0, -100.0, 0.0, -10.0, 100.0),
+    )
+
     bad_poly = Polygon(
         (
             [-0.0062485600499826, 51.61041647955],
             [-0.0062485600499826, 51.602083146149994],
             [0.0020847733500204, 51.602083146149994],
-            # [0.0020847733500204, 51.61041647955],
-            # [-0.0062485600499826, 51.61041647955],
+            [0.0020847733500204, 51.61041647955],
+            [-0.0062485600499826, 51.61041647955],
         )
     )
 
-    # expect a RuntimeError: Expected even number of crossings on gridline.
     snail.core.intersections.split_polygon(
         bad_poly,
         36082,
