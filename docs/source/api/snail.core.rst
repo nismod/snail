@@ -5,14 +5,3 @@ snail.core package
    :members:
    :undoc-members:
    :show-inheritance:
-
-Submodules
-----------
-
-snail.core.intersections module
--------------------------------
-
-.. automodule:: snail.core.intersections
-   :members:
-   :undoc-members:
-   :show-inheritance:

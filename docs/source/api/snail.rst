@@ -25,10 +25,26 @@ snail.cli module
    :undoc-members:
    :show-inheritance:
 
+snail.damages module
+--------------------
+
+.. automodule:: snail.damages
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 snail.intersection module
 -------------------------
 
 .. automodule:: snail.intersection
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+snail.io module
+---------------
+
+.. automodule:: snail.io
    :members:
    :undoc-members:
    :show-inheritance:

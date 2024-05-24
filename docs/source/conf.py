@@ -28,6 +28,7 @@ else:
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
+
 # Extra styles, found in _static
 def setup(app):
     app.add_css_file("theme_tweaks.css")
@@ -37,13 +38,12 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.coverage",
     "sphinx.ext.viewcode",
-    "m2r2",
 ]
 templates_path = ["_templates"]
 exclude_patterns = []
 
 # The suffix(es) of source filenames.
-source_suffix = [".rst", ".md"]
+source_suffix = [".rst"]
 
 
 # -- Options for HTML output -------------------------------------------------
