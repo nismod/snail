@@ -33,7 +33,7 @@ struct Coord {
       : x(std::get<0>(xy)), y(std::get<1>(xy)) {}
 
   // Helper function to calculate the length of a Coord
-  inline double length(void) const { return sqrt(x * x + y * y); }
+  inline double length(void) const { return std::hypot(x, y); }
 };
 
 /// A templated 2D line representation
@@ -51,7 +51,7 @@ struct Line {
   inline double length(void) const {
     double dx = end.x - start.x;
     double dy = end.y - start.y;
-    return sqrt(dx * dx + dy * dy);
+    return std::hypot(dx, dy);
   }
   /// Calculate the bearing of a line.
   inline double bearing(void) const {
