@@ -61,13 +61,14 @@ findIntersectionsLineString(geometry::LineString linestring,
   return (allsplits);
 }
 
-bool isOnGridLine(geometry::Coord point, Direction direction, double level) {
+bool isOnGridLine(geometry::Coord point, Direction direction, double level,
+                  double cellSize) {
   switch (direction) {
   case Direction::horizontal:
-    return snail::utils::almost_equal(point.y, level, 2);
+    return snail::utils::almost_equal(point.y, level, cellSize);
     return (point.y == level);
   case Direction::vertical:
-    return snail::utils::almost_equal(point.x, level, 2);
+    return snail::utils::almost_equal(point.x, level, cellSize);
     return (point.x == level);
   default:
     return false;
@@ -123,6 +124,8 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
 
   std::vector<geometry::Coord> crossings_on_gridline;
   std::vector<linestr> gridline_splits;
+  double cell_size = std::max(grid.grid_to_world.a, grid.grid_to_world.e);
+
   for (int level = min_level; level <= max_level; level++) {
     // find level value in coordinates
     double level_value = gridCoordinate(level, direction, grid);
@@ -147,7 +150,7 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
                       : (curr + 1);
 
       // include if on the current line and prev/next are on opposite sides
-      if (isOnGridLine(*curr, direction, level_value) &&
+      if (isOnGridLine(*curr, direction, level_value, cell_size) &&
           crossesGridLine(*prev, *next, direction, level_value)) {
         crossings_on_gridline.push_back(*curr);
       }
@@ -167,7 +170,13 @@ std::vector<linestr> splitAlongGridlines(linestr exterior_crossings,
               });
 
     if (crossings_on_gridline.size() % 2 != 0) {
-      utils::Exception("Expected even number of crossings on gridline.");
+      std::ostringstream msg;
+      msg << "Expected even number of crossings on gridline.\n";
+      msg << "  Found crossings on gridline:\n";
+      for (auto c : crossings_on_gridline) {
+        msg << "    c(" << c.x << "," << c.y << ")\n";
+      }
+      utils::Exception(msg.str());
       break;
     }
 

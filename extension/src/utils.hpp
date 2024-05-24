@@ -38,13 +38,22 @@ private:
 /// https://en.cppreference.com/w/cpp/types/numeric_limits/epsilon
 template <class T>
 typename std::enable_if<!std::numeric_limits<T>::is_integer, bool>::type
-almost_equal(T x, T y, int ulp) {
+almost_equal(T x, T y, T reference_value) {
   // the machine epsilon has to be scaled to the magnitude of the values used
   // and multiplied by the desired precision in ULPs (units in the last place)
-  return std::fabs(x - y) <=
-             std::numeric_limits<T>::epsilon() * std::fabs(x + y) * ulp
-         // unless the result is subnormal
-         || std::fabs(x - y) < std::numeric_limits<T>::min();
+  // unless the result is subnormal
+  int ulp = 3; // magic three value for small number of units in the last place
+  auto abs_diff = std::fabs(x - y);
+  auto epsilon = std::numeric_limits<T>::epsilon();
+  // add a reference value for indicative scale, in case our x and y are
+  // unreasonably near zero
+  auto abs_total = (std::fabs(x) + std::fabs(y) + std::fabs(reference_value));
+  auto scaled_epsilon = epsilon * abs_total * T(ulp);
+
+  bool check_normal = abs_diff <= scaled_epsilon;
+  bool check_subnormal = abs_diff < std::numeric_limits<T>::min();
+
+  return check_normal || check_subnormal;
 }
 
 } // namespace utils
