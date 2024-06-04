@@ -29,7 +29,7 @@ dependencies = [
     "pandera",
     "pyarrow",
     "pyogrio",
-    "python-igraph",
+    "igraph",
     "rasterio",
     "shapely",
     "scipy"
