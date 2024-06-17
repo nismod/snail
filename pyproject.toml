@@ -45,7 +45,7 @@ dev = [
     "pytest-cov",
     "pytest",
 ]
-docs = ["sphinx","nbsphinx","sphinx_gallery.load_style"]
+docs = ["sphinx"]
 
 tutorials = [
     "contextily",
