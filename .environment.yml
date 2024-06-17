@@ -12,7 +12,7 @@ dependencies:
   - matplotlib
   - nbstripout
   - networkx
-  - numpy
+  - numpy=1.26.4
   - openpyxl
   - pandera
   - pip
