@@ -30,4 +30,4 @@ dependencies:
     - python-igraph
     - snkit
     - tqdm
-    # - -e . This structure of docs does not require reloading the the package itself. 
+    - -e . 
