@@ -41,7 +41,7 @@ dev = [
     "black",
     "hilbertcurve",
     "nbstripout",
-    "numpy",
+    "numpy<2.0.0",
     "pytest-cov",
     "pytest",
 ]
