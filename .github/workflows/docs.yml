@@ -33,7 +33,7 @@ jobs:
 
       - name: Install dependencies and build python module
         run: |
-          apt install pandoc
+          sudo apt-get install pandoc
           python -m pip install --upgrade pip wheel setuptools
           pip install --verbose .[docs]
 
