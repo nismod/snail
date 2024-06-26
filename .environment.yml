@@ -12,7 +12,7 @@ dependencies:
   - matplotlib
   - nbstripout
   - networkx
-  - numpy
+  - numpy <2.0.0
   - openpyxl
   - pandera
   - pip
@@ -30,3 +30,4 @@ dependencies:
     - python-igraph
     - snkit
     - tqdm
+    - -e .

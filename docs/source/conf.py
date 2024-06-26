@@ -38,6 +38,8 @@ extensions = [
     "sphinx.ext.autodoc",
     "sphinx.ext.coverage",
     "sphinx.ext.viewcode",
+    "nbsphinx",
+    "sphinx_gallery.load_style",
 ]
 templates_path = ["_templates"]
 exclude_patterns = []
@@ -45,6 +47,7 @@ exclude_patterns = []
 # The suffix(es) of source filenames.
 source_suffix = [".rst"]
 
+nbsphinx_execute="never"
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output

@@ -30,3 +30,4 @@ CMakeFiles/*
 
 # Docs
 docs/build
+.DS_Store

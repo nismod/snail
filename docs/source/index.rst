@@ -34,9 +34,11 @@ climate hazards on infrastructure networks.
     :alt: PyPI version
 
 
-## Installation
+Installation
+----------------
 
-Install using pip:
+Install using pip
+=================
 
     pip install nismod-snail
 
@@ -58,7 +60,12 @@ If all worked okay, you should be able to run python and import snail::
     NAME
         snail - snail - the spatial networks impact assessment library
 
-## Using the `snail` command
+
+
+
+
+Using the `snail` command
+-------------------------
 
 Once installed, you can use `snail` directly from the command line.
 
@@ -92,14 +99,18 @@ Where at a minimum, each CSV has a column `path` with the path to each file.
    :maxdepth: 2
    :caption: Contents:
 
-
 Contents
 --------
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
+   
+   setup
 
-   Getting Started <getting_started>
+.. toctree::
+   :maxdepth: 1
+
+   Tutorials <tutorials>
 
 .. toctree::
    :maxdepth: 3
