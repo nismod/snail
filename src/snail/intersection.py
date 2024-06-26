@@ -45,20 +45,22 @@ class GridDefinition:
     output files. They effectively form the first two rows of a 3x3 matrix:
 
 
-    ```
-    | x |   | a  b  c | | i |
-    | y | = | d  e  f | | j |
-    | 1 |   | 0  0  1 | | 1 |
-    ```
+    .. code-block:: text
+
+        | x |   | a  b  c | | i |
+        | y | = | d  e  f | | j |
+        | 1 |   | 0  0  1 | | 1 |
+
 
     In cases without shear or rotation, `a` and `e` define scaling or grid cell
     size, while `c` and `f` define the offset or grid upper-left corner:
 
-    ```
-    | x_scale 0       x_offset |
-    | 0       y_scale y_offset |
-    | 0       0       1        |
-    ```
+    .. code-block:: text
+
+        | x_scale 0       x_offset |
+        | 0       y_scale y_offset |
+        | 0       0       1        |
+
     """
 
     crs: str
@@ -68,6 +70,7 @@ class GridDefinition:
 
     @classmethod
     def from_rasterio_dataset(cls, dataset):
+        """GridDefinition for a rasterio dataset"""
         crs = dataset.crs
         width = dataset.width
         height = dataset.height
@@ -77,6 +80,7 @@ class GridDefinition:
 
     @classmethod
     def from_raster(cls, fname):
+        """GridDefinition for a raster file (readable by rasterio)"""
         with rasterio.open(fname) as dataset:
             grid = GridDefinition.from_rasterio_dataset(dataset)
         return grid
@@ -92,6 +96,7 @@ class GridDefinition:
         cell_height: float,
         crs,
     ):
+        """GridDefinition for a given extent, cell size and CRS"""
         return GridDefinition(
             crs=crs,
             width=math.ceil((xmax - xmin) / cell_width),
@@ -205,7 +210,8 @@ def split_polygons(
     return splits
 
 
-def generate_grid_boxes(grid):
+def generate_grid_boxes(grid: GridDefinition):
+    """Generate all the box polygons for a grid"""
     a, b, c, d, e, f = grid.transform
     idx = numpy.arange(grid.width * grid.height)
     i, j = numpy.unravel_index(idx, (grid.width, grid.height))

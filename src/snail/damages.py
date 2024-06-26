@@ -1,4 +1,5 @@
 """Damage assessment"""
+
 from abc import ABC
 import numpy
 import pandas
@@ -72,16 +73,16 @@ class PiecewiseLinearDamageCurve(DamageCurve):
 
         Parameters
         ----------
-        fname: str, path object or file-like object
-        intensity_col: str, default "intensity"
+        fname : str, path object or file-like object
+        intensity_col : str, default "intensity"
             Column name to read hazard intensity values
-        damage_col: str, default "damage_ratio"
+        damage_col : str, default "damage_ratio"
             Column name to read damage values
-        comment: str, default "#"
+        comment : str, default "#"
             Indicates remainder of the line in the CSV should not be parsed.
             If found at the beginning of a line, the line will be ignored
             altogether.
-        kwargs:
+        kwargs
             see pandas.read_csv documentation
 
         Returns
@@ -115,19 +116,19 @@ class PiecewiseLinearDamageCurve(DamageCurve):
 
         Parameters
         ----------
-        fname: str, path object or file-like object
-        sheet_name: str, int
+        fname : str, path object or file-like object
+        sheet_name : str or int
             Strings are used for sheet names. Integers are used in zero-indexed sheet
             positions (chart sheets do not count as a sheet position).
-        intensity_col: str, default "intensity"
+        intensity_col : str, default "intensity"
             Column name to read hazard intensity values
-        damage_col: str, default "damage_ratio"
+        damage_col : str, default "damage_ratio"
             Column name to read damage values
-        comment: str, default "#"
+        comment : str, default "#"
             Indicates remainder of the line in the CSV should not be parsed.
             If found at the beginning of a line, the line will be ignored
             altogether.
-        kwargs:
+        kwargs
             see pandas.read_csv documentation
 
         Returns
@@ -159,9 +160,9 @@ class PiecewiseLinearDamageCurve(DamageCurve):
 
         Parameters
         ----------
-        a: PiecewiseLinearDamageCurve
-        b: PiecewiseLinearDamageCurve
-        factor: float
+        a : PiecewiseLinearDamageCurve
+        b : PiecewiseLinearDamageCurve
+        factor : float
             Interpolation factor, used to calculate the new curve
 
         Returns
@@ -189,6 +190,7 @@ class PiecewiseLinearDamageCurve(DamageCurve):
         return self._interpolate(exposure)
 
     def translate_y(self, y: float):
+        """Translate damage by a factor, y"""
         damage = self.damage + y
 
         return PiecewiseLinearDamageCurve(
@@ -201,6 +203,7 @@ class PiecewiseLinearDamageCurve(DamageCurve):
         )
 
     def scale_y(self, y: float):
+        """Scale damage by a factor, y"""
         damage = self.damage * y
 
         return PiecewiseLinearDamageCurve(
@@ -213,6 +216,7 @@ class PiecewiseLinearDamageCurve(DamageCurve):
         )
 
     def translate_x(self, x: float):
+        """Translate intensity by a factor, x"""
         intensity = self.intensity + x
 
         return PiecewiseLinearDamageCurve(
@@ -225,6 +229,7 @@ class PiecewiseLinearDamageCurve(DamageCurve):
         )
 
     def scale_x(self, x: float):
+        """Scale intensity by a factor, x"""
         intensity = self.intensity * x
 
         return PiecewiseLinearDamageCurve(
@@ -238,6 +243,7 @@ class PiecewiseLinearDamageCurve(DamageCurve):
 
     @staticmethod
     def clip_curve_data(intensity, damage):
+        """Clip damage curve values to valid 0-1 damage range"""
         if (damage.max() > 1) or (damage.min() < 0):
             # WARNING clipping out-of-bounds damage fractions
             bounds = (
@@ -281,6 +287,7 @@ class PiecewiseLinearDamageCurve(DamageCurve):
         return intensity, damage
 
     def plot(self, ax=None):
+        """Plot a line chart of the damage curve"""
         import matplotlib.pyplot as plt
 
         if ax is None:
