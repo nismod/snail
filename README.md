@@ -1,5 +1,5 @@
 <p align="center">
-<a href="https://github.com/nismod/snail/tree/master/tutorials">Tutorials</a> |
+<a href="https://github.com/nismod/snail/tree/main/docs/source/tutorials">Tutorials</a> |
 <a href="https://github.com/nismod/snail/issues">Issues</a>
 </p>
 
