@@ -25,6 +25,7 @@ requires-python = ">=3.8"
 dependencies = [
     "geopandas",
     "matplotlib",
+    "numpy<2.0.0",
     "openpyxl",
     "pandera",
     "pyarrow",
@@ -36,15 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
-    "affine",
-    "black",
-    "hilbertcurve",
-    "nbstripout",
-    "numpy<2.0.0",
-    "pytest-cov",
-    "pytest",
-]
+dev = ["affine", "black", "hilbertcurve", "nbstripout", "pytest-cov", "pytest"]
 docs = ["sphinx", "nbsphinx", "sphinx_gallery", "numpydoc"]
 tutorials = [
     "contextily",
