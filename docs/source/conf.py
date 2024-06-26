@@ -35,10 +35,12 @@ def setup(app):
 
 
 extensions = [
+    "nbsphinx",
+    "numpydoc",
     "sphinx.ext.autodoc",
+    "sphinx.ext.autosummary",
     "sphinx.ext.coverage",
     "sphinx.ext.viewcode",
-    "nbsphinx",
     "sphinx_gallery.load_style",
 ]
 templates_path = ["_templates"]
@@ -47,7 +49,11 @@ exclude_patterns = []
 # The suffix(es) of source filenames.
 source_suffix = [".rst"]
 
-nbsphinx_execute="never"
+# Don't rerun notebooks
+nbsphinx_execute = "never"
+
+# Don't include a table of contents for classes
+numpydoc_class_members_toctree = False
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
