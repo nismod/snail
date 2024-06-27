@@ -11,8 +11,6 @@
 [![Build](https://github.com/nismod/snail/actions/workflows/build.yml/badge.svg)](https://github.com/nismod/snail/actions/workflows/build.yml)
 [![License](https://img.shields.io/pypi/l/nismod-snail.svg)](https://opensource.org/licenses/MIT)
 
-> This code is under early development
-
 # 🤔 What is this?
 
 This is a Python package to help with analysis of the potential impacts of
