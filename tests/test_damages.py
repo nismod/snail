@@ -1,4 +1,5 @@
 """Test damage assessment"""
+
 import os
 
 import numpy
@@ -115,7 +116,7 @@ def test_linear_curve_interpolation(curve):
 def test_linear_curve_out_of_bounds(curve):
     # sense-check out-of-bounds
     intensities = numpy.array(
-        [numpy.NINF, -999, numpy.NZERO, 0, 30, 999, numpy.inf, numpy.nan]
+        [-numpy.inf, -999, -0.0, 0, 30, 999, numpy.inf, numpy.nan]
     )
     expected = numpy.array([0, 0, 0, 0, 1, 1, 1, numpy.nan])
     actual = curve.damage_fraction(intensities)

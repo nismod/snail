@@ -11,8 +11,6 @@
 [![Build](https://github.com/nismod/snail/actions/workflows/build.yml/badge.svg)](https://github.com/nismod/snail/actions/workflows/build.yml)
 [![License](https://img.shields.io/pypi/l/nismod-snail.svg)](https://opensource.org/licenses/MIT)
 
-> This code is under early development
-
 # 🤔 What is this?
 
 This is a Python package to help with analysis of the potential impacts of
@@ -108,7 +106,7 @@ Change directory into the root of the project:
 
 To create and activate a conda environment with snail's dependencies installed:
 
-    conda env create -f .environment.yml
+    conda env create -f environment.yml
     conda activate snail-dev
 
 Run this to install the source code as a package:
