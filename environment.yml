@@ -12,9 +12,8 @@ dependencies:
   - matplotlib
   - nbstripout
   - networkx
-  - numpy <2.0.0
+  - numpy
   - openpyxl
-  - pandera
   - pip
   - pyarrow
   - pyogrio
@@ -25,9 +24,10 @@ dependencies:
   - shapely
   - scipy
   - pip:
-    - hilbertcurve
-    - irv_autopkg_client
-    - python-igraph
-    - snkit
-    - tqdm
-    - -e .
+      - hilbertcurve
+      - irv_autopkg_client
+      - pandera>=0.20.0
+      - python-igraph
+      - snkit
+      - tqdm
+      - -e .
