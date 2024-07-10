@@ -26,7 +26,7 @@ This should bring all dependencies with it. If any of these cause difficulties,
 try using a [conda](https://docs.conda.io/en/latest/miniconda.html) environment:
 
     conda env create -n snail_env \
-        python=3.8 geopandas shapely rasterio python-igraph
+        python=3.11 geopandas shapely rasterio python-igraph
     conda activate snail_env
     pip install nismod-snail
 
