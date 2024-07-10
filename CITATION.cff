@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+title: 'snail: spatial networks impact assessment library'
+message: 'If you use this software, please cite it as below.'
+type: software
+authors:
+  - family-names: Russell
+    given-names: Tom
+    orcid: 'https://orcid.org/0000-0002-0081-400X'
+  - family-names: Lestang
+    given-names: Thibault
+    orcid: 'https://orcid.org/0000-0001-6770-2638'
+  - family-names: Schlosser
+    given-names: Ivann
+  - family-names: Fuldauer
+    given-names: Lena
+  - family-names: Pant
+    given-names: Raghav
+  - family-names: Horvát
+    given-names: Szabolcs
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.12550509
+repository-code: 'https://github.com/nismod/snail'
+url: 'https://nismod.github.io/snail/'
+repository-artifact: 'https://pypi.org/project/nismod-snail/'
+abstract: >-
+  snail is Python package to help with analysis of the
+  potential impacts of climate hazards and other perils on
+  infrastructure networks.
+license: MIT
+commit: 1c330be33bd92b663e1691c0467f7a664f2799af
+version: 0.5.2
+date-released: '2024-06-26'
