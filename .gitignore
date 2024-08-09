@@ -17,7 +17,7 @@ dist
 data
 *.asc
 tests/integration/*.parquet
-tests/integration/tmp.geojson
+tests/integration/tmp*
 
 # cpp
 *.out
