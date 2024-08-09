@@ -26,6 +26,7 @@ from snail.io import (
     read_features,
     read_raster_metadata,
     extend_rasters_metadata,
+    write_features,
 )
 
 
@@ -251,7 +252,7 @@ def split(args):
             splits[key] = get_raster_values_for_splits(splits, band_data)
 
     splits.set_crs(features_crs, inplace=True)
-    splits.to_file(args.output)
+    write_features(splits, Path(args.output))
 
 
 def process(args):
@@ -261,6 +262,9 @@ def process(args):
 
     # read rasters and transforms
     rasters = _read_csv_or_quit(args.rasters)
+
+    # read networks
+    vector_layers = _read_csv_or_quit(args.features)
 
     # fix up path relative to dirname
     rasters.path = rasters.path.apply(_join_dirname, args=(dirname,))
@@ -278,9 +282,7 @@ def process(args):
 
     rasters, transforms = extend_rasters_metadata(rasters)
 
-    # read networks
-    vector_layers = _read_csv_or_quit(args.features)
-
+    # fix up path relative to dirname
     vector_layers.path = vector_layers.path.apply(
         _join_dirname, args=(dirname,)
     )
@@ -327,7 +329,7 @@ def _process_layer(vector_layer, transforms, rasters, experimental=False):
     else:
         raise ValueError(f"Could not process vector data of type {geom_type}")
 
-    with_data.to_parquet(vector_layer.output_path)
+    write_features(with_data, Path(vector_layer.output_path))
 
 
 def _read_csv_or_quit(path) -> pandas.DataFrame:

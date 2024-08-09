@@ -1,5 +1,6 @@
 import importlib.util
 import logging
+from pathlib import Path
 from typing import List, Tuple
 
 import geopandas
@@ -103,8 +104,8 @@ def read_raster_metadata(path) -> Tuple[GridDefinition, Tuple[int]]:
     return grid, bands
 
 
-def read_features(path, layer=None):
-    if path.suffix in (".parquet", ".geoparquet"):
+def read_features(path: Path, layer=None) -> geopandas.GeoDataFrame:
+    if path.suffix in (".parquet", ".geoparquet", ".pq", ".gpq"):
         features = geopandas.read_parquet(path)
     else:
         if importlib.util.find_spec("pyogrio"):
@@ -112,8 +113,23 @@ def read_features(path, layer=None):
         else:
             engine = "fiona"
 
-        if layer:
+        if layer is not None:
             features = geopandas.read_file(path, layer=layer, engine=engine)
         else:
             features = geopandas.read_file(path, engine=engine)
     return features
+
+
+def write_features(features: geopandas.GeoDataFrame, path: Path, layer=None):
+    if path.suffix in (".parquet", ".geoparquet", ".pq", ".gpq"):
+        features.to_parquet(path)
+    else:
+        if importlib.util.find_spec("pyogrio"):
+            engine = "pyogrio"
+        else:
+            engine = "fiona"
+
+        if layer is not None:
+            features.to_file(path, layer=layer, engine=engine)
+        else:
+            features.to_file(path, engine=engine)
