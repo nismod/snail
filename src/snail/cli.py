@@ -140,6 +140,13 @@ def snail(args=None):
         required=True,
         help="CSV file with raster layers",
     )
+    parser_process.add_argument(
+        "-c",
+        "--output_path_column",
+        type=str,
+        default="output_path",
+        help="Features CSV column to use for path to write output, defaults to 'output_path'",
+    )
     parser_process.set_defaults(func=process)
 
     args = parser.parse_args(args)
@@ -260,11 +267,36 @@ def process(args):
     # data directory
     dirname = args.directory
 
-    # read rasters and transforms
+    # read rasters and features
+    csv_errors = []
     rasters = _read_csv_or_quit(args.rasters)
+    features = _read_csv_or_quit(args.features)
 
-    # read networks
-    vector_layers = _read_csv_or_quit(args.features)
+    if "path" not in rasters.columns:
+        csv_errors.append(
+            ("Input path column 'path' not found in CSV: %s", args.rasters)
+        )
+
+    if "path" not in features.columns:
+        csv_errors.append(
+            ("Input path column 'path' not found in CSV: %s", args.rasters)
+        )
+
+    if args.output_path_column not in features.columns:
+        csv_errors.append(
+            (
+                "Output path column '%s' not found in CSV: %s",
+                args.output_path_column,
+                args.features,
+            )
+        )
+    else:
+        features["output_path"] = features[args.output_path_column]
+
+    if csv_errors:
+        for err in csv_errors:
+            logging.error(*err)
+        sys.exit()
 
     # fix up path relative to dirname
     rasters.path = rasters.path.apply(_join_dirname, args=(dirname,))
@@ -282,16 +314,13 @@ def process(args):
 
     rasters, transforms = extend_rasters_metadata(rasters)
 
-    # fix up path relative to dirname
-    vector_layers.path = vector_layers.path.apply(
+    # fix up paths relative to dirname
+    features.path = features.path.apply(_join_dirname, args=(dirname,))
+    features.output_path = features.output_path.apply(
         _join_dirname, args=(dirname,)
     )
-    if "output_path" not in vector_layers.columns:
-        vector_layers["output_path"] = vector_layers.path.apply(
-            lambda p: f"{p}.processed.parquet"
-        )
 
-    for vector_layer in vector_layers.itertuples():
+    for vector_layer in features.itertuples():
         _process_layer(vector_layer, transforms, rasters, args.experimental)
 
 
