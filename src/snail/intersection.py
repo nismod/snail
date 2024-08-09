@@ -1,14 +1,10 @@
 import logging
-import math
 import os
-from dataclasses import dataclass
-from typing import Callable, List, Tuple
+from typing import Callable, List
 
 import geopandas
 import numpy
 import pandas
-import rasterio
-from shapely import box
 from shapely.geometry import mapping, shape
 from shapely.ops import linemerge, polygonize
 
@@ -17,6 +13,7 @@ from snail.core.intersections import (  # type: ignore
     split_linestring,
     split_polygon,
 )
+from snail.grid import GridDefinition, generate_grid_boxes
 
 # optional progress bars
 if "SNAIL_PROGRESS" in os.environ and os.environ["SNAIL_PROGRESS"] in (
@@ -33,76 +30,6 @@ else:
 # Use some high degree of precision to round polygon coordinates
 # when polygonizing split edges to help avoid floating point errors
 POLYGON_COORDINATE_PRECISION = 9
-
-
-@dataclass(frozen=True)
-class GridDefinition:
-    """Store a raster transform and CRS
-
-    A note on `transform` - these six numbers define the transform from `i,j`
-    cell index (column/row) coordinates in the rectangular grid to `x,y`
-    geographic coordinates, in the coordinate reference system of the input and
-    output files. They effectively form the first two rows of a 3x3 matrix:
-
-
-    .. code-block:: text
-
-        | x |   | a  b  c | | i |
-        | y | = | d  e  f | | j |
-        | 1 |   | 0  0  1 | | 1 |
-
-
-    In cases without shear or rotation, `a` and `e` define scaling or grid cell
-    size, while `c` and `f` define the offset or grid upper-left corner:
-
-    .. code-block:: text
-
-        | x_scale 0       x_offset |
-        | 0       y_scale y_offset |
-        | 0       0       1        |
-
-    """
-
-    crs: str
-    width: int
-    height: int
-    transform: Tuple[float]
-
-    @classmethod
-    def from_rasterio_dataset(cls, dataset):
-        """GridDefinition for a rasterio dataset"""
-        crs = dataset.crs
-        width = dataset.width
-        height = dataset.height
-        # trim transform to 6 - we expect the first two rows of 3x3 matrix
-        transform = tuple(dataset.transform)[:6]
-        return GridDefinition(crs, width, height, transform)
-
-    @classmethod
-    def from_raster(cls, fname):
-        """GridDefinition for a raster file (readable by rasterio)"""
-        with rasterio.open(fname) as dataset:
-            grid = GridDefinition.from_rasterio_dataset(dataset)
-        return grid
-
-    @classmethod
-    def from_extent(
-        cls,
-        xmin: float,
-        ymin: float,
-        xmax: float,
-        ymax: float,
-        cell_width: float,
-        cell_height: float,
-        crs,
-    ):
-        """GridDefinition for a given extent, cell size and CRS"""
-        return GridDefinition(
-            crs=crs,
-            width=math.ceil((xmax - xmin) / cell_width),
-            height=math.ceil((ymax - ymin) / cell_height),
-            transform=(cell_width, 0.0, xmin, 0.0, cell_height, ymin),
-        )
 
 
 def split_features_for_rasters(
@@ -190,10 +117,6 @@ def split_linestrings(
     return splits_df
 
 
-def _transform(i, j, a, b, c, d, e, f) -> Tuple[float]:
-    return (i * a + j * b + c, i * d + j * e + f)
-
-
 def split_polygons(
     polygon_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
@@ -208,20 +131,6 @@ def split_polygons(
     splits = splits.explode(ignore_index=True)
     splits = splits[splits.geometry.type == "Polygon"]
     return splits
-
-
-def generate_grid_boxes(grid: GridDefinition):
-    """Generate all the box polygons for a grid"""
-    a, b, c, d, e, f = grid.transform
-    idx = numpy.arange(grid.width * grid.height)
-    i, j = numpy.unravel_index(idx, (grid.width, grid.height))
-    xmin = i * a + j * b + c
-    ymax = i * d + j * e + f
-    xmax = (i + 1) * a + (j + 1) * b + c
-    ymin = (i + 1) * d + (j + 1) * e + f
-    return geopandas.GeoDataFrame(
-        data={}, geometry=box(xmin, ymin, xmax, ymax), crs=grid.crs
-    )
 
 
 def split_polygons_experimental(
@@ -367,11 +276,3 @@ def get_indices(
         i = -1
         j = -1
     return pandas.Series(index=(index_i, index_j), data=[i, j])
-
-
-def idx_to_ij(idx: int, width: int, height: int) -> Tuple[int]:
-    return numpy.unravel_index(idx, (height, width))
-
-
-def ij_to_idx(ij: Tuple[int], width: int, height: int):
-    return numpy.ravel_multi_index(ij, (height, width))
