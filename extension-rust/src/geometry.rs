@@ -65,8 +65,26 @@ impl Div<f64> for Point {
     }
 }
 
+pub struct Segment {
+    start: Point,
+    end: Point,
+}
+
+impl Segment {
+    fn length(self) -> f64 {
+        let dx = self.end.x - self.start.x;
+        let dy = self.end.y - self.start.y;
+        (dx * dx + dy * dy).sqrt()
+    }
+}
+
 mod tests {
     use super::*;
+
+    #[test]
+    fn origin() {
+        assert_eq!(Point { x: 0.0, y: 0.0 }, Point::origin());
+    }
 
     #[test]
     fn magnitude() {
@@ -100,4 +118,31 @@ mod tests {
         assert_eq!(Point { x: 7.0, y: 2.0 } / 2.0, Point { x: 3.5, y: 1.0 });
     }
 
+    #[test]
+    fn segment_length() {
+        assert_eq!(
+            0.0,
+            Segment {
+                start: Point::origin(),
+                end: Point::origin()
+            }
+            .length()
+        );
+        assert_eq!(
+            5.0,
+            Segment {
+                start: Point::origin(),
+                end: Point { x: 3.0, y: 4.0 }
+            }
+            .length()
+        );
+        assert_eq!(
+            13.0,
+            Segment {
+                start: Point { x: 17.0, y: 4.0 },
+                end: Point { x: 22.0, y: 16.0 }
+            }
+            .length()
+        );
+    }
 }
