@@ -19,6 +19,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          name: sdist
           path: dist/*.tar.gz
 
   build_wheels:
@@ -43,6 +44,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
+          name: wheels-${{ matrix.os }}
           path: wheelhouse/*.whl
 
   upload_all:
@@ -59,7 +61,6 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: artifact
           path: dist
 
       - name: Deploy to PyPI
