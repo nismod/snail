@@ -111,8 +111,7 @@ def read_features(path, layer=None):
             engine = "pyogrio"
         else:
             engine = "fiona"
-
-        if layer:
+        if layer is not None:
             features = geopandas.read_file(path, layer=layer, engine=engine)
         else:
             features = geopandas.read_file(path, engine=engine)
