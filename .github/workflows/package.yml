@@ -19,6 +19,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          name: release-dists
           path: dist/*.tar.gz
 
   build_wheels:
@@ -43,20 +44,24 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
+          name: release-dists
           path: wheelhouse/*.whl
 
   upload_all:
     name: Upload if release
     needs: [build_wheels, build_sdist]
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/snail
+    permissions:
+      id-token: write
     if: github.event_name == 'release' && github.event.action == 'published'
 
     steps:
-      - uses: actions/setup-python@v4
-
       - uses: actions/download-artifact@v4
         with:
-          name: artifact
+          name: release-dists
           path: dist
 
       - name: Deploy to PyPI
