@@ -115,4 +115,5 @@ def read_features(path, layer=None):
             features = geopandas.read_file(path, layer=layer, engine=engine)
         else:
             features = geopandas.read_file(path, engine=engine)
-    return features
+
+    return features[~features.geometry.isna()]
