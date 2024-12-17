@@ -184,11 +184,14 @@ def split(args):
             sys.exit(
                 "Error: Expected either a raster file or transform, width and height of splitting grid"
             )
-        grid = GridDefinition(crs, width, height, affine_transform)
+        grid = None  # read CRS from features
     logging.info(f"Splitting {grid=}")
 
-    features = read_features(Path(args.features))
+    features = read_features(Path(args.features), args.layer)
     features_crs = features.crs
+    if grid is None:
+        grid = GridDefinition(features_crs, width, height, affine_transform)
+
     geom_type = _sample_geom_type(features)
 
     if "Point" in geom_type:
