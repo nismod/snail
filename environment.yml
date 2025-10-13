@@ -1,9 +1,9 @@
 name: snail-dev
 channels:
   - conda-forge
-  - defaults
+  - nodefaults
 dependencies:
-  - python=3.11
+  - python=3.13
   - affine
   - black
   - contextily
