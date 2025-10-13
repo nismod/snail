@@ -31,3 +31,7 @@ CMakeFiles/*
 # Docs
 docs/build
 .DS_Store
+
+# WIP
+extension-rust
+tmp.*
