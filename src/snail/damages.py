@@ -3,7 +3,7 @@
 from abc import ABC
 import numpy
 import pandas
-import pandera
+import pandera.pandas as pandera
 from scipy.interpolate import interp1d
 from pandera.typing import DataFrame, Series
 
