@@ -6,10 +6,11 @@ import pytest
 from hilbertcurve.hilbertcurve import HilbertCurve
 from numpy.testing import assert_array_equal
 from rasterio.crs import CRS
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.polygon import LinearRing, orient
 
 from snail.intersection import (
+    aggregate_values_to_grid,
     GridDefinition,
     split_linestrings,
     split_polygons,
@@ -237,3 +238,26 @@ def sort_polygons(df):
     return df.sort_values(by="hilbert_distance").drop(
         columns="hilbert_distance"
     )
+
+
+def test_aggregate_values_to_grid_sum():
+    grid = GridDefinition(
+        crs=CRS.from_epsg(4326),
+        width=3,
+        height=2,
+        transform=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+    )
+    splits = gpd.GeoDataFrame(
+        {
+            "index_i": [0, 0, 2, 1, -1],
+            "index_j": [0, 0, 1, 1, 0],
+            "length_km": [1.0, 2.0, 3.0, 4.0, 99.0],
+        },
+        geometry=[Point(0, 0)] * 5,
+        crs=grid.crs,
+    )
+    aggregated = aggregate_values_to_grid(splits, "length_km", grid)
+    expected = np.array([[3.0, 0.0, 0.0], [0.0, 4.0, 3.0]])
+    assert_array_equal(aggregated, expected)
+
+# TODO move to test_io.py

@@ -117,3 +117,41 @@ def read_features(path, layer=None):
             features = geopandas.read_file(path, engine=engine)
 
     return features[~features.geometry.isna()]
+
+
+def write_grid_to_raster(
+    array: numpy.ndarray,
+    output_path,
+    transform,
+    crs,
+    *,
+    nodata=None,
+    dtype=None,
+    driver: str = "GTiff",
+    compress: str = "lzw",
+    **profile_kwargs,
+):
+    """Write a 2D NumPy array to a single-band raster using rasterio."""
+    if array.ndim != 2:
+        raise ValueError("Only 2D arrays can be written to raster output")
+
+    height, width = array.shape
+    target_dtype = numpy.dtype(dtype or array.dtype)
+    profile = {
+        "driver": driver,
+        "height": height,
+        "width": width,
+        "count": 1,
+        "dtype": target_dtype,
+        "transform": transform,
+        "crs": crs,
+    }
+
+    if nodata is not None:
+        profile["nodata"] = nodata
+    if compress:
+        profile["compress"] = compress
+    profile.update(profile_kwargs)
+
+    with rasterio.open(output_path, "w", **profile) as dataset:
+        dataset.write(array.astype(target_dtype, copy=False), 1)

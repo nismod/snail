@@ -2,7 +2,7 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from typing import Callable, List, Tuple
+from typing import Callable, List, Tuple, Union
 
 import geopandas
 import numpy
@@ -375,3 +375,79 @@ def idx_to_ij(idx: int, width: int, height: int) -> Tuple[int]:
 
 def ij_to_idx(ij: Tuple[int], width: int, height: int):
     return numpy.ravel_multi_index(ij, (height, width))
+
+
+def aggregate_values_to_grid(
+    splits: geopandas.GeoDataFrame,
+    value_column: str,
+    grid: GridDefinition,
+    index_i: str = "index_i",
+    index_j: str = "index_j",
+    fill_value: float = 0.0,
+    dtype=None,
+) -> numpy.ndarray:
+    """Aggregate split-geometry attributes onto a raster-shaped array.
+
+    Parameters
+    ----------
+    splits
+        GeoDataFrame containing split geometries and raster index columns.
+    value_column
+        Name of the column to aggregate per cell (e.g. ``length_km``).
+    grid
+        A :class:`GridDefinition` that defines the raster bounds.
+    index_i, index_j
+        Column names storing raster column (``i``) and row (``j``) indices.
+    fill_value
+        Initial fill value for cells without observations.
+    dtype
+        Optional dtype for the resulting array. Defaults to promoting the
+        column dtype with the fill value dtype.
+    """
+    missing = {value_column, index_i, index_j} - set(splits.columns)
+    if missing:
+        raise KeyError(
+            f"Required columns {sorted(missing)} not present in splits dataframe"
+        )
+
+    height = grid.height
+    width = grid.width
+
+    value_frame = splits[[index_j, index_i, value_column]].dropna(
+        subset=[index_j, index_i, value_column]
+    ).copy()
+
+    value_frame[index_i] = value_frame[index_i].astype(int)
+    value_frame[index_j] = value_frame[index_j].astype(int)
+
+    in_bounds = (
+        (value_frame[index_i] >= 0)
+        & (value_frame[index_i] < width)
+        & (value_frame[index_j] >= 0)
+        & (value_frame[index_j] < height)
+    )
+    if not in_bounds.all():
+        value_frame = value_frame[in_bounds]
+
+    if value_frame.empty:
+        inferred_dtype = (
+            numpy.array(fill_value).dtype if dtype is None else numpy.dtype(dtype)
+        )
+        return numpy.full((height, width), fill_value, dtype=inferred_dtype)
+
+    value_dtype = value_frame[value_column].to_numpy().dtype
+    fill_dtype = numpy.array(fill_value).dtype
+    target_dtype = (
+        numpy.promote_types(value_dtype, fill_dtype)
+        if dtype is None
+        else numpy.dtype(dtype)
+    )
+    result = numpy.full((height, width), fill_value, dtype=target_dtype)
+
+    rows = value_frame[index_j].to_numpy(dtype=int, copy=False)
+    cols = value_frame[index_i].to_numpy(dtype=int, copy=False)
+    vals = value_frame[value_column].to_numpy(
+        dtype=target_dtype, copy=False
+    )
+    numpy.add.at(result, (rows, cols), vals)
+    return result
