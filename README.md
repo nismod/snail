@@ -1,5 +1,5 @@
 <p align="center">
-<a href="https://github.com/nismod/snail/tree/main/docs/source/tutorials">Tutorials</a> |
+<a href="https://github.com/nismod/snail/tree/main/tutorials">Tutorials</a> |
 <a href="https://github.com/nismod/snail/issues">Issues</a>
 </p>
 
@@ -128,11 +128,20 @@ formatting:
 
     black src/snail
 
-When working on the tutorial notebooks, it is recommended to install and
-configure [nbstripout](https://github.com/kynan/nbstripout) so data and outputs
-are not committed in the notebook files:
+Build the docs:
 
-    nbstripout --install
+    rm -r docs/build
+    rm -r docs/source/tutorials
+    cp -r tutorials docs/source/
+    pushd docs
+    sphinx-apidoc -M -o source/api ../src/snail/ --force
+    make html
+    popd
+
+Serve the HTML docs locally:
+
+    cd docs/build/html
+    python -m http.server
 
 ### C++ library
 

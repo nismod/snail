@@ -4,22 +4,22 @@ spatial networks impact assessment library
 
 .. raw:: html
 
-   <div align="center">
+    <div align="center">
 
 .. image:: ../../images/snail.svg
-   :alt: snail
+    :alt: snail
 
 .. raw:: html
 
-   </div>
+    </div>
 
 
 snail is a Python package to help with analysis of the potential impacts of
 climate hazards on infrastructure networks.
 
 .. image:: https://img.shields.io/badge/github-snail-brightgreen.svg
-   :target: https://github.com/nismod/snail/
-   :alt: snail on github
+    :target: https://github.com/nismod/snail/
+    :alt: snail on github
 
 .. image:: https://img.shields.io/pypi/l/nismod-snail.svg
     :target: https://opensource.org/licenses/MIT
@@ -35,19 +35,20 @@ climate hazards on infrastructure networks.
 
 
 Installation
-----------------
+------------
 
-Install using pip
-=================
+Install using pip::
 
     pip install nismod-snail
 
 This should bring all dependencies with it. If any of these cause difficulties,
-try using a `conda <https://docs.conda.io/en/latest/miniconda.html>`_ environment::
+try using a `micromamba
+<https://mamba.readthedocs.io/en/latest/user_guide/micromamba.html>`_
+environment::
 
-    conda env create -n snail_env \
-        python=3.8 geopandas shapely rasterio python-igraph
-    conda activate snail_env
+    micromamba env create -n snail \
+        python=3.13 geopandas shapely rasterio python-igraph
+    micromamba activate snail
     pip install nismod-snail
 
 If all worked okay, you should be able to run python and import snail::
@@ -61,9 +62,6 @@ If all worked okay, you should be able to run python and import snail::
         snail - snail - the spatial networks impact assessment library
 
 
-
-
-
 Using the `snail` command
 -------------------------
 
@@ -71,56 +69,56 @@ Once installed, you can use `snail` directly from the command line.
 
 Split features on a grid defined by its transform, width and height::
 
-   snail split \
-      --features input.shp \
-      --transform 1 0 -180 0 -1 90 \
-      --width 360 \
-      --height 180 \
-      --output split.gpkg
+    snail split \
+        --features input.shp \
+        --transform 1 0 -180 0 -1 90 \
+        --width 360 \
+        --height 180 \
+        --output split.gpkg
 
 
 Split features on a grid defined by a GeoTIFF, optionally adding the values from each raster band to each split feature as a new attribute::
 
-   snail split \
-      --features lines.geojson \
-      --raster gridded_data.tif \
-      --attribute \
-      --output split_lines_with_raster_values.geojson
+    snail split \
+        --features lines.geojson \
+        --raster gridded_data.tif \
+        --attribute \
+        --output split_lines_with_raster_values.geojson
 
 
 Split multiple vector feature files along the grids defined by multiple raster files, attributing all raster values::
 
-   snail process -fs features.csv -rs rasters.csv
+    snail process -fs features.csv -rs rasters.csv
 
 Where at a minimum, each CSV has a column `path` with the path to each file.
 
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+    :maxdepth: 2
+    :caption: Contents:
 
 Contents
 --------
 
 .. toctree::
-   :maxdepth: 1
-   
-   setup
+    :maxdepth: 1
+
+    setup
 
 .. toctree::
-   :maxdepth: 1
+    :maxdepth: 2
 
-   Tutorials <tutorials>
-
-.. toctree::
-   :maxdepth: 3
-
-   Reference <api/modules>
+    Tutorials <tutorials>
 
 .. toctree::
-   :maxdepth: 1
+    :maxdepth: 3
 
-   License <license>
+    Reference <api/modules>
+
+.. toctree::
+    :maxdepth: 1
+
+    License <license>
 
 
 Indices and tables

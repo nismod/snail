@@ -39,6 +39,7 @@ jobs:
 
       - name: Build docs
         run: |
+          cp -r tutorials docs/source/tutorials
           pushd docs
           sphinx-apidoc -M -o source/api ../src/snail/ --force
           make html

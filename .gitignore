@@ -30,6 +30,7 @@ CMakeFiles/*
 
 # Docs
 docs/build
+docs/source/tutorials
 .DS_Store
 
 # WIP

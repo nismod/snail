@@ -30,4 +30,4 @@ dependencies:
       - python-igraph
       - snkit
       - tqdm
-      - -e .
+      - -e .[dev,docs,tutorials]
