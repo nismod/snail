@@ -252,13 +252,35 @@ def test_aggregate_values_to_grid_sum():
         {
             "index_i": [0, 0, 2, 1, -1],
             "index_j": [0, 0, 1, 1, 0],
-            "length_km": [1.0, 2.0, 3.0, 4.0, 99.0],
+            "length_km": [1.0, 2.0, 4.1, 0.0, 99.0],
         },
         geometry=[Point(0, 0)] * 5,
         crs=grid.crs,
     )
+    # values are summed, out-of-bounds ignored, dtype preserved
     aggregated = aggregate_values_to_grid(splits, "length_km", grid)
-    expected = np.array([[3.0, 0.0, 0.0], [0.0, 4.0, 3.0]])
+    expected = np.array([[3.0, 0.0, 0.0], [0.0, 0.0, 4.1]])
+    assert_array_equal(aggregated, expected)
+
+    # negative fill value works okay
+    aggregated = aggregate_values_to_grid(
+        splits, "length_km", grid, fill_value=-99
+    )
+    expected = np.array([[3.0, -99, -99], [-99, 0.0, 4.1]])
+    assert_array_equal(aggregated, expected)
+
+    # nan fill value
+    aggregated = aggregate_values_to_grid(
+        splits, "length_km", grid, fill_value=np.nan
+    )
+    expected = np.array([[3.0, np.nan, np.nan], [np.nan, 0.0, 4.1]])
+    assert_array_equal(aggregated, expected)
+
+    # cast to integer dtype
+    aggregated = aggregate_values_to_grid(
+        splits, "length_km", grid, dtype="int"
+    )
+    expected = np.array([[3, 0, 0], [0, 0, 4]], dtype="int64")
     assert_array_equal(aggregated, expected)
 
 

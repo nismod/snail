@@ -409,45 +409,53 @@ def aggregate_values_to_grid(
         raise KeyError(
             f"Required columns {sorted(missing)} not present in splits dataframe"
         )
+    df = (
+        splits[[index_i, index_j, value_column]]
+        .dropna(subset=(index_i, index_j))
+        .copy()
+    )
 
     height = grid.height
     width = grid.width
 
-    value_frame = splits[[index_j, index_i, value_column]].dropna(
-        subset=[index_j, index_i, value_column]
-    ).copy()
-
-    value_frame[index_i] = value_frame[index_i].astype(int)
-    value_frame[index_j] = value_frame[index_j].astype(int)
+    df[index_i] = df[index_i].astype(int)
+    df[index_j] = df[index_j].astype(int)
 
     in_bounds = (
-        (value_frame[index_i] >= 0)
-        & (value_frame[index_i] < width)
-        & (value_frame[index_j] >= 0)
-        & (value_frame[index_j] < height)
+        (df[index_i] >= 0)
+        & (df[index_i] < width)
+        & (df[index_j] >= 0)
+        & (df[index_j] < height)
     )
     if not in_bounds.all():
-        value_frame = value_frame[in_bounds]
+        df = df[in_bounds]
 
-    if value_frame.empty:
+    if df.empty:
         inferred_dtype = (
-            numpy.array(fill_value).dtype if dtype is None else numpy.dtype(dtype)
+            numpy.array(fill_value).dtype
+            if dtype is None
+            else numpy.dtype(dtype)
         )
         return numpy.full((height, width), fill_value, dtype=inferred_dtype)
 
-    value_dtype = value_frame[value_column].to_numpy().dtype
+    # Grouby cell index and sum values
+    df = df.groupby([index_j, index_i]).sum().reset_index()
+
+    # Infer target dtype
+    value_dtype = df[value_column].to_numpy(copy=False).dtype
     fill_dtype = numpy.array(fill_value).dtype
     target_dtype = (
         numpy.promote_types(value_dtype, fill_dtype)
         if dtype is None
         else numpy.dtype(dtype)
     )
+    # Set up full result array
     result = numpy.full((height, width), fill_value, dtype=target_dtype)
 
-    rows = value_frame[index_j].to_numpy(dtype=int, copy=False)
-    cols = value_frame[index_i].to_numpy(dtype=int, copy=False)
-    vals = value_frame[value_column].to_numpy(
-        dtype=target_dtype, copy=False
-    )
-    numpy.add.at(result, (rows, cols), vals)
+    # Insert values from splits DataFrame
+    rows = df[index_j].to_numpy(dtype=int, copy=False)
+    cols = df[index_i].to_numpy(dtype=int, copy=False)
+    vals = df[value_column].to_numpy(dtype=target_dtype, copy=False)
+    result[(rows, cols)] = vals
+
     return result
