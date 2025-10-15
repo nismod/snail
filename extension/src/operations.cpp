@@ -1,5 +1,4 @@
 #include <algorithm> /// copy_if
-#include <iterator>  /// advance
 #include <string>
 #include <vector>
 #include "geometry.hpp"

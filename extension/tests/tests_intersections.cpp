@@ -21,6 +21,15 @@ struct Config {
   std::vector<linestr> expected_splits;
 };
 
+static double linestring_length(const linestr &segment) {
+  double total = 0.0;
+  for (std::size_t i = 1; i < segment.size(); ++i) {
+    snail::geometry::Line piece(segment[i - 1], segment[i]);
+    total += piece.length();
+  }
+  return total;
+}
+
 TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 
   // Linestring points are marked by o:
@@ -235,6 +244,26 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
       REQUIRE(std::abs(point.y - expected_point.y) < TOL);
     }
   }
+}
+
+TEST_CASE("LineString corner produces zero-length split", "[decomposition]") {
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+  linestr coordinates = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
+  snail::geometry::LineString line(coordinates);
+
+  auto splits =
+      snail::operations::findIntersectionsLineString(line, test_raster);
+
+  bool zero_length_found = false;
+  for (const auto &segment : splits) {
+    double length = linestring_length(segment);
+    if (length < 1e-9) {
+      zero_length_found = true;
+      break;
+    }
+  }
+
+  REQUIRE(! zero_length_found);
 }
 
 

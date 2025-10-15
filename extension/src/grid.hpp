@@ -127,7 +127,7 @@ struct Grid {
       while (pE.length() <= length) {
 
         // Add the closest crossing point
-        crossings.push_back(line.start + pE);
+        snail::utils::append_new(crossings, line.start + pE);
         // Update the distance to the next graticule
         dE += step_x;
         // Calculate the position of the next crossing
@@ -139,7 +139,7 @@ struct Grid {
       while (pN.length() <= length) {
 
         // Add the closest crossing point
-        crossings.push_back(line.start + pN);
+        snail::utils::append_new(crossings, line.start + pN);
         // Update the distance to the next graticule
         dN += step_y;
         // Calculate the position of the next crossing
@@ -154,7 +154,7 @@ struct Grid {
         // update both and it doesn't matter which one we add to the
         // vector of crossings.
         if (pE.length() == pN.length()) {
-          crossings.push_back(line.start + pN);
+          snail::utils::append_new(crossings, line.start + pN);
           // Update the distance to the next graticule.
           dE += step_x;
           dN += step_y;
@@ -162,13 +162,13 @@ struct Grid {
           pE = geometry::Coord(dE, dE * rise / run);
           pN = geometry::Coord(dN * run / rise, dN);
         } else if (pE.length() < pN.length()) {
-          crossings.push_back(line.start + pE);
+          snail::utils::append_new(crossings, line.start + pE);
           // Update the distance to the next graticule.
           dE += step_x;
           // Calculate the position of the next crossing
           pE = geometry::Coord(dE, dE * rise / run);
         } else if (pN.length() < pE.length()) {
-          crossings.push_back(line.start + pN);
+          snail::utils::append_new(crossings, line.start + pN);
           // Update the distance to the next graticule.
           dN += step_y;
           // Calculate the position of the next crossing

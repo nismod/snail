@@ -56,6 +56,14 @@ almost_equal(T x, T y, T reference_value) {
   return check_normal || check_subnormal;
 }
 
+// Append new values
+// push_back if potential entry is not equal to the last entry currently in list
+template <class T> void append_new(std::vector<T> &list, const T &entry) {
+  if (entry != list.back()) {
+    list.push_back(entry);
+  }
+}
+
 } // namespace utils
 } // namespace snail
 #endif // UTILS_H

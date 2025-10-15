@@ -16,6 +16,7 @@ from snail.intersection import (
     split_polygons,
     generate_grid_boxes,
 )
+from snail.core.intersections import split_linestring as core_split_linestring
 
 
 @pytest.fixture
@@ -260,4 +261,14 @@ def test_aggregate_values_to_grid_sum():
     expected = np.array([[3.0, 0.0, 0.0], [0.0, 4.0, 3.0]])
     assert_array_equal(aggregated, expected)
 
-# TODO move to test_io.py
+
+def test_core_split_linestring_zero_length_on_corner():
+    transform = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    parts = core_split_linestring(
+        LineString([(0.0, 0.0), (1.0, 1.0), (2.0, 0.0)]),
+        2,
+        2,
+        transform,
+    )
+    lengths = [geom.length for geom in parts]
+    assert all(length > 0 for length in lengths)

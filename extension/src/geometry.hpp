@@ -20,6 +20,8 @@ struct Coord {
   Coord operator-(const Coord &a) const { return Coord(x - a.x, y - a.y); }
   // Compare Coords for equality
   bool operator==(const Coord &a) const { return x == a.x && y == a.y; }
+  // Compare Coords for inequality
+  bool operator!=(const Coord &a) const { return x != a.x || y != a.y; }
   // Divide a Coord by a constant
   Coord operator/(const double a) const { return Coord(x / a, y / a); }
 
