@@ -258,7 +258,7 @@ TEST_CASE("LineString outside grid remains unchanged", "[decomposition]") {
   snail::geometry::LineString line(coordinates);
 
   auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster);
+      snail::operations::findIntersectionsLineString(line, test_raster, true);
 
   REQUIRE(splits.size() == 1);
   REQUIRE(splits[0].size() == coordinates.size());
@@ -281,7 +281,7 @@ TEST_CASE("LineString partially overlapping grid splits correctly",
   };
 
   auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster);
+      snail::operations::findIntersectionsLineString(line, test_raster, true);
 
   REQUIRE(splits.size() == expected.size());
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -291,6 +291,45 @@ TEST_CASE("LineString partially overlapping grid splits correctly",
       REQUIRE(std::abs(splits[i][j].y - expected[i][j].y) < TOL);
     }
   }
+}
+
+TEST_CASE("Bounded splits keep interior vertices within grid extents",
+          "[decomposition]") {
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+  linestr coordinates = {{-2.0, 0.5}, {1.5, 0.5}};
+  snail::geometry::LineString line(coordinates);
+
+  auto splits =
+      snail::operations::findIntersectionsLineString(line, test_raster, true);
+
+  REQUIRE(splits.size() == 3);
+  for (std::size_t segment_idx = 0; segment_idx < splits.size();
+       ++segment_idx) {
+    const auto &segment = splits[segment_idx];
+    REQUIRE(segment.size() >= 2);
+    for (std::size_t point_idx = 0; point_idx < segment.size(); ++point_idx) {
+      bool is_start = (segment_idx == 0 && point_idx == 0);
+      bool is_end =
+          (segment_idx == splits.size() - 1 && point_idx == segment.size() - 1);
+      if (is_start || is_end) {
+        continue;
+      }
+      REQUIRE(
+          snail::operations::pointInBounds(segment[point_idx], test_raster));
+    }
+  }
+}
+
+TEST_CASE("pointInBounds treats boundary as inside", "[bounds]") {
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+  snail::geometry::Coord on_edge_x(2.0, 1.0);
+  REQUIRE(snail::operations::pointInBounds(on_edge_x, test_raster));
+  snail::geometry::Coord on_edge_y(1.0, 2.0);
+  REQUIRE(snail::operations::pointInBounds(on_edge_y, test_raster));
+  snail::geometry::Coord inner(0.9, 1.1);
+  REQUIRE(snail::operations::pointInBounds(inner, test_raster));
+  snail::geometry::Coord outer(0.9, 11.1);
+  REQUIRE(!snail::operations::pointInBounds(outer, test_raster));
 }
 
 TEST_CASE("Split with different grid", "[decomposition]") {

@@ -204,7 +204,9 @@ def split_points(
 
 
 def split_linestrings(
-    linestring_features: geopandas.GeoDataFrame, grid: GridDefinition
+    linestring_features: geopandas.GeoDataFrame,
+    grid: GridDefinition,
+    bounded=False,
 ) -> geopandas.GeoDataFrame:
     """Split linestrings along a grid"""
     # TODO check for MultiLineString
@@ -217,21 +219,13 @@ def split_linestrings(
             grid.width,
             grid.height,
             grid.transform,
+            bounded=bounded,
         )
         for j, s in enumerate(geom_splits):
-            # splitting sometimes returns zero-length linestrings on edge of raster
-            # see below for example linestring on eastern (lon=70W) extent of box
-            # (Pdb) geometry.coords.xy
-            # (array('d', [-70.0, -70.0]), array('d', [18.445832920952196, 18.445832920952196]))
-            # this split geometry has: j = raster_width
-            # however j should be in range: 0 <= j < raster_width
-            # as a hacky workaround, drop any splits with length 0
-            # do we need a nudge off a cell boundary somewhere when performing the splits?
-            if s.length != 0:
-                new_row = linestring_features.iloc[i].copy()
-                new_row.geometry = s
-                new_row["split"] = j
-                pieces.append(new_row)
+            new_row = linestring_features.iloc[i].copy()
+            new_row.geometry = s
+            new_row["split"] = j
+            pieces.append(new_row)
     logger.info(f"Split {len(linestring_features)} edges into {len(pieces)} pieces")
     splits_df = geopandas.GeoDataFrame(pieces, crs=grid.crs, geometry="geometry")
     return splits_df

@@ -53,14 +53,15 @@ std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
 
 std::vector<py::object> splitLineString(py::object linestring_py, int nrows,
                                         int ncols,
-                                        std::vector<double> transform) {
+                                        std::vector<double> transform,
+                                        bool bounded = false) {
   linestr linestring = convert_py2cpp(linestring_py);
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
   geometry::LineString line(linestring);
   std::vector<linestr> splits =
-      operations::findIntersectionsLineString(line, grid);
+      operations::findIntersectionsLineString(line, grid, bounded);
   return convert_cpp2py(splits);
 }
 
@@ -129,6 +130,9 @@ PYBIND11_MODULE(intersections, m) {
   m.doc() = "Vector geometry to grid intersections";
 
   m.def("split_linestring", &snail::splitLineString,
+        pybind11::arg("linestring_py"), pybind11::arg("nrows"),
+        pybind11::arg("ncols"), pybind11::arg("transform"),
+        pybind11::arg("bounded") = false,
         "Split LineString along a grid");
   m.def("get_cell_indices", &snail::get_cell_indices,
         "Get LineString cell indices in a grid");
