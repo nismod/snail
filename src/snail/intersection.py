@@ -2,12 +2,27 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from typing import Callable, List, Tuple, Union
+from typing import TYPE_CHECKING, Callable, List, Tuple, Union
 
 import geopandas
 import numpy
 import pandas
 import rasterio
+
+try:
+    import dask.array as _dask_array
+except ImportError:  # pragma: no cover - optional dependency
+    _dask_array = None
+
+try:
+    import xarray as _xarray
+except ImportError:  # pragma: no cover - optional dependency
+    _xarray = None
+
+if TYPE_CHECKING:
+    import dask.array
+    import xarray
+
 from shapely import box
 from shapely.geometry import mapping, shape
 from shapely.ops import linemerge, polygonize
@@ -289,7 +304,11 @@ def _set_precision(geom, precision):
 
 def get_raster_values_for_splits(
     splits: pandas.DataFrame,
-    data: numpy.ndarray,
+    data: Union[
+        numpy.ndarray,
+        "xarray.DataArray",
+        "dask.array.Array",
+    ],
     index_i: str = "index_i",
     index_j: str = "index_j",
 ) -> pandas.Series:
@@ -306,8 +325,9 @@ def get_raster_values_for_splits(
         Table of features, each with cell indices
         to look up raster pixel. Indices must be stored under columns with
         names referenced by index_i and index_j.
-    data:  numpy.ndarray
-        Raster data (2D array)
+    data: numpy.ndarray or xarray.DataArray or dask.array.Array
+        2D raster values. DataArray inputs must have two spatial
+        dimensions (band dimensions should be squeezed prior to calling).
     index_i: str
         Column name for i-indices
     index_j: str
@@ -318,13 +338,59 @@ def get_raster_values_for_splits(
     pd.Series
         Series of raster values, with same row indexing as df.
     """
-    # 2D numpy indexing is j, i (i.e. row, column)
-    with_data = pandas.Series(
-        index=splits.index, data=data[splits[index_j], splits[index_i]]
+    indices_i = splits[index_i].to_numpy()
+    indices_j = splits[index_j].to_numpy()
+    valid_mask = (indices_i >= 0) & (indices_j >= 0)
+    valid_positions = numpy.nonzero(valid_mask)[0]
+
+    if len(valid_positions) == 0:
+        return _build_series(splits.index, valid_positions, numpy.array([]))
+
+    if isinstance(data, numpy.ndarray):
+        backing_data = data
+    elif isinstance(data, _dask_array.Array):
+        backing_data = data
+    elif isinstance(data, _xarray.DataArray):
+        backing_data = data.data
+    else:
+        raise TypeError(
+            "Unsupported raster data type; expected numpy.ndarray, xarray.DataArray or dask.array.Array."
+        )
+
+    indices_i_valid = indices_i[valid_positions]
+    indices_j_valid = indices_j[valid_positions]
+
+    if isinstance(backing_data, numpy.ndarray):
+        splits_values = backing_data[indices_j_valid, indices_i_valid]
+        return _build_series(splits.index, valid_positions, splits_values)
+
+    elif isinstance(backing_data, _dask_array.Array):
+        splits_values_da = backing_data.vindex[
+            indices_j_valid, indices_i_valid
+        ]
+        splits_values = numpy.asarray(splits_values_da.compute())
+        return _build_series(splits.index, valid_positions, splits_values)
+
+    else:
+        raise NotImplementedError(
+            "data array backends must be NumPy or Dask arrays."
+        )
+
+
+def _build_series(
+    index: pandas.Index,
+    positions: numpy.ndarray,
+    values: numpy.ndarray,
+) -> pandas.Series:
+    """Create a Series indexed by index, filled with specific values at given
+    positions, default numpy.nan.
+    """
+    series = pandas.Series(
+        numpy.full(len(index), numpy.nan), index=index, dtype="float64"
     )
-    # set NaN for out-of-bounds
-    with_data[(splits[index_i] == -1) | (splits[index_j] == -1)] = numpy.nan
-    return with_data
+    if len(positions):
+        series.iloc[positions] = values
+    return series
 
 
 def apply_indices(

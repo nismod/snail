@@ -108,6 +108,13 @@ def snail(args=None):
         help="Column name to use when attributing raster values, defaults to raster filename",
     )
     parser_split.add_argument(
+        "--lazy-rasters",
+        action="store_true",
+        help=(
+            "Read raster bands lazily with xarray/dask when attributing values."
+        ),
+    )
+    parser_split.add_argument(
         "-o",
         "--output",
         type=str,
@@ -138,6 +145,11 @@ def snail(args=None):
         type=str,
         required=True,
         help="CSV file with raster layers",
+    )
+    parser_process.add_argument(
+        "--lazy-rasters",
+        action="store_true",
+        help="Read raster bands lazily with xarray/dask during processing.",
     )
     parser_process.set_defaults(func=process)
 
@@ -249,7 +261,9 @@ def split(args):
                 band_index,
             )
             band_data = read_raster_band_data(
-                args.raster, band_number=int(band_index)
+                args.raster,
+                band_number=int(band_index),
+                lazy=args.lazy_rasters,
             )
             splits[key] = get_raster_values_for_splits(splits, band_data)
 
@@ -293,10 +307,23 @@ def process(args):
         )
 
     for vector_layer in vector_layers.itertuples():
-        _process_layer(vector_layer, transforms, rasters, args.experimental)
+        _process_layer(
+            vector_layer,
+            transforms,
+            rasters,
+            experimental=args.experimental,
+            lazy=args.lazy_rasters,
+        )
 
 
-def _process_layer(vector_layer, transforms, rasters, experimental=False):
+def _process_layer(
+    vector_layer,
+    transforms,
+    rasters,
+    *,
+    experimental: bool = False,
+    lazy: bool = False,
+):
     vector_path = Path(vector_layer.path)
     layer = getattr(vector_layer, "layer", None)
     logging.info("Processing %s", vector_path.name)
@@ -308,13 +335,13 @@ def _process_layer(vector_layer, transforms, rasters, experimental=False):
     if "Point" in geom_type:
         prepared = prepare_points(features)
         split = split_features_for_rasters(prepared, transforms, split_points)
-        with_data = associate_raster_files(split, rasters)
+        with_data = associate_raster_files(split, rasters, lazy=lazy)
     elif "LineString" in geom_type:
         prepared = prepare_linestrings(features)
         split = split_features_for_rasters(
             prepared, transforms, split_linestrings
         )
-        with_data = associate_raster_files(split, rasters)
+        with_data = associate_raster_files(split, rasters, lazy=lazy)
     elif "Polygon" in geom_type:
         prepared = prepare_polygons(features)
         if experimental:
@@ -326,7 +353,7 @@ def _process_layer(vector_layer, transforms, rasters, experimental=False):
             split = split_features_for_rasters(
                 prepared, transforms, split_polygons
             )
-        with_data = associate_raster_files(split, rasters)
+        with_data = associate_raster_files(split, rasters, lazy=lazy)
     else:
         raise ValueError(f"Could not process vector data of type {geom_type}")
 
