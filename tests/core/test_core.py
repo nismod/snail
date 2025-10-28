@@ -1,3 +1,4 @@
+import geopandas
 import pytest
 import shapely.wkt
 import snail.core.intersections
@@ -121,3 +122,36 @@ def test_split_polygons_issue_53():
         18000,
         (1000.0, 0.0, -18041000.0, 0.0, -1000.0, 9000000.0),
     )
+
+
+def test_split_gdf():
+    a = LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)])
+    a_splits = [
+        LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.5)]),
+        LineString([(1.0, 0.5), (1.5, 0.5), (1.5, 1.0)]),
+        LineString([(1.5, 1.0), (1.5, 1.5)]),
+    ]
+    b = LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)])
+    b_splits = [
+        LineString([(0.5, 0.5), (0.75, 0.5), (1.0, 0.8333333)]),
+        LineString([(1.0, 0.8333333), (1.125, 1.0)]),
+        LineString([(1.125, 1.0), (1.5, 1.5)]),
+    ]
+    data = geopandas.GeoDataFrame(
+        data={
+            "name": ["a", "b"],
+        },
+        geometry=[a, b]
+    )
+
+    expected = geopandas.GeoDataFrame(
+        data={
+            "name": ["a"] * len(a_splits) + ["b"] * len(b_splits)
+        },
+        geometry=a_splits + b_splits
+    )
+    # transfrom   =
+    actual = snail.core.intersections.split_arrow_table(data.to_arrow(geometry_encoding="geoarrow"), transform)
+
+    print(actual)
+    print(expected)

@@ -4,7 +4,9 @@ project(snail)
 set(CPP_SRC_DIR src)
 set(CPP_TESTS_DIR tests)
 
+find_package(Arrow REQUIRED)
 add_subdirectory(extern/Catch2)
+
 add_executable(run_tests
   ${CPP_TESTS_DIR}/run_tests.cpp
   ${CPP_TESTS_DIR}/tests_intersections.cpp
@@ -13,3 +15,4 @@ add_executable(run_tests
 )
 target_include_directories(run_tests PUBLIC ${CPP_SRC_DIR})
 target_link_libraries(run_tests PRIVATE Catch2::Catch2)
+target_link_libraries(run_tests PRIVATE Arrow::arrow_shared)

@@ -11,6 +11,14 @@ set(CPP_SRC_DIR extension/src)
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED)
 
+FetchContent_Declare(
+  geoarrow
+  URL https://github.com/geoarrow/geoarrow-c/archive/refs/heads/main.zip)
+
+FetchContent_MakeAvailable(nanoarrow)
+FetchContent_MakeAvailable(geoarrow)
+-- find_package(Arrow REQUIRED)
+
 python_add_library(intersections MODULE ${CPP_SRC_DIR}/intersections.cpp WITH_SOABI ${CPP_SRC_DIR}/operations.cpp)
 
 target_include_directories(intersections PUBLIC ${CPP_SRC_DIR})

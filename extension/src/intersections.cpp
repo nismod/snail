@@ -6,6 +6,7 @@
 #include <tuple>
 #include <vector>
 
+#include <arrow/api.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include "geometry.hpp"
@@ -123,6 +124,16 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
   return grid.cellIndices(midpoint);
 }
 
+py::object splitArrowTable(py::object capsule) {
+  // __arrow_c_stream__ (or __arrow_c_array__, though)
+  // access tuple of schema, stream
+  // TODO
+  std::shared_ptr<arrow::ArrowArrayStream> stream =
+      PyCapsule_GetPointer(capsule, "arrow_stream");
+  //
+  return table;
+}
+
 } // namespace snail
 
 PYBIND11_MODULE(intersections, m) {
@@ -133,4 +144,6 @@ PYBIND11_MODULE(intersections, m) {
   m.def("get_cell_indices", &snail::get_cell_indices,
         "Get LineString cell indices in a grid");
   m.def("split_polygon", &snail::splitPolygon, "Split Polygon along a grid");
+  m.def("split_arrow_table", &snail::splitArrowTable,
+        "Split geometries from an arrow table");
 }

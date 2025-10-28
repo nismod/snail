@@ -1,28 +1,32 @@
 name: snail-dev
 channels:
   - conda-forge
-  - defaults
+  - nodefaults
 dependencies:
-  - python=3.11
-  - affine
-  - black
-  - contextily
+  - python=3.12
+  # C++ extension and arrow interactions
+  - libarrow-all=21.0.*
+  - arrow-c-glib=21.0.*
+  - pyarrow=21.0.*
+  # Required
   - geopandas
-  - jupyter
-  - matplotlib
-  - nbstripout
-  - networkx
-  - numpy
   - openpyxl
-  - pip
-  - pyarrow
   - pyogrio
+  - rasterio
+  - scipy
+  - shapely
+  # Python dev
+  - black
+  - nbstripout
   - pytest
   - pytest-cov
-  - rasterio
+  # Tutorials
+  - contextily
+  - jupyter
+  - matplotlib
+  - networkx
   - seaborn
-  - shapely
-  - scipy
+  - pip
   - pip:
       - hilbertcurve
       - irv_autopkg_client

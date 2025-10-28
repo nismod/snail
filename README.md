@@ -184,6 +184,27 @@ The `snail.core.intersections` module is built using `pybind11` with
 - `pyproject.toml` defines the build requirements for snail, which includes
   pybind11 and scikit-build-core
 
+### How to add arrow to a python/C++ library
+
+- add arrow packages to conda environment
+- add `find_package` and `target_link_libraries` statements to CMake build
+- `#include <arrow/api.h>`
+- try adding a function that takes and returns `arrow::Table`
+- try wrapping in shared_ptr
+- consider `pybind11::call_guard<pybind11::gil_scoped_release>()` for the m.def
+- Example https://github.com/timkpaine/arrow-cpp-python-nocopy
+  - uses `__arrow_c_stream__` and packs/unpacks
+  - using https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html
+- consider downside of building against arrow - big, even with build flags
+  - nanoarrow might help apache/arrow-nanoarrow ViewArrayAs
+  - man-group/sparrow - maybe need to build composite type
+  - geoarrow-c https://geoarrow.org/geoarrow-c/dev/c.html#low-level-reader-visitor-interfaces
+  - see for example s2geography src.s2geography/geoarrow.cc line 777 pass coords to writer
+    - called from spherely/src/geoarrow.cpp using ArrowArrayHolder
+      - best practice to move the array, release the struct holding it and clear the release callbacl
+        Arrow C data interface "Moving an array" and "Memory management" sections
+      - https://man-group.github.io/sparrow/builder.html
+
 ## Acknowledgments
 
 > MIT License
