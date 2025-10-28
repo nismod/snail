@@ -1,16 +1,24 @@
 import importlib.util
 import logging
-from typing import List, Tuple
+from typing import List, Tuple, TYPE_CHECKING, Union
 
 import geopandas
 import numpy
 import pandas
 import rasterio
 
+try:
+    import rioxarray as _rioxarray
+except ImportError as exc:
+    _rioxarray = None
+
+if TYPE_CHECKING:  # pragma: no cover
+    import xarray
+
 from snail.intersection import GridDefinition, get_raster_values_for_splits
 
 
-def associate_raster_files(splits, rasters):
+def associate_raster_files(splits, rasters, lazy: bool = False):
     """Read values from a list of raster files for a set of indexed split geometries
 
     Parameters
@@ -22,6 +30,10 @@ def associate_raster_files(splits, rasters):
     rasters: pandas.DataFrame
         table of raster metadata with columns: key, grid_id, path, bands
 
+    lazy: bool, default False
+        When True, raster bands are opened lazily via xarray/dask. Requires
+        optional dependencies (xarray, dask, rioxarray).
+
     Returns
     -------
     pandas.DataFrame
@@ -32,7 +44,7 @@ def associate_raster_files(splits, rasters):
     raster_data: dict[str, pandas.Series] = {}
 
     # associate values
-    for raster, band_number, band_data in read_rasters(rasters):
+    for raster, band_number, band_data in read_rasters(rasters, lazy=lazy):
         logging.info(
             "Associating values from raster %s grid %s band %s",
             raster.key,
@@ -52,20 +64,31 @@ def associate_raster_files(splits, rasters):
     return splits
 
 
-def read_rasters(rasters):
+def read_rasters(rasters, lazy: bool = False):
     for raster in rasters.itertuples():
         for band_number in raster.bands:
             yield raster, band_number, read_raster_band_data(
-                raster.path, band_number
+                raster.path, band_number, lazy=lazy
             )
 
 
 def read_raster_band_data(
     fname: str,
     band_number: int = 1,
-) -> numpy.ndarray:
-    with rasterio.open(fname) as dataset:
-        band_data: numpy.ndarray = dataset.read(band_number)
+    lazy: bool = False,
+) -> Union[numpy.ndarray, "xarray.DataArray"]:
+    if not lazy:
+        with rasterio.open(fname) as dataset:
+            band_data: numpy.ndarray = dataset.read(band_number)
+    else:
+        if _rioxarray is None:
+            raise RuntimeError(
+                "Lazy raster reading requires optional dependencies, including "
+                "xarray, dask and rioxarray. Try 'pip install nismod-snail[lazy]'"
+            )
+
+        data_array = _rioxarray.open_rasterio(fname, chunks="auto")
+        band_data = data_array.isel(band=band_number - 1).squeeze(drop=True)
     return band_data
 
 

@@ -62,8 +62,13 @@ snail split \
     --features lines.geojson \
     --raster gridded_data.tif \
     --attribute \
+    --lazy-rasters \
     --output split_lines_with_raster_values.geojson
 ```
+
+Adding `--lazy-rasters` keeps large raster bands on disk and fetches values
+lazily via `xarray`/`dask` (install additional dependencies with `pip install
+snail[lazy]`).
 
 Split multiple vector feature files along the grids defined by multiple raster files, attributing all raster values:
 
@@ -72,6 +77,9 @@ snail process -fs features.csv -rs rasters.csv
 ```
 
 Where at a minimum, each CSV has a column `path` with the path to each file.
+
+The `--lazy-rasters` flag can be supplied to `snail process` when working with
+large rasters.
 
 ### Transform
 
