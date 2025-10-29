@@ -1,5 +1,6 @@
 import importlib.util
 import logging
+from os import PathLike
 from typing import List, Tuple, TYPE_CHECKING, Union
 
 import geopandas
@@ -11,6 +12,11 @@ try:
     import rioxarray as _rioxarray
 except ImportError as exc:
     _rioxarray = None
+
+try:
+    import xarray as _xarray
+except ImportError:  # pragma: no cover - optional dependency
+    _xarray = None
 
 if TYPE_CHECKING:  # pragma: no cover
     import xarray
@@ -73,23 +79,37 @@ def read_rasters(rasters, lazy: bool = False):
 
 
 def read_raster_band_data(
-    fname: str,
+    fname: Union[str, PathLike, "xarray.DataArray"],
     band_number: int = 1,
     lazy: bool = False,
 ) -> Union[numpy.ndarray, "xarray.DataArray"]:
-    if not lazy:
-        with rasterio.open(fname) as dataset:
-            band_data: numpy.ndarray = dataset.read(band_number)
-    else:
-        if _rioxarray is None:
-            raise RuntimeError(
-                "Lazy raster reading requires optional dependencies, including "
-                "xarray, dask and rioxarray. Try 'pip install nismod-snail[lazy]'"
+    if _xarray is not None and isinstance(fname, _xarray.DataArray):
+        if lazy:
+            logging.debug(
+                "Ignoring lazy=True for DataArray input; returning original "
+                "array (consider providing a dask-backed DataArray instead)."
             )
+        return _select_dataarray_band(fname, band_number)
 
-        data_array = _rioxarray.open_rasterio(fname, chunks="auto")
-        band_data = data_array.isel(band=band_number - 1).squeeze(drop=True)
-    return band_data
+    if isinstance(fname, (str, PathLike)):
+        if not lazy:
+            with rasterio.open(fname) as dataset:
+                band_data: numpy.ndarray = dataset.read(band_number)
+        else:
+            if _rioxarray is None:
+                raise RuntimeError(
+                    "Lazy raster reading requires optional dependencies, including "
+                    "xarray, dask and rioxarray. Try 'pip install nismod-snail[lazy]'"
+                )
+
+            data_array = _rioxarray.open_rasterio(fname, chunks="auto")
+            band_data = data_array.isel(band=band_number - 1).squeeze(drop=True)
+        return band_data
+
+    raise TypeError(
+        "Unsupported raster source; expected a path-like object or "
+        "xarray.DataArray."
+    )
 
 
 def extend_rasters_metadata(
@@ -119,8 +139,13 @@ def extend_rasters_metadata(
     return rasters, grids
 
 
-def read_raster_metadata(path) -> Tuple[GridDefinition, Tuple[int]]:
-    with rasterio.open(path) as dataset:
+def read_raster_metadata(
+    source: Union[str, PathLike, "xarray.DataArray"]
+) -> Tuple[GridDefinition, Tuple[int]]:
+    if _xarray is not None and isinstance(source, _xarray.DataArray):
+        return _read_dataarray_metadata(source)
+
+    with rasterio.open(source) as dataset:
         bands = dataset.indexes
         grid = GridDefinition.from_rasterio_dataset(dataset)
     return grid, bands
@@ -178,3 +203,88 @@ def write_grid_to_raster(
 
     with rasterio.open(output_path, "w", **profile) as dataset:
         dataset.write(array.astype(target_dtype, copy=False), 1)
+
+
+def _ensure_rioxarray(data_array: "xarray.DataArray") -> None:
+    if not hasattr(data_array, "rio"):
+        raise ValueError(
+            "DataArray is missing the rioxarray accessor. Install rioxarray "
+            "and configure spatial metadata before calling this function."
+        )
+
+
+def _get_spatial_dims(data_array: "xarray.DataArray") -> Tuple[str, str]:
+    _ensure_rioxarray(data_array)
+    try:
+        x_dim = data_array.rio.x_dim
+        y_dim = data_array.rio.y_dim
+    except AttributeError as exc:  # pragma: no cover - defensive
+        raise ValueError(
+            "Unable to determine spatial dimensions from DataArray.rio."
+        ) from exc
+    if not x_dim or not y_dim:
+        raise ValueError("DataArray lacks named spatial dimensions for x/y.")
+    return y_dim, x_dim
+
+
+def _select_dataarray_band(
+    data_array: "xarray.DataArray", band_number: int
+) -> "xarray.DataArray":
+    spatial_dims = set(_get_spatial_dims(data_array))
+    non_spatial_dims = [dim for dim in data_array.dims if dim not in spatial_dims]
+
+    if not non_spatial_dims:
+        if band_number != 1:
+            raise ValueError(
+                "Single-band DataArray only supports band_number=1."
+            )
+        return data_array
+
+    if len(non_spatial_dims) > 1:
+        raise ValueError(
+            "DataArray has multiple non-spatial dimensions; select a single "
+            "band or reduce the array before calling read_raster_band_data."
+        )
+
+    band_dim = non_spatial_dims[0]
+    coord = data_array.coords.get(band_dim)
+    try:
+        if coord is not None and band_number in coord.values:
+            selected = data_array.sel({band_dim: band_number})
+        else:
+            selected = data_array.isel({band_dim: band_number - 1})
+    except (IndexError, KeyError) as exc:
+        raise ValueError(
+            f"Band index {band_number} is out of range for dimension "
+            f"{band_dim}."
+        ) from exc
+
+    return selected.squeeze(drop=True)
+
+
+def _read_dataarray_metadata(
+    data_array: "xarray.DataArray",
+) -> Tuple[GridDefinition, Tuple[int]]:
+    spatial_dims = set(_get_spatial_dims(data_array))
+    non_spatial_dims = [dim for dim in data_array.dims if dim not in spatial_dims]
+
+    grid = GridDefinition.from_dataarray(data_array)
+
+    if not non_spatial_dims:
+        band_numbers: Tuple[int, ...] = (1,)
+    elif len(non_spatial_dims) == 1:
+        band_dim = non_spatial_dims[0]
+        band_size = data_array.sizes[band_dim]
+        if band_size < 1:
+            raise ValueError(
+                f"DataArray dimension '{band_dim}' has no elements to treat "
+                "as bands."
+            )
+        band_numbers = tuple(range(1, band_size + 1))
+    else:
+        raise ValueError(
+            "DataArray has multiple non-spatial dimensions; provide a single "
+            "band DataArray when reading metadata."
+        )
+
+    return grid, band_numbers

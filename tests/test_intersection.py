@@ -172,6 +172,16 @@ def test_grid_from_raster():
     assert actual == expected
 
 
+def test_grid_from_dataarray(sample_dataarray):
+    data_array, transform = sample_dataarray
+    grid = GridDefinition.from_dataarray(data_array)
+
+    assert grid.width == data_array.sizes[data_array.rio.x_dim]
+    assert grid.height == data_array.sizes[data_array.rio.y_dim]
+    assert tuple(transform)[:6] == grid.transform
+    assert grid.crs == CRS.from_epsg(4326)
+
+
 class TestSnailIntersections:
     def test_split_linestrings(self, grid, linestrings, linestrings_split):
         actual = split_linestrings(linestrings, grid)

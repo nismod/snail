@@ -119,6 +119,56 @@ class GridDefinition:
             transform=(cell_width, 0.0, xmin, 0.0, cell_height, ymin),
         )
 
+    @classmethod
+    def from_dataarray(cls, data_array: "xarray.DataArray"):
+        """GridDefinition for an xarray DataArray with spatial metadata.
+
+        Requires the DataArray to have a rioxarray accessor with CRS and
+        transform information derived from explicit coordinates.
+        """
+        if _xarray is None:
+            raise RuntimeError(
+                "xarray is not available; install optional dependencies to "
+                "use GridDefinition.from_dataarray"
+            )
+        if not isinstance(data_array, _xarray.DataArray):
+            raise TypeError(
+                "Expected an xarray.DataArray, received "
+                f"{type(data_array).__name__}"
+            )
+        if not hasattr(data_array, "rio"):
+            raise ValueError(
+                "DataArray is missing the rioxarray accessor. Install "
+                "rioxarray and ensure spatial dimensions are configured."
+            )
+
+        try:
+            crs = data_array.rio.crs
+        except AttributeError as exc:  # pragma: no cover - defensive
+            raise ValueError(
+                "Unable to read CRS from DataArray.rio. Ensure the DataArray "
+                "has spatial metadata assigned."
+            ) from exc
+        if crs is None:
+            raise ValueError(
+                "DataArray.rio.crs is None; assign a CRS before constructing "
+                "a GridDefinition."
+            )
+
+        try:
+            transform = tuple(data_array.rio.transform(recalc=True))[:6]
+            width = int(data_array.rio.width)
+            height = int(data_array.rio.height)
+        except AttributeError as exc:  # pragma: no cover - defensive
+            raise ValueError(
+                "DataArray is missing required spatial attributes (width, "
+                "height, transform)."
+            ) from exc
+
+        return GridDefinition(
+            crs=crs, width=width, height=height, transform=transform
+        )
+
 
 def split_features_for_rasters(
     features: geopandas.GeoDataFrame,
