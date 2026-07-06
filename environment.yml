@@ -5,7 +5,6 @@ channels:
 dependencies:
   - python=3.13
   - affine
-  - black
   - contextily
   - geopandas
   - jupyter
@@ -20,6 +19,7 @@ dependencies:
   - pytest
   - pytest-cov
   - rasterio
+  - ruff
   - seaborn
   - shapely
   - scipy
