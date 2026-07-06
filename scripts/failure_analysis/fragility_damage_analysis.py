@@ -120,9 +120,9 @@ def expected_risks(
 
 def damage_costs_per_area_argentina(x, rehab_costs, design_width, asset_type):
     if asset_type == "road":
-        return 1.0e3 * cost_rehab / design_width
+        return 1.0e3 * rehab_costs / design_width
     else:
-        return 1.0e6 * cost_rehab / design_width
+        return 1.0e6 * rehab_costs / design_width
 
 
 def damage_costs_per_area_vietnam(x, rehab_costs, length_factor, national=False):
@@ -158,34 +158,28 @@ def damage_costs_per_area_vietnam(x, rehab_costs, length_factor, national=False)
 
     rehab_costs["rate_m"] = length_factor * rehab_costs.basic_cost
     # Identify asset type, which is the main driver of the costs
-    if (x.asset_type == "Expressway") | ((national == True) & (x.road_class == 1)):
+    if (x.asset_type == "Expressway") or (national and (x.road_class == 1)):
         rehab_cost = rehab_costs.loc[("Expressway", ter_type), "rate_m"]
         rehab_corr = rehab_costs.loc[("Expressway", ter_type), "design_width"]
-    elif (x.asset_type == "National roads") | (
-        (national == True) & (x.road_class == 2)
-    ):
+    elif (x.asset_type == "National roads") | (national and (x.road_class == 2)):
         rehab_cost = rehab_costs.loc[("National  2x Carriageway", ter_type), "rate_m"]
         rehab_corr = rehab_costs.loc[
             ("National  2x Carriageway", ter_type), "design_width"
         ]
-    elif (x.asset_type == "National roads") | (
-        (national == True) & (x.road_class == 3)
-    ):
+    elif (x.asset_type == "National roads") | (national and (x.road_class == 3)):
         rehab_cost = rehab_costs.loc[("National  1x Carriageway", ter_type), "rate_m"]
         rehab_corr = rehab_costs.loc[
             ("National  1x Carriageway", ter_type), "design_width"
         ]
-    elif (x.asset_type == "Provincial roads") | (
-        (national == True) & (x.road_class == 4)
-    ):
+    elif (x.asset_type == "Provincial roads") | (national and (x.road_class == 4)):
         rehab_cost = rehab_costs.loc[("Provincial", ter_type), "rate_m"]
         rehab_corr = rehab_costs.loc[("Provincial", ter_type), "design_width"]
     elif (
         (x.asset_type == "Urban roads/Named roads") | (x.asset_type == "Boulevard")
-    ) | ((national == True) & (x.road_class == 5)):
+    ) | (national and (x.road_class == 5)):
         rehab_cost = rehab_costs.loc[("District", ter_type), "rate_m"]
         rehab_corr = rehab_costs.loc[("District", ter_type), "design_width"]
-    elif (x.asset_type == "Other roads") | ((national == True) & (x.road_class == 6)):
+    elif (x.asset_type == "Other roads") | (national and (x.road_class == 6)):
         rehab_cost = rehab_costs.loc[("Commune", ter_type), "rate_m"]
         rehab_corr = rehab_costs.loc[("Commune", ter_type), "design_width"]
     elif x.asset_type == "Bridge":

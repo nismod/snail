@@ -176,7 +176,6 @@ def split(args):
     if args.raster:
         grid, all_bands = read_raster_metadata(args.raster)
     else:
-        crs = None
         width = args.width
         height = args.height
         affine_transform = args.transform
