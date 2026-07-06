@@ -1,5 +1,5 @@
-"""Test core objects/concepts
-"""
+"""Test core objects/concepts"""
+
 import snail
 
 

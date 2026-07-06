@@ -32,6 +32,7 @@ Results
     - geometry - Shapely Point geometry of intersecting node ID
 
 """
+
 import itertools
 import os
 import sys
@@ -60,9 +61,7 @@ def line_length(line, ellipsoid="WGS-84"):
         return sum(line_length(segment) for segment in line)
 
     return sum(
-        vincenty(
-            tuple(reversed(a)), tuple(reversed(b)), ellipsoid=ellipsoid
-        ).kilometers
+        vincenty(tuple(reversed(a)), tuple(reversed(b)), ellipsoid=ellipsoid).kilometers
         for a, b in pairwise(line.coords)
     )
 
@@ -85,9 +84,7 @@ def extract_value_from_gdf(x, gdf_sindex, gdf, column_name):
     -------
     extracted value from other gdf
     """
-    return gdf.loc[list(gdf_sindex.intersection(x.bounds[:2]))][
-        column_name
-    ].values[0]
+    return gdf.loc[list(gdf_sindex.intersection(x.bounds[:2]))][column_name].values[0]
 
 
 def networkedge_polygon_intersection(
@@ -118,11 +115,7 @@ def networkedge_polygon_intersection(
         - length - Float length of intersection of edge LineString and hazard Polygon
         - geometry - Shapely LineString geometry of intersection of edge LineString and hazard Polygon
     """
-    print(
-        "* Starting {} and {} intersections".format(
-            edge_shapefile, hazard_shapefile
-        )
-    )
+    print("* Starting {} and {} intersections".format(edge_shapefile, hazard_shapefile))
     line_gpd = gpd.read_file(edge_shapefile)
     line_gpd.to_crs(crs)
     poly_gpd = gpd.read_file(hazard_shapefile)
@@ -165,9 +158,7 @@ def networkedge_polygon_intersection(
 
         selected_polys = poly_bounding_box_gpd.iloc[
             list(
-                poly_sindex.intersection(
-                    line_bounding_box_gpd.geometry.iloc[0].bounds
-                )
+                poly_sindex.intersection(line_bounding_box_gpd.geometry.iloc[0].bounds)
             )
         ]
         if len(selected_polys.index) > 0:
@@ -188,40 +179,30 @@ def networkedge_polygon_intersection(
                             if crs == {"init": "epsg:4326"}:
                                 data.append(
                                     {
-                                        edge_id_column: getattr(
-                                            lines, edge_id_column
-                                        ),
+                                        edge_id_column: getattr(lines, edge_id_column),
                                         polygon_id_column: getattr(
                                             poly, polygon_id_column
                                         ),
-                                        edge_length_column: 1000.0
-                                        * line_length(geom),
+                                        edge_length_column: 1000.0 * line_length(geom),
                                         "geometry": geom,
                                     }
                                 )
                             else:
                                 data.append(
                                     {
-                                        edge_id_column: getattr(
-                                            lines, edge_id_column
-                                        ),
+                                        edge_id_column: getattr(lines, edge_id_column),
                                         polygon_id_column: getattr(
                                             poly, polygon_id_column
                                         ),
-                                        edge_length_column: 1000.0
-                                        * geom.length,
+                                        edge_length_column: 1000.0 * geom.length,
                                         "geometry": geom,
                                     }
                                 )
                         else:
                             data.append(
                                 {
-                                    edge_id_column: getattr(
-                                        lines, edge_id_column
-                                    ),
-                                    polygon_id_column: getattr(
-                                        poly, polygon_id_column
-                                    ),
+                                    edge_id_column: getattr(lines, edge_id_column),
+                                    polygon_id_column: getattr(poly, polygon_id_column),
                                     edge_length_column: 0,
                                     "geometry": lines.geometry,
                                 }
@@ -265,11 +246,7 @@ def networknode_polygon_intersection(
         - node_id - String name of intersecting node ID
         - geometry - Shapely Point geometry of intersecting node ID
     """
-    print(
-        "* Starting {} and {} intersections".format(
-            node_shapefile, hazard_shapefile
-        )
-    )
+    print("* Starting {} and {} intersections".format(node_shapefile, hazard_shapefile))
     point_gpd = gpd.read_file(node_shapefile)
     point_gpd.to_crs(crs)
     # if 'id' in point_gpd.columns.values.tolist():
@@ -299,12 +276,8 @@ def networknode_polygon_intersection(
                     ):
                         data.append(
                             {
-                                node_id_column: getattr(
-                                    points, node_id_column
-                                ),
-                                polygon_id_column: getattr(
-                                    poly, polygon_id_column
-                                ),
+                                node_id_column: getattr(points, node_id_column),
+                                polygon_id_column: getattr(poly, polygon_id_column),
                                 "geometry": points.geometry,
                             }
                         )
@@ -440,9 +413,7 @@ def edgenode_boundary_intersections(
                             network_id_column: lines[network_id_column],
                             "length": 1000.0
                             * line_length(
-                                lines["geometry"].intersection(
-                                    poly["geometry"]
-                                )
+                                lines["geometry"].intersection(poly["geometry"])
                             ),
                             polygon_id_column: poly[polygon_id_column],
                         }
@@ -452,9 +423,7 @@ def edgenode_boundary_intersections(
                             polygon_id_column: poly[polygon_id_column],
                         }
 
-                    data_dictionary.append(
-                        {**value_dictionary, **hazard_dictionary}
-                    )
+                    data_dictionary.append({**value_dictionary, **hazard_dictionary})
 
     del line_gpd, poly_gpd
     return data_dictionary
@@ -557,8 +526,7 @@ def create_hazard_attributes_for_network(
                     hazard_thrs = [
                         (thresholds[t], thresholds[t + 1])
                         for t in range(len(thresholds) - 1)
-                        if "{0}-{1}".format(thresholds[t], thresholds[t + 1])
-                        in file
+                        if "{0}-{1}".format(thresholds[t], thresholds[t + 1]) in file
                     ][0]
                     hazard_dict["min_hazard"] = hazard_thrs[0]
                     hazard_dict["max_hazard"] = hazard_thrs[1]
@@ -577,13 +545,9 @@ def create_hazard_attributes_for_network(
     data_df = pd.DataFrame(data_dict)
     data_df_cols = data_df.columns.values.tolist()
     if network_length_column in data_df_cols:
-        selected_cols = [
-            cols for cols in data_df_cols if cols != network_length_column
-        ]
+        selected_cols = [cols for cols in data_df_cols if cols != network_length_column]
         data_df = (
-            data_df.groupby(selected_cols)[network_length_column]
-            .sum()
-            .reset_index()
+            data_df.groupby(selected_cols)[network_length_column].sum().reset_index()
         )
 
     return data_df
@@ -617,9 +581,7 @@ def match_admin_layer_ids(
 
     admin_2["geometry_centroid"] = admin_2.geometry.centroid
     admin_2_centroids = admin_2[[admin_2_id, "geometry_centroid"]]
-    admin_2_centroids.rename(
-        columns={"geometry_centroid": "geometry"}, inplace=True
-    )
+    admin_2_centroids.rename(columns={"geometry_centroid": "geometry"}, inplace=True)
     admin_2_matches = gpd.sjoin(
         admin_2_centroids,
         admin_1[[admin_1_id, "geometry"]],
@@ -636,9 +598,7 @@ def match_admin_layer_ids(
     if no_admin_2:
         remain_admin_2 = admin_2[admin_2[admin_2_id].isin(no_admin_2)]
         remain_admin_2[admin_1_id] = remain_admin_2.progress_apply(
-            lambda x: extract_value_from_gdf(
-                x, sindex_admin_1, admin_1_id, admin_1_id
-            ),
+            lambda x: extract_value_from_gdf(x, sindex_admin_1, admin_1_id, admin_1_id),
             axis=1,
         )
 

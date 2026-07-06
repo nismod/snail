@@ -1,5 +1,5 @@
-"""Generate darthmouth events
-"""
+"""Generate darthmouth events"""
+
 import os
 import sys
 import configparser
@@ -34,16 +34,12 @@ def line_length(line, ellipsoid="WGS-84"):
         return sum(line_length(segment) for segment in line)
 
     return sum(
-        vincenty(
-            tuple(reversed(a)), tuple(reversed(b)), ellipsoid=ellipsoid
-        ).kilometers
+        vincenty(tuple(reversed(a)), tuple(reversed(b)), ellipsoid=ellipsoid).kilometers
         for a, b in pairwise(line.coords)
     )
 
 
-def create_network_from_edges(
-    edge_file, node_edge_prefix, projection, distance=20
-):
+def create_network_from_edges(edge_file, node_edge_prefix, projection, distance=20):
     edges = gpd.read_file(edge_file).to_crs(epsg=projection)
     edges.columns = map(str.lower, edges.columns)
     if "id" in edges.columns.values.tolist():
@@ -101,16 +97,12 @@ def get_nearest_node(x, sindex_input_nodes, input_nodes, id_column):
     ].values[0]
 
 
-def extract_gdf_values_containing_nodes(
-    x, sindex_input_gdf, input_gdf, column_name
-):
+def extract_gdf_values_containing_nodes(x, sindex_input_gdf, input_gdf, column_name):
     a = input_gdf.loc[list(input_gdf.geometry.contains(x.geometry))]
     if len(a.index) > 0:
         return a[column_name].values[0]
     else:
-        return get_nearest_node(
-            x.geometry, sindex_input_gdf, input_gdf, column_name
-        )
+        return get_nearest_node(x.geometry, sindex_input_gdf, input_gdf, column_name)
 
 
 def convert_tif_to_csv_gdf(
@@ -120,9 +112,7 @@ def convert_tif_to_csv_gdf(
     value_column,
     projection={"init": "epsg:4326"},
 ):
-    outCSVName = os.path.join(
-        filepath, "{}.csv".format(filename.split(".tif")[0])
-    )
+    outCSVName = os.path.join(filepath, "{}.csv".format(filename.split(".tif")[0]))
     # if filename.endswith('.tif'):
     #     outCSVName = os.path.join(filepath, '{}.csv'.format(filename[:-4]))
     # elif filename.endswith('.tiff'):

@@ -20,9 +20,7 @@ for nid, idx in zip(nids, idxs):
     y.append(coords[1])
 
 nodes = DataFrame({"x": x, "y": y}, index=nids)
-edges = DataFrame(
-    {"from": from_node, "to": to_node, "weight": gdf["length_km"].values}
-)
+edges = DataFrame({"from": from_node, "to": to_node, "weight": gdf["length_km"].values})
 net = pandana.Network(
     nodes["x"], nodes["y"], edges["from"], edges["to"], edges[["weight"]]
 )

@@ -141,8 +141,7 @@ def get_metadata(curve_id: str) -> DamageCurveMetadata:
     if row.empty:
         raise KeyError(f"Curve '{curve_id}' is not packaged with snail.")
     record = {
-        key: (None if pd.isna(value) else value)
-        for key, value in row.iloc[0].items()
+        key: (None if pd.isna(value) else value) for key, value in row.iloc[0].items()
     }
     return DamageCurveMetadata(**record)  # type: ignore[arg-type]
 

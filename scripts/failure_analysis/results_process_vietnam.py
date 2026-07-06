@@ -3,7 +3,7 @@ The results show different outcomes with respect to:
 1. Total exposed lengths of networks
 2. Expected exposures for different flood depths
 3. Variations across climate models and emission scenarios
-4. Spatial adminstrative level results of locations and extents of exposures   
+4. Spatial adminstrative level results of locations and extents of exposures
 """
 
 import os
@@ -130,15 +130,11 @@ def main():
     # print (exposure_results)
 
     exposure_results["min_damage_percent"] = exposure_results.progress_apply(
-        lambda x: fda.damage_function_roads_v2(
-            x.min_flood_depth, x.road_cond, 1
-        ),
+        lambda x: fda.damage_function_roads_v2(x.min_flood_depth, x.road_cond, 1),
         axis=1,
     )
     exposure_results["max_damage_percent"] = exposure_results.progress_apply(
-        lambda x: fda.damage_function_roads_v2(
-            x.max_flood_depth, x.road_cond, 1
-        ),
+        lambda x: fda.damage_function_roads_v2(x.max_flood_depth, x.road_cond, 1),
         axis=1,
     )
     exposure_results["min_damage_cost"] = (

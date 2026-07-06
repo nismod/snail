@@ -27,7 +27,10 @@ import pandas as pd
 
 RAW_DATA_DIR = Path("nirandjan-2023-vulnerability-database")
 TABLE_D1 = RAW_DATA_DIR / "Table_D1_Summary_CI_Vulnerability_Data_V1.0.0.xlsx"
-TABLE_D2 = RAW_DATA_DIR / "Table_D2_Multi-Hazard_Fragility_and_Vulnerability_Curves_V1.0.0.xlsx"
+TABLE_D2 = (
+    RAW_DATA_DIR
+    / "Table_D2_Multi-Hazard_Fragility_and_Vulnerability_Curves_V1.0.0.xlsx"
+)
 OUTPUT_DIR = Path("src/snail/data/damage_curves")
 
 # Sheets in Table D1 / D2 to ignore
@@ -122,8 +125,8 @@ def parse_table_d1(table_path: Path) -> pd.DataFrame:
         raise KeyError(f"Expected metadata columns missing: {missing_columns}")
 
     metadata["hazard_type"] = metadata["hazard_type"].astype(str).str.strip()
-    metadata["hazard_name"] = metadata["hazard_type"].map(HAZARD_CODE_MAP).fillna(
-        metadata["hazard_type"]
+    metadata["hazard_name"] = (
+        metadata["hazard_type"].map(HAZARD_CODE_MAP).fillna(metadata["hazard_type"])
     )
 
     return metadata

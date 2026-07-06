@@ -25,7 +25,9 @@ assert snail_spec.loader is not None
 snail_spec.loader.exec_module(snail_module)
 
 damage_library = importlib.import_module("snail.damage_library")
-PiecewiseLinearDamageCurve = importlib.import_module("snail.damages").PiecewiseLinearDamageCurve
+PiecewiseLinearDamageCurve = importlib.import_module(
+    "snail.damages"
+).PiecewiseLinearDamageCurve
 
 
 def test_packaged_curve_resources_are_available():

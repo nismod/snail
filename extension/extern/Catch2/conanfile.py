@@ -4,13 +4,21 @@ from conans import ConanFile, CMake
 
 class CatchConan(ConanFile):
     name = "Catch2"
-    description = "A modern, C++-native, header-only, framework for unit-tests, TDD and BDD"
+    description = (
+        "A modern, C++-native, header-only, framework for unit-tests, TDD and BDD"
+    )
     topics = ("conan", "catch2", "header-only", "unit-test", "tdd", "bdd")
     url = "https://github.com/catchorg/Catch2"
     homepage = url
     license = "BSL-1.0"
     exports = "LICENSE.txt"
-    exports_sources = ("single_include/*", "CMakeLists.txt", "CMake/*", "contrib/*", "src/*")
+    exports_sources = (
+        "single_include/*",
+        "CMakeLists.txt",
+        "CMake/*",
+        "contrib/*",
+        "src/*",
+    )
     generators = "cmake"
 
     def package(self):
@@ -18,7 +26,7 @@ class CatchConan(ConanFile):
         cmake.definitions["BUILD_TESTING"] = "OFF"
         cmake.definitions["CATCH_INSTALL_DOCS"] = "OFF"
         cmake.definitions["CATCH_INSTALL_HELPERS"] = "ON"
-        cmake.configure(build_folder='build')
+        cmake.configure(build_folder="build")
         cmake.install()
 
         self.copy(pattern="LICENSE.txt", dst="licenses")
