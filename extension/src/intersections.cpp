@@ -8,6 +8,7 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include "geoarrow.hpp"
 #include "geometry.hpp"
 #include "grid.hpp"
 #include "transform.hpp"
@@ -133,4 +134,7 @@ PYBIND11_MODULE(intersections, m) {
   m.def("get_cell_indices", &snail::get_cell_indices,
         "Get LineString cell indices in a grid");
   m.def("split_polygon", &snail::splitPolygon, "Split Polygon along a grid");
+
+  // GeoArrow-based functions, operating on whole geometry columns
+  snail::geoarrow::register_module(m);
 }

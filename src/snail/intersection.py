@@ -17,6 +17,9 @@ from snail.core.intersections import (  # type: ignore
     split_linestring,
     split_polygon,
 )
+from snail.core.intersections import (  # type: ignore
+    split_linestrings as _split_linestrings_geoarrow,
+)
 
 # optional progress bars
 if "SNAIL_PROGRESS" in os.environ and os.environ["SNAIL_PROGRESS"] in (
@@ -183,6 +186,40 @@ def split_linestrings(
                 pieces.append(new_row)
     logging.info(f"Split {len(linestring_features)} edges into {len(pieces)} pieces")
     splits_df = geopandas.GeoDataFrame(pieces, crs=grid.crs, geometry="geometry")
+    return splits_df
+
+
+def split_linestrings_geoarrow(
+    linestring_features: geopandas.GeoDataFrame, grid: GridDefinition
+) -> geopandas.GeoDataFrame:
+    """Split linestrings along a grid, vectorised over the geometry column.
+
+    Functionally equivalent to :func:`split_linestrings`, but passes the whole
+    geometry column to the C++ extension in one call as a GeoArrow array
+    (flat coordinate and offset buffers, no per-geometry Python objects), and
+    receives the split geometries back the same way.
+    """
+    geometry = linestring_features.geometry
+    splits, index = _split_linestrings_geoarrow(
+        geometry.to_arrow(geometry_encoding="geoarrow", interleaved=True),
+        grid.width,
+        grid.height,
+        grid.transform,
+    )
+    split_geometry = geopandas.GeoSeries.from_arrow(splits, crs=grid.crs)
+    logging.info(
+        f"Split {len(linestring_features)} edges into {len(split_geometry)} pieces"
+    )
+    # repeat each parent feature's attributes for each of its splits
+    splits_df = geopandas.GeoDataFrame(
+        linestring_features.drop(columns=geometry.name)
+        .take(index)
+        .reset_index(drop=True),
+        geometry=split_geometry,
+        crs=grid.crs,
+    )
+    # number the splits of each parent feature 0..n
+    splits_df["split"] = pandas.Series(index).groupby(index).cumcount()
     return splits_df
 
 

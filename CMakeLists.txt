@@ -11,7 +11,7 @@ set(CPP_SRC_DIR extension/src)
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED)
 
-python_add_library(intersections MODULE ${CPP_SRC_DIR}/intersections.cpp WITH_SOABI ${CPP_SRC_DIR}/operations.cpp)
+python_add_library(intersections MODULE ${CPP_SRC_DIR}/intersections.cpp WITH_SOABI ${CPP_SRC_DIR}/operations.cpp ${CPP_SRC_DIR}/geoarrow.cpp)
 
 target_include_directories(intersections PUBLIC ${CPP_SRC_DIR})
 target_link_libraries(intersections PRIVATE pybind11::headers)
