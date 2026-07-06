@@ -2,14 +2,13 @@
 
 Calculate the intersection of hazards and infrastructure networks.
 """
+
 import csv
 import glob
 import json
 import os
 
 import geopandas
-from shapely.wkt import dumps
-from tqdm import tqdm
 
 
 def main():
@@ -85,11 +84,7 @@ def main():
 
                         # Use spatial index to find candidate network segments
                         potential_networks = network_df.iloc[
-                            list(
-                                network_df.sindex.intersection(
-                                    hazard_geom.bounds
-                                )
-                            )
+                            list(network_df.sindex.intersection(hazard_geom.bounds))
                         ]
                         print("found", len(potential_networks), "network")
 
@@ -98,10 +93,8 @@ def main():
                                 print(network.ID, hazard_n)
                                 if network.geometry.intersects(hazard_geom):
                                     print("intersects")
-                                    intersection_geom = (
-                                        network.geometry.intersection(
-                                            hazard_geom
-                                        )
+                                    intersection_geom = network.geometry.intersection(
+                                        hazard_geom
                                     )
                                     print("done intersection")
                                     w.writerow(
@@ -138,9 +131,7 @@ def main():
 
 
 def load_config():
-    config_path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "config.json"
-    )
+    config_path = os.path.join(os.path.dirname(__file__), "..", "..", "config.json")
     with open(config_path) as fh:
         config = json.load(fh)
     return config

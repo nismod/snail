@@ -32,9 +32,9 @@ Results
     - geometry - Shapely Point geometry of intersecting node ID
 
 """
+
 import itertools
 import os
-import sys
 
 import geopandas as gpd
 import pandas as pd
@@ -58,9 +58,7 @@ def line_length(line, ellipsoid="WGS-84"):
         return sum(line_length(segment) for segment in line)
 
     return sum(
-        vincenty(
-            tuple(reversed(a)), tuple(reversed(b)), ellipsoid=ellipsoid
-        ).kilometers
+        vincenty(tuple(reversed(a)), tuple(reversed(b)), ellipsoid=ellipsoid).kilometers
         for a, b in pairwise(line.coords)
     )
 
@@ -87,11 +85,7 @@ def networkedge_hazard_intersection(
         - length - Float length of intersection of edge LineString and hazard Polygon
         - geometry - Shapely LineString geometry of intersection of edge LineString and hazard Polygon
     """
-    print(
-        "* Starting {} and {} intersections".format(
-            edge_shapefile, hazard_shapefile
-        )
-    )
+    print("* Starting {} and {} intersections".format(edge_shapefile, hazard_shapefile))
     line_gpd = gpd.read_file(edge_shapefile)
     line_gpd.to_crs({"init": "epsg:4326"})
     poly_gpd = gpd.read_file(hazard_shapefile)
@@ -144,18 +138,16 @@ def networkedge_hazard_intersection(
                     list(poly_sindex.intersection(lines.geometry.bounds))
                 ]
                 for p_index, poly in intersected_polys.iterrows():
-                    if (
-                        lines["geometry"].intersects(poly["geometry"]) is True
-                    ) and (poly.geometry.is_valid is True):
+                    if (lines["geometry"].intersects(poly["geometry"]) is True) and (
+                        poly.geometry.is_valid is True
+                    ):
                         if line_length(lines["geometry"]) > 1e-3:
                             data.append(
                                 {
                                     edge_id_column: lines[edge_id_column],
                                     "length": 1000.0
                                     * line_length(
-                                        lines["geometry"].intersection(
-                                            poly["geometry"]
-                                        )
+                                        lines["geometry"].intersection(poly["geometry"])
                                     ),
                                     "geometry": lines["geometry"].intersection(
                                         poly["geometry"]
@@ -204,11 +196,7 @@ def networknode_hazard_intersection(
         - node_id - String name of intersecting node ID
         - geometry - Shapely Point geometry of intersecting node ID
     """
-    print(
-        "* Starting {} and {} intersections".format(
-            node_shapefile, hazard_shapefile
-        )
-    )
+    print("* Starting {} and {} intersections".format(node_shapefile, hazard_shapefile))
     point_gpd = gpd.read_file(node_shapefile)
     point_gpd.to_crs({"init": "epsg:4326"})
     point_gpd.rename(columns={"id": node_id_column}, inplace=True)
@@ -352,9 +340,7 @@ def main():
     ]  # change this to GLOFRIS scenarios
 
     # Specify the output files and paths to be created
-    output_dir = os.path.join(
-        output_path, "networks_hazards_intersection_shapefiles"
-    )
+    output_dir = os.path.join(output_path, "networks_hazards_intersection_shapefiles")
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
@@ -364,9 +350,7 @@ def main():
 
         for m in range(len(modes)):
             if modes[m] in line_asset_modes:
-                edges_in = os.path.join(
-                    data_path, "network", modes_shapefile_names[m]
-                )
+                edges_in = os.path.join(data_path, "network", modes_shapefile_names[m])
                 edges_name = modes_shapefile_names[m]
 
                 output_dir = os.path.join(
@@ -401,9 +385,7 @@ def main():
                 )
 
             elif modes[m] in point_asset_modes:
-                nodes_in = os.path.join(
-                    data_path, "network", modes_shapefile_names[m]
-                )
+                nodes_in = os.path.join(data_path, "network", modes_shapefile_names[m])
                 nodes_name = modes_shapefile_names[m]
 
                 output_dir = os.path.join(

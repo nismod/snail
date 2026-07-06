@@ -55,9 +55,7 @@ def associate_raster_files(splits, rasters):
 def read_rasters(rasters):
     for raster in rasters.itertuples():
         for band_number in raster.bands:
-            yield raster, band_number, read_raster_band_data(
-                raster.path, band_number
-            )
+            yield raster, band_number, read_raster_band_data(raster.path, band_number)
 
 
 def read_raster_band_data(

@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["affine", "black", "hilbertcurve", "nbstripout", "pytest-cov", "pytest"]
+dev = ["affine", "ruff", "hilbertcurve", "nbstripout", "pytest-cov", "pytest"]
 docs = ["sphinx", "nbsphinx", "sphinx_gallery", "numpydoc"]
 tutorials = [
     "contextily",
@@ -65,8 +65,24 @@ build-backend = "scikit_build_core.build"
 wheel.expand-macos-universal-tags = true
 wheel.packages = ["src/snail"]
 
+[tool.scikit-build.sdist]
+include = [
+    "src/snail/data/damage_curves/curves.csv",
+    "src/snail/data/damage_curves/metadata.csv",
+    "src/snail/data/damage_curves/NOTICE",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.black]
-line-length = 79
+[tool.ruff]
+exclude = [
+    ".venv",
+    "extension/extern",
+    "scripts/failure_analysis",
+    "scripts/network_creation",
+    "scripts/network_hazard_intersections"
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tutorials/*.ipynb" = ["E402"]

@@ -2,7 +2,7 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from typing import Callable, List, Tuple, Union
+from typing import Callable, List, Tuple
 
 import geopandas
 import numpy
@@ -181,12 +181,8 @@ def split_linestrings(
                 new_row.geometry = s
                 new_row["split"] = j
                 pieces.append(new_row)
-    logging.info(
-        f"Split {len(linestring_features)} edges into {len(pieces)} pieces"
-    )
-    splits_df = geopandas.GeoDataFrame(
-        pieces, crs=grid.crs, geometry="geometry"
-    )
+    logging.info(f"Split {len(linestring_features)} edges into {len(pieces)} pieces")
+    splits_df = geopandas.GeoDataFrame(pieces, crs=grid.crs, geometry="geometry")
     return splits_df
 
 
@@ -253,8 +249,7 @@ def split_polygons_experimental(
         )
         # round to high precision (avoid floating point errors)
         geom_splits = [
-            _set_precision(s, POLYGON_COORDINATE_PRECISION)
-            for s in geom_splits
+            _set_precision(s, POLYGON_COORDINATE_PRECISION) for s in geom_splits
         ]
         # to polygons
         geom_splits = list(polygonize(geom_splits))
@@ -264,9 +259,7 @@ def split_polygons_experimental(
             new_row.geometry = s
             new_row["split"] = j
             pieces.append(new_row)
-    logging.info(
-        f"  Split {len(polygon_features)} areas into {len(pieces)} pieces"
-    )
+    logging.info(f"  Split {len(polygon_features)} areas into {len(pieces)} pieces")
     splits_df = geopandas.GeoDataFrame(pieces)
     splits_df.crs = grid.crs
     return splits_df
@@ -432,9 +425,7 @@ def aggregate_values_to_grid(
 
     if df.empty:
         inferred_dtype = (
-            numpy.array(fill_value).dtype
-            if dtype is None
-            else numpy.dtype(dtype)
+            numpy.array(fill_value).dtype if dtype is None else numpy.dtype(dtype)
         )
         return numpy.full((height, width), fill_value, dtype=inferred_dtype)
 

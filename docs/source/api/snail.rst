@@ -33,6 +33,14 @@ snail.damages module
    :undoc-members:
    :show-inheritance:
 
+snail.damage\_library module
+----------------------------
+
+.. automodule:: snail.damage_library
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 snail.intersection module
 -------------------------
 

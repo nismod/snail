@@ -176,7 +176,6 @@ def split(args):
     if args.raster:
         grid, all_bands = read_raster_metadata(args.raster)
     else:
-        crs = None
         width = args.width
         height = args.height
         affine_transform = args.transform
@@ -203,9 +202,7 @@ def split(args):
         logging.info("Preparing linestrings")
         prepared = prepare_linestrings(features)
         logging.info("Splitting linestrings")
-        splits = split_features_for_rasters(
-            prepared, [grid], split_linestrings
-        )
+        splits = split_features_for_rasters(prepared, [grid], split_linestrings)
     elif "Polygon" in geom_type:
         logging.info("Preparing polygons")
         prepared = prepare_polygons(features)
@@ -216,9 +213,7 @@ def split(args):
             )
         else:
             logging.info("Splitting polygons")
-            splits = split_features_for_rasters(
-                prepared, [grid], split_polygons
-            )
+            splits = split_features_for_rasters(prepared, [grid], split_polygons)
     else:
         raise ValueError("Could not process vector data of type %s", geom_type)
 
@@ -248,9 +243,7 @@ def split(args):
                 args.raster,
                 band_index,
             )
-            band_data = read_raster_band_data(
-                args.raster, band_number=int(band_index)
-            )
+            band_data = read_raster_band_data(args.raster, band_number=int(band_index))
             splits[key] = get_raster_values_for_splits(splits, band_data)
 
     splits.set_crs(features_crs, inplace=True)
@@ -284,9 +277,7 @@ def process(args):
     # read networks
     vector_layers = _read_csv_or_quit(args.features)
 
-    vector_layers.path = vector_layers.path.apply(
-        _join_dirname, args=(dirname,)
-    )
+    vector_layers.path = vector_layers.path.apply(_join_dirname, args=(dirname,))
     if "output_path" not in vector_layers.columns:
         vector_layers["output_path"] = vector_layers.path.apply(
             lambda p: f"{p}.processed.parquet"
@@ -311,9 +302,7 @@ def _process_layer(vector_layer, transforms, rasters, experimental=False):
         with_data = associate_raster_files(split, rasters)
     elif "LineString" in geom_type:
         prepared = prepare_linestrings(features)
-        split = split_features_for_rasters(
-            prepared, transforms, split_linestrings
-        )
+        split = split_features_for_rasters(prepared, transforms, split_linestrings)
         with_data = associate_raster_files(split, rasters)
     elif "Polygon" in geom_type:
         prepared = prepare_polygons(features)
@@ -323,9 +312,7 @@ def _process_layer(vector_layer, transforms, rasters, experimental=False):
                 prepared, transforms, split_polygons_experimental
             )
         else:
-            split = split_features_for_rasters(
-                prepared, transforms, split_polygons
-            )
+            split = split_features_for_rasters(prepared, transforms, split_polygons)
         with_data = associate_raster_files(split, rasters)
     else:
         raise ValueError(f"Could not process vector data of type {geom_type}")
