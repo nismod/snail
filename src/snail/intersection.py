@@ -9,8 +9,7 @@ import numpy
 import pandas
 import rasterio
 from shapely import box
-from shapely.geometry import mapping, shape
-from shapely.ops import linemerge, polygonize
+from shapely.ops import linemerge
 
 from snail.core.intersections import (  # type: ignore
     get_cell_indices,
@@ -29,10 +28,6 @@ if "SNAIL_PROGRESS" in os.environ and os.environ["SNAIL_PROGRESS"] in (
         from snail.tqdm_standin import tqdm_standin as tqdm
 else:
     from snail.tqdm_standin import tqdm_standin as tqdm
-
-# Use some high degree of precision to round polygon coordinates
-# when polygonizing split edges to help avoid floating point errors
-POLYGON_COORDINATE_PRECISION = 9
 
 
 @dataclass(frozen=True)
@@ -225,19 +220,14 @@ def split_polygons_experimental(
 ) -> geopandas.GeoDataFrame:
     """Split polygons along a grid
 
-    Experimental implementation of `split_polygons`, possibly fast/incorrect
-    with some inputs.
+    Experimental implementation of `split_polygons`, possibly faster than the
+    shapely/GEOS overlay approach with some inputs.
+
+    Uses snail::splitPolygon to scan each polygon (which may have holes, and
+    is assumed to be valid) along the grid lines and assemble the polygon
+    pieces that cover each cell.
     """
     pieces = []
-    ##
-    # Approach using snail::splitPolygon to produce a mesh of
-    # half-line pieces within the polygon interior, plus the boundary
-    # split into pieces, then passed to shapely (GEOS) polygonize
-    # - doesn't handle polygons with holes
-    # - polygonize doesn't always piece back together correctly, or leaves
-    #   gaps - perhaps especially for coarse grids (vs shape size)
-    # - should be possible to write all at the lower level
-    ##
     polygon_features["split"] = 0
     for i in tqdm(range(len(polygon_features))):
         # split area
@@ -247,12 +237,6 @@ def split_polygons_experimental(
             grid.height,
             grid.transform,
         )
-        # round to high precision (avoid floating point errors)
-        geom_splits = [
-            _set_precision(s, POLYGON_COORDINATE_PRECISION) for s in geom_splits
-        ]
-        # to polygons
-        geom_splits = list(polygonize(geom_splits))
         # add to collection
         for j, s in enumerate(geom_splits):
             new_row = polygon_features.iloc[i].copy()
@@ -269,15 +253,6 @@ def _try_merge(geom):
     if geom.geom_type == "MultiLineString":
         geom = linemerge(geom)
     return geom
-
-
-def _set_precision(geom, precision):
-    """Set geometry coordinate precision"""
-    geom_mapping = mapping(geom)
-    geom_mapping["coordinates"] = numpy.round(
-        numpy.array(geom_mapping["coordinates"]), precision
-    )
-    return shape(geom_mapping)
 
 
 def get_raster_values_for_splits(

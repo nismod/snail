@@ -99,6 +99,13 @@ struct LineString {
       : coordinates(coordinates) {}
 };
 
+/// A polygon: one exterior ring and zero or more interior rings (holes).
+/// Rings are stored closed (first point equal to last point).
+struct Polygon {
+  std::vector<Coord> exterior;
+  std::vector<std::vector<Coord>> interiors;
+};
+
 /// Haversine formula - calculate the distance between two points on the surface
 /// of the earth, using great-circles (NOTE: Only use with data in
 /// latitude/longitude coordinates).

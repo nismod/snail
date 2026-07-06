@@ -8,13 +8,18 @@
 namespace snail {
 namespace operations {
 
-enum class Direction { horizontal, vertical };
-
 std::vector<std::vector<geometry::Coord>>
     findIntersectionsLineString(geometry::LineString, grid::Grid);
-std::vector<std::vector<geometry::Coord>>
-splitAlongGridlines(std::vector<geometry::Coord>, int, int, Direction,
-                    grid::Grid);
+
+/// Split a valid polygon along the lines of a raster grid.
+///
+/// Rings are passed exterior first, then any interior rings (holes); each
+/// ring may be closed or open (closure is applied) and in either winding
+/// order (orientation is normalised internally). Returns one polygon piece
+/// per covered region of a grid cell; every piece lies within a single cell.
+std::vector<geometry::Polygon>
+splitPolygonGrid(const std::vector<std::vector<geometry::Coord>> &rings,
+                 const grid::Grid &grid);
 
 } // namespace operations
 } // namespace snail

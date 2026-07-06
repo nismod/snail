@@ -66,45 +66,42 @@ std::vector<py::object> splitLineString(py::object linestring_py, int nrows,
 
 std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
                                      std::vector<double> transform) {
-  /// It is assumed that polygon is oriented (counter-clockwise)
-  py::tuple bounds = polygon.attr("bounds");
-  double minx = (py::float_)bounds[0];
-  double miny = (py::float_)bounds[1];
-  double maxx = (py::float_)bounds[2];
-  double maxy = (py::float_)bounds[3];
+  // All rings of the polygon: exterior first, then any interiors (holes)
+  std::vector<linestr> rings;
+  rings.push_back(convert_py2cpp(polygon.attr("exterior")));
+  py::object interiors = polygon.attr("interiors");
+  for (py::handle interior : interiors) {
+    rings.push_back(
+        convert_py2cpp(py::reinterpret_borrow<py::object>(interior)));
+  }
 
-  linestr exterior = convert_py2cpp(polygon.attr("exterior"));
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
 
-  // Corners of geometry bbox as cell indices
-  geometry::Coord ll = grid.world_to_grid * geometry::Coord(minx, miny);
-  geometry::Coord ur = grid.world_to_grid * geometry::Coord(maxx, maxy);
+  std::vector<geo::Polygon> splits = operations::splitPolygonGrid(rings, grid);
 
-  geometry::LineString line(exterior);
-  std::vector<linestr> exterior_splits =
-      operations::findIntersectionsLineString(line, grid);
-  std::vector<geometry::Coord> exterior_with_crossings;
-  for (auto split : exterior_splits) {
-    exterior_with_crossings.insert(exterior_with_crossings.end(), split.begin(),
-                                   split.end());
+  const py::object shapely_polygon =
+      py::module_::import("shapely.geometry").attr("Polygon");
+
+  std::vector<py::object> splits_py;
+  std::vector<std::vector<double>> ring_py;
+  for (const geo::Polygon &split : splits) {
+    for (const geo::Coord &point : split.exterior) {
+      ring_py.push_back({point.x, point.y});
+    }
+    std::vector<std::vector<std::vector<double>>> interiors_py;
+    for (const linestr &interior : split.interiors) {
+      std::vector<std::vector<double>> interior_py;
+      for (const geo::Coord &point : interior) {
+        interior_py.push_back({point.x, point.y});
+      }
+      interiors_py.push_back(interior_py);
+    }
+    splits_py.push_back(shapely_polygon(ring_py, interiors_py));
+    ring_py.clear();
   }
-
-  std::vector<linestr> horiz_splits = operations::splitAlongGridlines(
-      exterior_with_crossings, floor(std::min(ll.y, ur.y)),
-      ceil(std::max(ll.y, ur.y)) + 1, operations::Direction::horizontal, grid);
-  std::vector<linestr> vert_splits = operations::splitAlongGridlines(
-      exterior_with_crossings, floor(std::min(ll.x, ur.x)),
-      ceil(std::max(ll.x, ur.x)) + 1, operations::Direction::vertical, grid);
-
-  std::vector<linestr> all_splits;
-  all_splits.insert(all_splits.end(), exterior_splits.begin(),
-                    exterior_splits.end());
-  all_splits.insert(all_splits.end(), horiz_splits.begin(), horiz_splits.end());
-  all_splits.insert(all_splits.end(), vert_splits.begin(), vert_splits.end());
-
-  return convert_cpp2py(all_splits);
+  return splits_py;
 }
 
 std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
@@ -132,5 +129,6 @@ PYBIND11_MODULE(intersections, m) {
         "Split LineString along a grid");
   m.def("get_cell_indices", &snail::get_cell_indices,
         "Get LineString cell indices in a grid");
-  m.def("split_polygon", &snail::splitPolygon, "Split Polygon along a grid");
+  m.def("split_polygon", &snail::splitPolygon,
+        "Split Polygon along a grid, returning Polygon pieces");
 }

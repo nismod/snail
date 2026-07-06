@@ -317,170 +317,213 @@ TEST_CASE("Split with different grid", "[decomposition]") {
   }
 }
 
-struct SplitGridConfig {
-  linestr exterior_crossings;
-  std::vector<linestr> expected_splits;
-  int min_level = 0;
-  int max_level = 2;
-  snail::operations::Direction direction = snail::operations::Direction::horizontal;
-};
 
+static double ring_area2(const linestr &ring) {
+  // relative to the first point, to avoid cancellation for small rings far
+  // from the origin
+  double area2 = 0.0;
+  double x0 = ring.front().x;
+  double y0 = ring.front().y;
+  for (std::size_t i = 0; i + 1 < ring.size(); ++i) {
+    area2 += (ring[i].x - x0) * (ring[i + 1].y - y0) -
+             (ring[i + 1].x - x0) * (ring[i].y - y0);
+  }
+  return area2;
+}
 
-TEST_CASE("Exterior ring splits to gridlines", "[decomposition]") {
-  // Linestring points are marked by o:
-  // Intersection points are marked by (o):
-  // Gridline segments are marked by = and ‖
+static double polygon_area(const snail::geometry::Polygon &polygon) {
+  // holes are wound clockwise, so their signed area is negative
+  double area2 = ring_area2(polygon.exterior);
+  for (const linestr &interior : polygon.interiors) {
+    area2 += ring_area2(interior);
+  }
+  return area2 / 2.0;
+}
+
+static double total_area(const std::vector<snail::geometry::Polygon> &pieces) {
+  double total = 0.0;
+  for (const snail::geometry::Polygon &piece : pieces) {
+    total += polygon_area(piece);
+  }
+  return total;
+}
+
+TEST_CASE("Square is split into cell pieces", "[polygon]") {
   // +---------------+--------------+
   // |               |              |
-  // |               |              |
-  // |               |              |
-  // |               |       o      |
-  // |               |     / |      |
-  // |               |   /   |      |
-  // |               | /     |      |
-  // +--------------(o)=====(o)-----+
-  // |             / ‖       |      |
-  // |           /   ‖       |      |
-  // |         /     ‖       |      |
-  // |       o------(o)------o      |
-  // |               |              |
-  // |               |              |
+  // |      o--------+--------o     |
+  // |      |........|........|     |
+  // |      |........|........|     |
+  // +------+--------+--------+-----+
+  // |      |........|........|     |
+  // |      |........|........|     |
+  // |      o--------+--------o     |
   // |               |              |
   // +---------------+--------------+
   // (0,0)         (1,0)          (2,0)
-  SplitGridConfig case1;
-  case1.exterior_crossings = {
-    {0.5, 0.5}, {1., 0.5}, {1.5, 1.}, {1., 1.}
-  };
-  case1.expected_splits = {
-      {{1., 1.}, {1.5, 1.}},
-  };
-  case1.direction = snail::operations::Direction::horizontal;
-
-  SplitGridConfig case2;
-  case2.exterior_crossings = {
-    {0.5, 0.5}, {1., 0.5}, {1.5, 1.}, {1., 1.}
-  };
-  case2.expected_splits = {
-    {{1., 0.5}, {1., 1.}},
-  };
-  case2.direction = snail::operations::Direction::vertical;
-
-  // Concave shape
-  // +------+------+------+
-  // |      |      |      |
-  // | o--o |      | o--o |
-  // | |..| |      | |..| |
-  // +(o==o)+------+(o==o)+
-  // | |..| |      | |..| |
-  // | |..o(o)----(o)o..| |
-  // | |....‖......‖....| |
-  // +(o)===+======+===(o)+
-  // | |....‖......‖....| |
-  // | |....‖......‖....| |
-  // | o---(o)----(o)---o |
-  // +------+------+------+
-  // 0      1      2      3
-  SplitGridConfig case3;
-  case3.exterior_crossings = {
-      {0.1, 0.1}, {1., 0.1},  {2., 0.1},  {2.9, 0.1}, // bottom edge
-      {2.9, 1.},  {2.9, 2.},  {2.9, 2.2},             // right edge
-      {2.1, 2.2}, {2.1, 2.},  {2.1, 1.5},             // inside right
-      {2., 1.5},  {1., 1.5},  {0.9, 1.5},             // inside top
-      {0.9, 2.},  {0.9, 2.2},                         // inside left
-      {0.1, 2.2}, {0.1, 2.},  {0.1, 1.},  {0.1, 0.1}  // left edge
-  };
-  case3.expected_splits = {// full width interior
-                           {{0.1, 1.}, {1., 1.}},
-                           {{1., 1.}, {2., 1.}},
-                           {{2., 1.}, {2.9, 1.}},
-                           // left tower
-                           {{0.1, 2.}, {0.9, 2.}},
-                           // right tower
-                           {{2.1, 2.}, {2.9, 2.}}};
-  case3.direction = snail::operations::Direction::horizontal;
-
-  // Kite shape
-  SplitGridConfig case4;
-  case4.exterior_crossings = {
-    {0.5, 1.25}, {1.,1.}, {1.5, 0.75}, {2.,1.}, {2.5, 1.25},
-    {2.25,1.}, {2.,0.75}, {1.5, 0.25}, {1.,0.75}, {0.75, 1.}
-  };
-  case4.expected_splits = {
-    {{0.75, 1.0}, {1.0, 1.0}},
-    {{2.0, 1.0}, {2.25, 1.0}}
-  };
-  case4.direction = snail::operations::Direction::horizontal;
-
-  auto test_data = GENERATE_COPY(case1, case2, case3, case4);
-
-  std::vector<linestr> expected_splits = test_data.expected_splits;
-
-  // Using default Affine transform(1, 0, 0, 0, 1, 0)
   snail::grid::Grid grid(2, 2, snail::transform::Affine());
+  std::vector<linestr> rings = {
+      {{0.5, 0.5}, {1.5, 0.5}, {1.5, 1.5}, {0.5, 1.5}, {0.5, 0.5}}};
 
-  std::vector<linestr> splits = snail::operations::splitAlongGridlines(
-    test_data.exterior_crossings,
-    test_data.min_level,
-    test_data.max_level,
-    test_data.direction,
-    grid
-  );
-  // Test that we're getting the expected number of splits
-  REQUIRE(splits.size() == expected_splits.size());
-  // Test that each one of the splits have the expected size
-  for (int i = 0; i < splits.size(); i++) {
-    REQUIRE(splits[i].size() == expected_splits[i].size());
-  }
-  // Test that each one of the splits are made of the expected points
-  for (int i = 0; i < splits.size(); i++) {
-    for (int j = 0; j < splits[i].size(); j++) {
-      snail::geometry::Coord point = splits[i][j];
-      snail::geometry::Coord expected_point = expected_splits[i][j];
+  auto pieces = snail::operations::splitPolygonGrid(rings, grid);
 
-      REQUIRE(std::abs(point.x - expected_point.x) < TOL);
-      REQUIRE(std::abs(point.y - expected_point.y) < TOL);
-    }
+  REQUIRE(pieces.size() == 4);
+  for (const auto &piece : pieces) {
+    REQUIRE(std::abs(polygon_area(piece) - 0.25) < TOL);
   }
+  REQUIRE(std::abs(total_area(pieces) - 1.0) < TOL);
 }
 
-TEST_CASE("Exterior ring to gridlines with fractional grid", "[decomposition]") {
-  // Using Affine transform with fractional cell size
+TEST_CASE("Concave polygon may split to several pieces per cell",
+          "[polygon]") {
+  // U-shape: both arms cross into the cell above, so cell (0,1) holds two
+  // disjoint pieces
+  snail::grid::Grid grid(2, 2, snail::transform::Affine());
+  std::vector<linestr> rings = {{{0.2, 0.2},
+                                 {0.8, 0.2},
+                                 {0.8, 1.5},
+                                 {0.6, 1.5},
+                                 {0.6, 0.5},
+                                 {0.4, 0.5},
+                                 {0.4, 1.5},
+                                 {0.2, 1.5},
+                                 {0.2, 0.2}}};
+
+  auto pieces = snail::operations::splitPolygonGrid(rings, grid);
+
+  REQUIRE(pieces.size() == 3);
+  REQUIRE(std::abs(total_area(pieces) - 0.58) < TOL);
+}
+
+TEST_CASE("Concave polygon splits across grid", "[polygon]") {
+  // U-shape spanning 3x3 cells, open towards the top
+  snail::grid::Grid grid(2, 2, snail::transform::Affine());
+  std::vector<linestr> rings = {{{0.1, 0.1},
+                                 {2.9, 0.1},
+                                 {2.9, 2.2},
+                                 {2.1, 2.2},
+                                 {2.1, 1.5},
+                                 {0.9, 1.5},
+                                 {0.9, 2.2},
+                                 {0.1, 2.2},
+                                 {0.1, 0.1}}};
+
+  auto pieces = snail::operations::splitPolygonGrid(rings, grid);
+
+  REQUIRE(pieces.size() == 8);
+  REQUIRE(std::abs(total_area(pieces) - 5.04) < TOL);
+}
+
+TEST_CASE("Polygon touching a gridline splits cleanly", "[polygon]") {
+  // Triangle with its apex exactly on a horizontal gridline and its base
+  // corners exactly on vertical gridlines - all tangent, no crossings
+  snail::grid::Grid grid(2, 2, snail::transform::Affine());
+  std::vector<linestr> rings = {
+      {{1.0, 0.2}, {2.0, 0.2}, {1.5, 1.0}, {1.0, 0.2}}};
+
+  auto pieces = snail::operations::splitPolygonGrid(rings, grid);
+
+  REQUIRE(pieces.size() == 1);
+  REQUIRE(std::abs(total_area(pieces) - 0.4) < TOL);
+}
+
+TEST_CASE("Polygon boundary along a gridline splits cleanly", "[polygon]") {
+  // Hexagon with one boundary section running exactly along the gridline
+  // y=1, interior below it - the case that could not be handled by counting
+  // boundary vertices on the gridline
+  snail::grid::Grid grid(2, 2, snail::transform::Affine());
+  std::vector<linestr> rings = {{{0.2, 0.2},
+                                 {1.8, 0.2},
+                                 {1.8, 1.0},
+                                 {1.2, 1.0},
+                                 {1.2, 1.8},
+                                 {0.2, 1.8},
+                                 {0.2, 0.2}}};
+
+  auto pieces = snail::operations::splitPolygonGrid(rings, grid);
+
+  REQUIRE(pieces.size() == 4);
+  REQUIRE(std::abs(total_area(pieces) - 2.08) < TOL);
+}
+
+TEST_CASE("Polygon with hole in a single cell", "[polygon]") {
+  snail::grid::Grid grid(2, 2, snail::transform::Affine());
+  std::vector<linestr> rings = {
+      // exterior spanning 3x3 cells
+      {{0.5, 0.5}, {2.5, 0.5}, {2.5, 2.5}, {0.5, 2.5}, {0.5, 0.5}},
+      // hole wholly inside cell (1,1), which is otherwise fully covered
+      {{1.25, 1.25}, {1.75, 1.25}, {1.75, 1.75}, {1.25, 1.75}, {1.25, 1.25}}};
+
+  auto pieces = snail::operations::splitPolygonGrid(rings, grid);
+
+  REQUIRE(pieces.size() == 9);
+  REQUIRE(std::abs(total_area(pieces) - 3.75) < TOL);
+  // exactly one piece has the hole
+  int pieces_with_hole = 0;
+  for (const auto &piece : pieces) {
+    if (piece.interiors.size() == 1) {
+      pieces_with_hole++;
+      REQUIRE(std::abs(polygon_area(piece) - 0.75) < TOL);
+    }
+  }
+  REQUIRE(pieces_with_hole == 1);
+}
+
+TEST_CASE("Polygon with hole crossing gridlines", "[polygon]") {
+  snail::grid::Grid grid(2, 2, snail::transform::Affine());
+  std::vector<linestr> rings = {
+      // exterior spanning 3x3 cells
+      {{0.5, 0.5}, {2.5, 0.5}, {2.5, 2.5}, {0.5, 2.5}, {0.5, 0.5}},
+      // hole crossing cell borders
+      {{0.9, 0.9}, {2.1, 0.9}, {2.1, 1.1}, {0.9, 1.1}, {0.9, 0.9}}};
+
+  auto pieces = snail::operations::splitPolygonGrid(rings, grid);
+
+  REQUIRE(pieces.size() == 9);
+  REQUIRE(std::abs(total_area(pieces) - 3.76) < TOL);
+}
+
+TEST_CASE("Issue 45 polygons with vertices near gridlines", "[polygon]") {
+  // Building polygons that used to fail with "Expected even number of
+  // crossings on gridline": vertices sit within ~1e-14 of a gridline
   snail::grid::Grid grid(
-      2, 2,
-      snail::transform::Affine(0.5, 0.0, 0.0, 0.0, 0.5, 0.0));
+      698, 252,
+      snail::transform::Affine(0.0031, 0.0, -78.34655, 0.0, -0.0031,
+                               18.52365));
 
-  std::vector<linestr> splits = snail::operations::splitAlongGridlines(
-    {
-      {.3,.3},{.3,.5},{.3,.8},
-      {.5,.8},{.8,.8},
-      {.8,.5},{.8,.3},
-      {.5,.3}
-    },
-    0, 2,
-    snail::operations::Direction::horizontal,
-    grid
-  );
-  std::vector<linestr> expected_splits = {
-    {
-      {{.3,.5},{.5,.5}},
-      {{.5,.5},{.8,.5}},
-    }
-  };
-  // Test that we're getting the expected number of splits
-  REQUIRE(splits.size() == expected_splits.size());
-  // Test that each one of the splits have the expected size
-  for (int i = 0; i < splits.size(); i++) {
-    REQUIRE(splits[i].size() == expected_splits[i].size());
-  }
-  // Test that each one of the splits are made of the expected points
-  for (int i = 0; i < splits.size(); i++) {
-    for (int j = 0; j < splits[i].size(); j++) {
-      snail::geometry::Coord point = splits[i][j];
-      snail::geometry::Coord expected_point = expected_splits[i][j];
+  linestr building1 = {{-77.280182457, 17.97282044099908},
+                       {-77.28015690000001, 17.97282209999907},
+                       {-77.28015000000001, 17.9727272999991},
+                       {-77.28013888, 17.97272804099908},
+                       {-77.28013888, 17.97270079499907},
+                       {-77.28014880000001, 17.97270009999908},
+                       {-77.2801487, 17.9726981999991},
+                       {-77.28018086100001, 17.97269609699906},
+                       {-77.280182457, 17.97282044099908}};
 
-      REQUIRE(std::abs(point.x - expected_point.x) < TOL);
-      REQUIRE(std::abs(point.y - expected_point.y) < TOL);
-    }
-  }
+  linestr building2 = {{-78.02110589999999, 18.45206629999907},
+                       {-78.02105, 18.45206859999908},
+                       {-78.0210484, 18.45203429999912},
+                       {-78.0211044, 18.45203199999911},
+                       {-78.02110589999999, 18.45206629999907}};
+
+  linestr building3 = {{-77.34835, 18.45626119999909},
+                       {-77.348350719, 18.45625000599908},
+                       {-77.34840013100001, 18.45625000599913},
+                       {-77.3483981, 18.4562824999991},
+                       {-77.3483772, 18.45628129999909},
+                       {-77.3483755, 18.45630829999907},
+                       {-77.34833759999999, 18.45630619999902},
+                       {-77.34834050000002, 18.45626069999907},
+                       {-77.34835, 18.45626119999909}};
+
+  auto test_ring = GENERATE_COPY(building1, building2, building3);
+
+  auto pieces =
+      snail::operations::splitPolygonGrid({test_ring}, grid);
+
+  double expected_area = std::abs(ring_area2(test_ring)) / 2.0;
+  REQUIRE(pieces.size() >= 1);
+  REQUIRE(std::abs(total_area(pieces) - expected_area) <
+          1e-6 * expected_area);
 }
