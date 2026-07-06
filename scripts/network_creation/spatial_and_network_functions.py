@@ -1,20 +1,14 @@
 """Generate darthmouth events"""
 
 import os
-import sys
-import configparser
-import csv
 import pandas as pd
 import geopandas as gpd
 import subprocess
-import numpy as np
-import igraph as ig
 from shapely.geometry import Point
 from geopy.distance import vincenty
 from boltons.iterutils import pairwise
 from snkit import Network
 from snkit.network import *
-from tqdm import tqdm
 
 
 def line_length(line, ellipsoid="WGS-84"):

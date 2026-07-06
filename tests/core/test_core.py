@@ -1,5 +1,4 @@
 import pytest
-import shapely.wkt
 import snail.core.intersections
 
 from shapely.geometry import LineString, Polygon

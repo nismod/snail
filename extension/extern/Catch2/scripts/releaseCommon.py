@@ -1,10 +1,7 @@
 from __future__ import print_function
 
 import os
-import sys
 import re
-import string
-import glob
 import fnmatch
 
 from scriptCommon import catchPath

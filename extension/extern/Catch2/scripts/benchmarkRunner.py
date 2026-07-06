@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
-import subprocess, os, sys
+import subprocess
+import os
+import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from statistics import median, stdev

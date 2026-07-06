@@ -7,12 +7,8 @@ The results show different outcomes with respect to:
 """
 
 import os
-import sys
 import pandas as pd
 import geopandas as gpd
-import numpy as np
-import convert_hazard_data as chd
-import network_intersections as ni
 import exposure_stats as es
 import fragility_damage_analysis as fda
 from tqdm import tqdm

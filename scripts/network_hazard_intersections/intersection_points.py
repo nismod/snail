@@ -9,8 +9,6 @@ import json
 import os
 
 import geopandas
-from shapely.wkt import dumps
-from tqdm import tqdm
 
 
 def main():

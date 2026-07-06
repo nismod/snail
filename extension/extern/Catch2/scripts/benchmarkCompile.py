@@ -2,7 +2,12 @@
 
 from __future__ import print_function
 
-import time, subprocess, sys, os, shutil, glob, random
+import time
+import subprocess
+import os
+import shutil
+import glob
+import random
 import argparse
 
 

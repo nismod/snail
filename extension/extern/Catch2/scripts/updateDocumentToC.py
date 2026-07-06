@@ -16,7 +16,6 @@ from __future__ import print_function
 import argparse
 import glob
 import os
-import re
 import sys
 
 from scriptCommon import catchPath
@@ -168,7 +167,7 @@ def tagAndCollect(lines, id_tag=True, back_links=False, exclude_h=None):
             saw_headline = True
             dashified = dashifyHeadline(l)
 
-            if not exclude_h or not dashified[-1] in exclude_h:
+            if not exclude_h or dashified[-1] not in exclude_h:
                 if id_tag:
                     id_tag = '<a class="mk-toclify" id="%s"></a>' % (dashified[1])
                     out_contents.append(id_tag)

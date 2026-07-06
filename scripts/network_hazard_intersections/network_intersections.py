@@ -35,7 +35,6 @@ Results
 
 import itertools
 import os
-import sys
 
 import geopandas as gpd
 import pandas as pd
