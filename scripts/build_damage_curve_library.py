@@ -41,6 +41,7 @@ HAZARD_CODE_MAP = {
     "W": "wind",
     "L": "landslide",
 }
+EXCLUDED_CURVE_TYPES = {"V (repair rate)", "V (faults/km)"}
 
 
 def normalise_header(row: pd.Series, original: Iterable[str]) -> List[str]:
@@ -217,6 +218,8 @@ def build_dataset(
 
     metadata = metadata[metadata["curve_id"].isin(curves["curve_id"])].copy()
     metadata = metadata.merge(axis_meta, on="curve_id", how="left")
+    metadata = metadata[~metadata["curve_type"].isin(EXCLUDED_CURVE_TYPES)].copy()
+    curves = curves[curves["curve_id"].isin(metadata["curve_id"])].copy()
     metadata = metadata.sort_values("curve_id").reset_index(drop=True)
     curves = curves.sort_values(["curve_id", "point_index"]).reset_index(drop=True)
 

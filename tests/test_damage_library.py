@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import numpy
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -42,6 +43,13 @@ def test_available_curves_filtering():
     assert (curves["sector"] == "Energy").all()
 
 
+def test_available_curves_excludes_repair_and_fault_rates():
+    curves = damage_library.available_curves()
+
+    assert "V (repair rate)" not in set(curves["curve_type"])
+    assert "V (faults/km)" not in set(curves["curve_type"])
+
+
 def test_load_curve_returns_piecewise_curve():
     curve = damage_library.load_curve("F1.1")
     assert isinstance(curve, PiecewiseLinearDamageCurve)
@@ -64,3 +72,8 @@ def test_get_metadata_content():
     assert metadata.exposed_element.startswith("Small power plants")
     assert metadata.intensity_axis.startswith("Depth")
     assert metadata.intensity_unit == "m"
+
+
+def test_repair_rate_curve_is_not_packaged():
+    with pytest.raises(KeyError):
+        damage_library.load_curve("E16.35")
