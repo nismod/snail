@@ -1,49 +1,13 @@
-import importlib
 from importlib import resources
-import sys
-from contextlib import contextmanager
-from pathlib import Path
 
 import numpy
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
+from snail import damage_library
+from snail.damages import PiecewiseLinearDamageCurve
 
 
-@contextmanager
-def source_snail_modules():
-    original_path = list(sys.path)
-    original_modules = {
-        name: module
-        for name, module in sys.modules.items()
-        if name == "snail" or name.startswith("snail.")
-    }
-    try:
-        sys.path.insert(0, str(SRC))
-        for name in list(sys.modules):
-            if name == "snail" or name.startswith("snail."):
-                sys.modules.pop(name)
-        yield (
-            importlib.import_module("snail.damage_library"),
-            importlib.import_module("snail.damages").PiecewiseLinearDamageCurve,
-        )
-    finally:
-        sys.path[:] = original_path
-        for name in list(sys.modules):
-            if name == "snail" or name.startswith("snail."):
-                sys.modules.pop(name)
-        sys.modules.update(original_modules)
-
-
-@pytest.fixture
-def damage_modules():
-    with source_snail_modules() as modules:
-        yield modules
-
-
-def test_packaged_curve_resources_are_available(damage_modules):
-    _, _ = damage_modules
+def test_packaged_curve_resources_are_available():
     data_root = resources.files("snail.data.damage_curves")
 
     assert (data_root / "metadata.csv").is_file()
@@ -51,24 +15,21 @@ def test_packaged_curve_resources_are_available(damage_modules):
     assert (data_root / "NOTICE").is_file()
 
 
-def test_available_curves_filtering(damage_modules):
-    damage_library, _ = damage_modules
+def test_available_curves_filtering():
     curves = damage_library.available_curves(hazard="flood", sector="Energy")
     assert not curves.empty
     assert (curves["hazard_name"] == "flood").all()
     assert (curves["sector"] == "Energy").all()
 
 
-def test_available_curves_excludes_repair_and_fault_rates(damage_modules):
-    damage_library, _ = damage_modules
+def test_available_curves_excludes_repair_and_fault_rates():
     curves = damage_library.available_curves()
 
     assert "V (repair rate)" not in set(curves["curve_type"])
     assert "V (faults/km)" not in set(curves["curve_type"])
 
 
-def test_load_curve_returns_piecewise_curve(damage_modules):
-    damage_library, PiecewiseLinearDamageCurve = damage_modules
+def test_load_curve_returns_piecewise_curve():
     curve = damage_library.load_curve("F1.1")
     assert isinstance(curve, PiecewiseLinearDamageCurve)
 
@@ -82,8 +43,7 @@ def test_load_curve_returns_piecewise_curve(damage_modules):
     )
 
 
-def test_get_metadata_content(damage_modules):
-    damage_library, _ = damage_modules
+def test_get_metadata_content():
     metadata = damage_library.get_metadata("F1.1")
 
     assert metadata.hazard_name == "flood"
@@ -93,7 +53,6 @@ def test_get_metadata_content(damage_modules):
     assert metadata.intensity_unit == "m"
 
 
-def test_repair_rate_curve_is_not_packaged(damage_modules):
-    damage_library, _ = damage_modules
+def test_repair_rate_curve_is_not_packaged():
     with pytest.raises(KeyError):
         damage_library.load_curve("E16.35")
