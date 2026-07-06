@@ -69,7 +69,7 @@ wheel.packages = ["src/snail"]
 testpaths = ["tests"]
 
 [tool.ruff]
-exclude = [".venv", "extension/extern"]
+exclude = [".venv", "extension/extern", "scripts/failure_analysis", "scripts/network_creation", "scripts/network_hazard_intersections"]
 
 [tool.ruff.lint.per-file-ignores]
 "tutorials/*.ipynb" = ["E402"]
