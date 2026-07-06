@@ -1,4 +1,5 @@
 import importlib
+from importlib import resources
 import importlib.util
 import sys
 from pathlib import Path
@@ -24,6 +25,14 @@ snail_spec.loader.exec_module(snail_module)
 
 damage_library = importlib.import_module("snail.damage_library")
 PiecewiseLinearDamageCurve = importlib.import_module("snail.damages").PiecewiseLinearDamageCurve
+
+
+def test_packaged_curve_resources_are_available():
+    data_root = resources.files("snail.data.damage_curves")
+
+    assert (data_root / "metadata.csv").is_file()
+    assert (data_root / "curves.csv").is_file()
+    assert (data_root / "NOTICE").is_file()
 
 
 def test_available_curves_filtering():

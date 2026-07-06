@@ -64,7 +64,13 @@ build-backend = "scikit_build_core.build"
 [tool.scikit-build]
 wheel.expand-macos-universal-tags = true
 wheel.packages = ["src/snail"]
-package-data = { "snail" = ["data/damage_curves/*.csv", "data/damage_curves/NOTICE"] }
+
+[tool.scikit-build.sdist]
+include = [
+    "src/snail/data/damage_curves/curves.csv",
+    "src/snail/data/damage_curves/metadata.csv",
+    "src/snail/data/damage_curves/NOTICE",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
