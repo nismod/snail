@@ -4,28 +4,20 @@ import os
 import sys
 from pathlib import Path
 
-import geopandas
 import pandas
 
-from snail.intersection import (
-    GridDefinition,
-    apply_indices,
-    get_raster_values_for_splits,
-    prepare_linestrings,
-    prepare_polygons,
-    prepare_points,
-    split_features_for_rasters,
-    split_linestrings,
-    split_polygons,
-    split_points,
-    split_polygons_experimental,
-)
+from snail.intersection import GridDefinition
 from snail.io import (
-    read_raster_band_data,
-    associate_raster_files,
     read_features,
+    read_layer_names,
     read_raster_metadata,
-    extend_rasters_metadata,
+    write_features,
+)
+from snail.overlay import (
+    overlay_raster,
+    overlay_rasters,
+    parse_bands,
+    split_features,
 )
 
 
@@ -52,6 +44,11 @@ def snail(args=None):
         type=str,
         required=False,
         help="Layer in file with vector features to split",
+    )
+    parser_split.add_argument(
+        "--all-layers",
+        action="store_true",
+        help="Split all layers in the vector file, writing each to a layer of a GeoPackage output",
     )
     parser_split.add_argument(
         "-r",
@@ -105,14 +102,17 @@ def snail(args=None):
         "--column",
         type=str,
         required=False,
-        help="Column name to use when attributing raster values, defaults to raster filename",
+        help="Column name to use when attributing raster values, defaults to "
+        "raster filename stem. Values from a multi-band raster are attributed "
+        "in one column per band, named '{column}_band_{n}'",
     )
     parser_split.add_argument(
         "-o",
         "--output",
         type=str,
         required=True,
-        help="Output file",
+        help="Output file (any geopandas-supported format, or GeoParquet if "
+        "the extension is '.parquet' or '.geoparquet')",
     )
     parser_split.set_defaults(func=split)
 
@@ -173,8 +173,11 @@ def snail(args=None):
 
 def split(args):
     """snail split command"""
+    if args.layer and args.all_layers:
+        sys.exit("Error: Expected either --layer or --all-layers, not both")
+
     if args.raster:
-        grid, all_bands = read_raster_metadata(args.raster)
+        grid, _ = read_raster_metadata(args.raster)
     else:
         width = args.width
         height = args.height
@@ -186,68 +189,39 @@ def split(args):
         grid = None  # read CRS from features
     logging.info(f"Splitting {grid=}")
 
-    features = read_features(Path(args.features), args.layer)
-    features_crs = features.crs
-    if grid is None:
-        grid = GridDefinition(features_crs, width, height, affine_transform)
-
-    geom_type = _sample_geom_type(features)
-
-    if "Point" in geom_type:
-        logging.info("Preparing points")
-        prepared = prepare_points(features)
-        logging.info("Splitting points")
-        splits = split_features_for_rasters(prepared, [grid], split_points)
-    elif "LineString" in geom_type:
-        logging.info("Preparing linestrings")
-        prepared = prepare_linestrings(features)
-        logging.info("Splitting linestrings")
-        splits = split_features_for_rasters(prepared, [grid], split_linestrings)
-    elif "Polygon" in geom_type:
-        logging.info("Preparing polygons")
-        prepared = prepare_polygons(features)
-        if args.experimental:
-            logging.info("Splitting polygons (experimental)")
-            splits = split_features_for_rasters(
-                prepared, [grid], split_polygons_experimental
+    if args.all_layers:
+        if Path(args.output).suffix.lower() != ".gpkg":
+            sys.exit(
+                "Error: Expected a GeoPackage (.gpkg) output to hold multiple layers with --all-layers"
             )
-        else:
-            logging.info("Splitting polygons")
-            splits = split_features_for_rasters(prepared, [grid], split_polygons)
+        layers = read_layer_names(args.features)
     else:
-        raise ValueError("Could not process vector data of type %s", geom_type)
+        layers = [args.layer]
 
-    logging.info("Applying indices")
-    splits = apply_indices(splits, grid)
-
-    if args.attribute and args.raster:
-        if args.band:
-            bands = args.band
-        else:
-            bands = all_bands
-
-        if args.column:
-            key = args.column
-        else:
-            key = os.path.basename(args.raster)
-
-        for band_index in bands:
-            if len(bands) == 1:
-                band_key = key
-            else:
-                band_key = f"{key}_{band_index}"
-
-            logging.info(
-                "Attributing raster values, output in column %s from %s band %s",
-                band_key,
-                args.raster,
-                band_index,
+    for layer in layers:
+        features = read_features(Path(args.features), layer)
+        if grid is None:
+            layer_grid = GridDefinition(
+                features.crs, width, height, tuple(affine_transform)
             )
-            band_data = read_raster_band_data(args.raster, band_number=int(band_index))
-            splits[key] = get_raster_values_for_splits(splits, band_data)
+        else:
+            layer_grid = grid
 
-    splits.set_crs(features_crs, inplace=True)
-    splits.to_file(args.output)
+        if args.attribute and args.raster:
+            splits = overlay_raster(
+                features,
+                args.raster,
+                bands=args.band,
+                column=args.column,
+                experimental=args.experimental,
+            )
+        else:
+            splits = split_features(features, layer_grid, args.experimental)
+
+        if args.all_layers:
+            write_features(splits, args.output, layer=layer)
+        else:
+            write_features(splits, args.output)
 
 
 def process(args):
@@ -255,7 +229,7 @@ def process(args):
     # data directory
     dirname = args.directory
 
-    # read rasters and transforms
+    # read rasters table
     rasters = _read_csv_or_quit(args.rasters)
 
     # fix up path relative to dirname
@@ -268,56 +242,93 @@ def process(args):
 
     # parse "1,2,3" band indices to tuple if present
     if "bands" in rasters.columns:
-        rasters.bands = rasters.bands.apply(
-            lambda c: tuple(int(b) for b in str(c).split(","))
-        )
+        rasters.bands = rasters.bands.apply(parse_bands)
 
-    rasters, transforms = extend_rasters_metadata(rasters)
-
-    # read networks
+    # read features table
     vector_layers = _read_csv_or_quit(args.features)
-
     vector_layers.path = vector_layers.path.apply(_join_dirname, args=(dirname,))
-    if "output_path" not in vector_layers.columns:
-        vector_layers["output_path"] = vector_layers.path.apply(
-            lambda p: f"{p}.processed.parquet"
-        )
+
+    # expand any wildcard ("*") layer rows to a row per layer in the file
+    vector_layers = _expand_layers(vector_layers)
+
+    # fill in default output paths where not specified
+    rasters_name = Path(args.rasters).stem
+    vector_layers = _fill_output_paths(vector_layers, rasters_name)
 
     for vector_layer in vector_layers.itertuples():
-        _process_layer(vector_layer, transforms, rasters, args.experimental)
+        _process_layer(vector_layer, rasters, args.experimental)
 
 
-def _process_layer(vector_layer, transforms, rasters, experimental=False):
+def _process_layer(vector_layer, rasters, experimental=False):
     vector_path = Path(vector_layer.path)
     layer = getattr(vector_layer, "layer", None)
-    logging.info("Processing %s", vector_path.name)
+    if _is_missing(layer):
+        layer = None
+    logging.info("Processing %s layer %s", vector_path.name, layer)
 
     features = read_features(vector_path, layer)
-    geom_type = _sample_geom_type(features)
-    logging.info("%s Features CRS %s", geom_type, features.crs)
+    logging.info("Features CRS %s", features.crs)
 
-    if "Point" in geom_type:
-        prepared = prepare_points(features)
-        split = split_features_for_rasters(prepared, transforms, split_points)
-        with_data = associate_raster_files(split, rasters)
-    elif "LineString" in geom_type:
-        prepared = prepare_linestrings(features)
-        split = split_features_for_rasters(prepared, transforms, split_linestrings)
-        with_data = associate_raster_files(split, rasters)
-    elif "Polygon" in geom_type:
-        prepared = prepare_polygons(features)
-        if experimental:
-            logging.info("Split polygons (experimental)")
-            split = split_features_for_rasters(
-                prepared, transforms, split_polygons_experimental
-            )
+    with_data = overlay_rasters(features, rasters, experimental=experimental)
+    write_features(with_data, vector_layer.output_path)
+
+
+def _expand_layers(vector_layers: pandas.DataFrame) -> pandas.DataFrame:
+    """Expand rows with a wildcard ("*") layer to one row per layer in the file"""
+    if "layer" not in vector_layers.columns:
+        return vector_layers
+    rows = []
+    for row in vector_layers.to_dict("records"):
+        layer = row.get("layer")
+        if isinstance(layer, str) and layer.strip() == "*":
+            for layer_name in read_layer_names(row["path"]):
+                expanded = dict(row)
+                expanded["layer"] = layer_name
+                # an explicit output path must vary by layer, insert the layer name
+                if not _is_missing(row.get("output_path")):
+                    expanded["output_path"] = _insert_layer_in_path(
+                        row["output_path"], layer_name
+                    )
+                rows.append(expanded)
         else:
-            split = split_features_for_rasters(prepared, transforms, split_polygons)
-        with_data = associate_raster_files(split, rasters)
-    else:
-        raise ValueError(f"Could not process vector data of type {geom_type}")
+            rows.append(row)
+    return pandas.DataFrame(rows)
 
-    with_data.to_parquet(vector_layer.output_path)
+
+def _insert_layer_in_path(path, layer: str) -> str:
+    path = Path(path)
+    return str(path.with_name(f"{path.stem}_{layer}{path.suffix}"))
+
+
+def _fill_output_paths(
+    vector_layers: pandas.DataFrame, rasters_name: str
+) -> pandas.DataFrame:
+    if "output_path" not in vector_layers.columns:
+        vector_layers["output_path"] = None
+    vector_layers["output_path"] = [
+        (
+            _default_output_path(row.get("path"), row.get("layer"), rasters_name)
+            if _is_missing(row.get("output_path"))
+            else row["output_path"]
+        )
+        for row in vector_layers.to_dict("records")
+    ]
+    return vector_layers
+
+
+def _default_output_path(vector_path, layer, rasters_name: str) -> str:
+    """Default output path, "{features_stem}_{layer}__{rasters_stem}.parquet"
+    next to the input features file (layer part omitted if not specified)"""
+    path = Path(vector_path)
+    if _is_missing(layer):
+        name = f"{path.stem}__{rasters_name}.parquet"
+    else:
+        name = f"{path.stem}_{layer}__{rasters_name}.parquet"
+    return str(path.parent / name)
+
+
+def _is_missing(value) -> bool:
+    return value is None or (isinstance(value, float) and pandas.isna(value))
 
 
 def _read_csv_or_quit(path) -> pandas.DataFrame:
@@ -327,10 +338,6 @@ def _read_csv_or_quit(path) -> pandas.DataFrame:
         logging.error("File not found: %s", path)
         sys.exit()
     return df
-
-
-def _sample_geom_type(df: geopandas.GeoDataFrame) -> str:
-    return df.iloc[0].geometry.geom_type
 
 
 def _join_dirname(path, dirname=False):

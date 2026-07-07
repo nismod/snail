@@ -110,16 +110,38 @@ def split_features_for_rasters(
     grids: List[GridDefinition],
     split_func: Callable,
 ):
+    """Split features on a list of grids, attaching cell indices
+
+    Features are implicitly reprojected to each grid CRS for splitting and
+    indexing (columns "i_{n}", "j_{n}" refer to cells of the nth grid), then
+    returned in their original CRS. If either the features or a grid have no
+    CRS defined, they are assumed to share the same CRS and no reprojection
+    happens.
+    """
     # lookup per transform
     for i, grid in enumerate(grids):
         logging.info("Splitting on grid %s %s", i, grid)
         # transform to grid CRS
-        crs_features = features.to_crs(grid.crs)
+        if features.crs is None or grid.crs is None:
+            if (features.crs is None) != (grid.crs is None):
+                logging.warning(
+                    "CRS undefined for features (%s) or grid (%s): assuming they share a CRS",
+                    features.crs,
+                    grid.crs,
+                )
+            source_crs = None
+            crs_features = features
+        else:
+            source_crs = features.crs
+            crs_features = features.to_crs(grid.crs)
         crs_features = split_func(crs_features, grid)
         # save cell index for fast lookup of raster values
         crs_features = apply_indices(crs_features, grid, f"i_{i}", f"j_{i}")
         # transform back
-        features = crs_features.to_crs(features.crs)
+        if source_crs is not None:
+            features = crs_features.to_crs(source_crs)
+        else:
+            features = crs_features
     return features
 
 
@@ -155,14 +177,26 @@ def split_points(
 def split_linestrings(
     linestring_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split linestrings along a grid"""
-    # TODO check for MultiLineString
-    # throw error or coerce (df.explode)
+    """Split linestrings along a grid
+
+    Any MultiLineString geometries are coerced to LineStrings (merged where
+    contiguous, then exploded to one row per part, resetting the index) with
+    a warning. Call :func:`prepare_linestrings` beforehand to opt in to this
+    explicitly and keep control of the row index.
+    """
+    if (linestring_features.geometry.geom_type == "MultiLineString").any():
+        logging.warning(
+            "Found MultiLineString geometries, coercing to LineStrings "
+            "(matching prepare_linestrings: merge then explode, index is reset)"
+        )
+        linestring_features = prepare_linestrings(linestring_features.copy())
     pieces = []
     for i in tqdm(range(len(linestring_features))):
         # split edge
+        # (index positionally - the index may have duplicate labels, e.g. if
+        # features have already been split on another grid)
         geom_splits = split_linestring(
-            linestring_features.geometry[i],
+            linestring_features.geometry.iloc[i],
             grid.width,
             grid.height,
             grid.transform,
@@ -241,8 +275,10 @@ def split_polygons_experimental(
     polygon_features["split"] = 0
     for i in tqdm(range(len(polygon_features))):
         # split area
+        # (index positionally - the index may have duplicate labels, e.g. if
+        # features have already been split on another grid)
         geom_splits = split_polygon(
-            polygon_features.geometry[i],
+            polygon_features.geometry.iloc[i],
             grid.width,
             grid.height,
             grid.transform,

@@ -1,5 +1,7 @@
 import importlib.util
 import logging
+from contextlib import contextmanager
+from pathlib import Path
 from typing import List, Tuple
 
 import geopandas
@@ -8,6 +10,17 @@ import pandas
 import rasterio
 
 from snail.intersection import GridDefinition, get_raster_values_for_splits
+
+
+def band_column_name(key: str, band_number: int, number_of_bands: int) -> str:
+    """Name the output column for a raster band.
+
+    Single-band rasters attribute values in a column named by `key`,
+    multi-band rasters in a column per band, named "{key}_band_{band_number}".
+    """
+    if number_of_bands == 1:
+        return key
+    return f"{key}_band_{band_number}"
 
 
 def associate_raster_files(splits, rasters):
@@ -25,7 +38,9 @@ def associate_raster_files(splits, rasters):
     Returns
     -------
     pandas.DataFrame
-        split geometries with raster data values at indexed locations
+        split geometries with raster data values at indexed locations, one
+        column per raster band, named by raster key (with a "_band_{n}" suffix
+        for each band of a multi-band raster)
     """
     # to prevent a fragmented dataframe (and a memory explosion), add series to a dict
     # and then concat afterwards -- do not append to an existing dataframe
@@ -39,7 +54,8 @@ def associate_raster_files(splits, rasters):
             raster.grid_id,
             band_number,
         )
-        raster_data[raster.key] = get_raster_values_for_splits(
+        column = band_column_name(raster.key, band_number, len(raster.bands))
+        raster_data[column] = get_raster_values_for_splits(
             splits,
             band_data,
             f"i_{raster.grid_id}",
@@ -58,11 +74,23 @@ def read_rasters(rasters):
             yield raster, band_number, read_raster_band_data(raster.path, band_number)
 
 
+@contextmanager
+def _open_raster(raster):
+    """Yield a rasterio dataset from either a path or an open dataset"""
+    if hasattr(raster, "read") and hasattr(raster, "transform"):
+        # looks like an open rasterio dataset - pass through, caller closes
+        yield raster
+    else:
+        with rasterio.open(raster) as dataset:
+            yield dataset
+
+
 def read_raster_band_data(
-    fname: str,
+    raster,
     band_number: int = 1,
 ) -> numpy.ndarray:
-    with rasterio.open(fname) as dataset:
+    """Read a single band of data from a raster path or open rasterio dataset"""
+    with _open_raster(raster) as dataset:
         band_data: numpy.ndarray = dataset.read(band_number)
     return band_data
 
@@ -88,21 +116,29 @@ def extend_rasters_metadata(
         raster_bands.append(bands)
 
     rasters["grid_id"] = grid_ids
-    if "bands" not in rasters.columns:
+    if "bands" in rasters.columns:
+        # fill any missing values with all the bands discovered in the raster
+        rasters["bands"] = [
+            discovered if given is None else given
+            for given, discovered in zip(rasters.bands, raster_bands)
+        ]
+    else:
         rasters["bands"] = raster_bands
 
     return rasters, grids
 
 
-def read_raster_metadata(path) -> Tuple[GridDefinition, Tuple[int]]:
-    with rasterio.open(path) as dataset:
+def read_raster_metadata(raster) -> Tuple[GridDefinition, Tuple[int]]:
+    """Read grid definition and band indexes from a raster path or open
+    rasterio dataset"""
+    with _open_raster(raster) as dataset:
         bands = dataset.indexes
         grid = GridDefinition.from_rasterio_dataset(dataset)
     return grid, bands
 
 
 def read_features(path, layer=None):
-    if path.suffix in (".parquet", ".geoparquet"):
+    if Path(path).suffix in (".parquet", ".geoparquet"):
         features = geopandas.read_parquet(path)
     else:
         if importlib.util.find_spec("pyogrio"):
@@ -115,6 +151,38 @@ def read_features(path, layer=None):
             features = geopandas.read_file(path, engine=engine)
 
     return features[~features.geometry.isna()]
+
+
+def read_layer_names(path) -> List[str]:
+    """List the layer names in a vector file"""
+    if importlib.util.find_spec("pyogrio"):
+        import pyogrio
+
+        return [name for name, _geometry_type in pyogrio.list_layers(path)]
+    else:
+        import fiona
+
+        return fiona.listlayers(path)
+
+
+def write_features(features: geopandas.GeoDataFrame, path, layer=None):
+    """Write features to a vector file or GeoParquet, depending on file extension
+
+    Paths ending ".parquet" or ".geoparquet" are written with
+    `geopandas.GeoDataFrame.to_parquet`, anything else is passed to
+    `geopandas.GeoDataFrame.to_file` (with `layer` if provided, for formats
+    such as GeoPackage which support multiple layers).
+    """
+    if Path(path).suffix in (".parquet", ".geoparquet"):
+        if layer is not None:
+            raise ValueError(
+                f"Cannot write layer {layer!r} to {path}: Parquet output does not support layers"
+            )
+        features.to_parquet(path)
+    elif layer is not None:
+        features.to_file(path, layer=layer)
+    else:
+        features.to_file(path)
 
 
 def write_grid_to_raster(

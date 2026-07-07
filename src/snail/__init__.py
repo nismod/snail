@@ -8,6 +8,7 @@
 # from snail.network import Network
 
 from . import damage_library
+from .overlay import overlay_raster, overlay_rasters, split_features
 
 try:
     from importlib.metadata import version
@@ -19,4 +20,9 @@ except Exception:
 
 # Define what should be imported as * when a client writes::
 #   from snail import *
-__all__ = ["damage_library"]
+__all__ = [
+    "damage_library",
+    "overlay_raster",
+    "overlay_rasters",
+    "split_features",
+]
