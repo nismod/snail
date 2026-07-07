@@ -62,6 +62,34 @@ If all worked okay, you should be able to run python and import snail::
         snail - snail - the spatial networks impact assessment library
 
 
+Using snail as a Python library
+-------------------------------
+
+The high-level :func:`snail.overlay_raster` and :func:`snail.overlay_rasters`
+functions split vector features (points, lines or polygons) along the cells
+of a raster grid and attribute the raster cell values to each split feature::
+
+    >>> import geopandas
+    >>> import snail
+
+    >>> features = geopandas.read_file("lines.geojson")
+    >>> splits = snail.overlay_raster(features, "gridded_data.tif")
+    >>> splits.to_file("split_lines_with_raster_values.gpkg")
+
+The result contains one row per split feature (each feature is split wherever
+it crosses a raster cell boundary), with the input feature attributes, cell
+indices in columns ``index_i`` and ``index_j``, and one column of raster
+values per band. If the features and raster are in different coordinate
+reference systems, the features are implicitly reprojected to the raster CRS
+for splitting and value lookup, then returned in their original CRS.
+
+:func:`snail.overlay_rasters` intersects all features with all rasters in one
+call, splitting on each distinct grid and attributing one column per raster
+band. Lower-level building blocks (grid definitions, splitting, cell
+indexing, value lookup) are available in :mod:`snail.intersection`, and
+helpers for reading and writing files in :mod:`snail.io`.
+
+
 Using the `snail` command
 -------------------------
 
@@ -95,6 +123,12 @@ Split multiple vector feature files along the grids defined by multiple raster f
     snail process -fs features.csv -rs rasters.csv
 
 Where at a minimum, each CSV has a column `path` with the path to each file.
+
+`snail process` calculates all features intersected with all rasters: each
+row of the features CSV is split against every distinct raster grid and
+produces one output file, with one column of attributed values per raster
+file/band. See the project README for the full set of optional CSV columns
+(``layer``, ``output_path``, ``bands``, ``key``).
 
 
 .. toctree::

@@ -195,16 +195,38 @@ def split_features_for_rasters(
     grids: list[GridDefinition],
     split_func: Callable,
 ):
+    """Split features on a list of grids, attaching cell indices
+
+    Features are implicitly reprojected to each grid CRS for splitting and
+    indexing (columns "i_{n}", "j_{n}" refer to cells of the nth grid), then
+    returned in their original CRS. If either the features or a grid have no
+    CRS defined, they are assumed to share the same CRS and no reprojection
+    happens.
+    """
     # lookup per transform
     for i, grid in enumerate(grids):
         logger.info("Splitting on grid %s %s", i, grid)
         # transform to grid CRS
-        crs_features = features.to_crs(grid.crs)
+        if features.crs is None or grid.crs is None:
+            if (features.crs is None) != (grid.crs is None):
+                logger.warning(
+                    "CRS undefined for features (%s) or grid (%s): assuming they share a CRS",
+                    features.crs,
+                    grid.crs,
+                )
+            source_crs = None
+            crs_features = features
+        else:
+            source_crs = features.crs
+            crs_features = features.to_crs(grid.crs)
         crs_features = split_func(crs_features, grid)
         # save cell index for fast lookup of raster values
         crs_features = apply_indices(crs_features, grid, f"i_{i}", f"j_{i}")
         # transform back
-        features = crs_features.to_crs(features.crs)
+        if source_crs is not None:
+            features = crs_features.to_crs(source_crs)
+        else:
+            features = crs_features
     return features
 
 
@@ -246,9 +268,18 @@ def split_linestrings(
 
     Each piece lies within a single grid cell; together the pieces of a
     feature are that feature, cut up, so the split conserves its length.
+
+    Any MultiLineString geometries are coerced to LineStrings (merged where
+    contiguous, then exploded to one row per part, resetting the index) with
+    a warning. Call :func:`prepare_linestrings` beforehand to opt in to this
+    explicitly and keep control of the row index.
     """
-    # TODO check for MultiLineString
-    # throw error or coerce (df.explode)
+    if (linestring_features.geometry.geom_type == "MultiLineString").any():
+        logger.warning(
+            "Found MultiLineString geometries, coercing to LineStrings "
+            "(matching prepare_linestrings: merge then explode, index is reset)"
+        )
+        linestring_features = prepare_linestrings(linestring_features.copy())
     # split every feature in one call
     geometry, parent = _split_in_chunks(
         split_linestrings_core,
