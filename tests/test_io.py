@@ -92,6 +92,24 @@ def test_lazy_raster_reads_do_not_leak_file_descriptors():
     assert final_fds <= initial_fds + 4
 
 
+def test_read_raster_band_data_rejects_zero_band_for_lazy_path():
+    pytest.importorskip("dask.array")
+    pytest.importorskip("rioxarray")
+    path = Path(__file__).parent / "integration" / "range.tif"
+
+    with pytest.raises(ValueError, match="band_number must be >= 1"):
+        read_raster_band_data(path, band_number=0, lazy=True)
+
+
+def test_read_raster_band_data_rejects_zero_band_for_lazy_dataarray(
+    sample_dataarray,
+):
+    data_array, _ = sample_dataarray
+
+    with pytest.raises(ValueError, match="band_number must be >= 1"):
+        read_raster_band_data(data_array, band_number=0, lazy=True)
+
+
 def test_read_raster_band_data_from_multiband_dataarray(sample_dataarray):
     xr = pytest.importorskip("xarray")
     data_array, _ = sample_dataarray
