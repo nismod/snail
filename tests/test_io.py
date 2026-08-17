@@ -1,3 +1,7 @@
+import gc
+import os
+from pathlib import Path
+
 import numpy as np
 import rasterio
 import pytest
@@ -68,6 +72,24 @@ def test_read_raster_band_data_from_dataarray(sample_dataarray):
 
     assert_array_equal(result.values, data_array.values)
     assert result.dims == data_array.dims
+
+
+@pytest.mark.skipif(not Path("/proc").is_dir(), reason="Linux only")
+def test_lazy_raster_reads_do_not_leak_file_descriptors():
+    pytest.importorskip("dask.array")
+    pytest.importorskip("rioxarray")
+
+    path = Path(__file__).parent / "integration" / "range.tif"
+    gc.collect()
+    initial_fds = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+
+    for _ in range(200):
+        result = read_raster_band_data(path, lazy=True)
+        del result
+
+    gc.collect()
+    final_fds = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+    assert final_fds <= initial_fds + 4
 
 
 def test_read_raster_band_data_from_multiband_dataarray(sample_dataarray):
