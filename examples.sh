@@ -12,6 +12,18 @@ snail -vv split \
     -a \
     -o tmp.geojson
 
+# convert GeoTIFF to NetCDF
+gdal raster convert \
+    tests/integration/climatology-hd35-annual-mean.tif \
+    tests/integration/climatology-hd35-annual-mean.nc
+
+# Same splits from NC
+snail -vv split \
+    -f tests/integration/lines.geojson \
+    -r tests/integration/climatology-hd35-annual-mean.nc \
+    -a \
+    -o tmp.geojson
+
 snail -vv split \
     -f tests/integration/lines.geojson \
     -r tests/integration/range.tif \
