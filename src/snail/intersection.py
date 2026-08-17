@@ -19,6 +19,14 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     _xarray = None
 
+
+def _is_dask_array(value):
+    return _dask_array is not None and isinstance(value, _dask_array.Array)
+
+
+def _is_xarray_dataarray(value):
+    return _xarray is not None and isinstance(value, _xarray.DataArray)
+
 if TYPE_CHECKING:
     import dask.array
     import xarray
@@ -398,9 +406,9 @@ def get_raster_values_for_splits(
 
     if isinstance(data, numpy.ndarray):
         backing_data = data
-    elif isinstance(data, _dask_array.Array):
+    elif _is_dask_array(data):
         backing_data = data
-    elif isinstance(data, _xarray.DataArray):
+    elif _is_xarray_dataarray(data):
         backing_data = data.data
     else:
         raise TypeError(
@@ -414,7 +422,7 @@ def get_raster_values_for_splits(
         splits_values = backing_data[indices_j_valid, indices_i_valid]
         return _build_series(splits.index, valid_positions, splits_values)
 
-    elif isinstance(backing_data, _dask_array.Array):
+    elif _is_dask_array(backing_data):
         splits_values_da = backing_data.vindex[
             indices_j_valid, indices_i_valid
         ]

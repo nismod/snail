@@ -84,3 +84,6 @@ def test_read_raster_band_data_from_multiband_dataarray(sample_dataarray):
 
     with pytest.raises(ValueError):
         read_raster_band_data(multi, band_number=3)
+
+    with pytest.raises(ValueError, match="band_number must be >= 1"):
+        read_raster_band_data(multi, band_number=0)

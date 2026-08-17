@@ -26,6 +26,7 @@ from snail.io import (
     read_features,
     read_raster_metadata,
     extend_rasters_metadata,
+    _rioxarray,
 )
 
 
@@ -248,24 +249,37 @@ def split(args):
         else:
             key = os.path.basename(args.raster)
 
-        for band_index in bands:
-            if len(bands) == 1:
-                band_key = key
-            else:
-                band_key = f"{key}_{band_index}"
+        data_array = None
+        if args.lazy_rasters:
+            if _rioxarray is None:
+                raise RuntimeError(
+                    "Lazy raster reading requires optional dependencies, including "
+                    "xarray, dask and rioxarray. Try 'pip install nismod-snail[lazy]'"
+                )
+            data_array = _rioxarray.open_rasterio(args.raster, chunks="auto")
+        source = data_array if data_array is not None else args.raster
+        try:
+            for band_index in bands:
+                if len(bands) == 1:
+                    band_key = key
+                else:
+                    band_key = f"{key}_{band_index}"
 
-            logging.info(
-                "Attributing raster values, output in column %s from %s band %s",
-                band_key,
-                args.raster,
-                band_index,
-            )
-            band_data = read_raster_band_data(
-                args.raster,
-                band_number=int(band_index),
-                lazy=args.lazy_rasters,
-            )
-            splits[key] = get_raster_values_for_splits(splits, band_data)
+                logging.info(
+                    "Attributing raster values, output in column %s from %s band %s",
+                    band_key,
+                    args.raster,
+                    band_index,
+                )
+                band_data = read_raster_band_data(
+                    source,
+                    band_number=int(band_index),
+                    lazy=args.lazy_rasters,
+                )
+                splits[band_key] = get_raster_values_for_splits(splits, band_data)
+        finally:
+            if data_array is not None:
+                data_array.close()
 
     splits.set_crs(features_crs, inplace=True)
     splits.to_file(args.output)
