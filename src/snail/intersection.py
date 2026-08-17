@@ -435,9 +435,13 @@ def _build_series(
     """Create a Series indexed by index, filled with specific values at given
     positions, default numpy.nan.
     """
-    series = pandas.Series(
-        numpy.full(len(index), numpy.nan), index=index, dtype="float64"
-    )
+    if len(positions) == len(index):
+        series = pandas.Series(
+            numpy.empty(len(index), dtype=values.dtype), index=index
+        )
+        series.iloc[positions] = values
+        return series
+    series = pandas.Series(numpy.full(len(index), numpy.nan), index=index)
     if len(positions):
         series.iloc[positions] = values
     return series

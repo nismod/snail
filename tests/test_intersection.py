@@ -236,6 +236,14 @@ def test_get_raster_values_for_splits_numpy_handles_invalid_indices():
     assert_series_equal(result, _expected_series(splits.index), check_dtype=False)
 
 
+def test_get_raster_values_preserves_dtype_when_all_indices_are_valid():
+    splits = pd.DataFrame({"index_i": [0, 1], "index_j": [0, 0]})
+    raster = np.array([[5, 6]], dtype=np.uint8)
+    result = get_raster_values_for_splits(splits, raster)
+    assert result.dtype == raster.dtype
+    assert_array_equal(result, [5, 6])
+
+
 def test_get_raster_values_for_splits_supports_xarray():
     xr = pytest.importorskip("xarray")
     splits = _make_sample_splits()
