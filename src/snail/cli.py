@@ -180,7 +180,10 @@ def snail(args=None):
 
     # Call the subcommand function
     logging.info("Start.")
-    args.func(args)
+    try:
+        args.func(args)
+    except AttributeError:
+        parser.print_help()
     logging.info("Done.")
 
 
@@ -276,7 +279,9 @@ def split(args):
                     band_number=int(band_index),
                     lazy=args.lazy_rasters,
                 )
-                splits[band_key] = get_raster_values_for_splits(splits, band_data)
+                splits[band_key] = get_raster_values_for_splits(
+                    splits, band_data
+                )
         finally:
             if data_array is not None:
                 data_array.close()

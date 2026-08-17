@@ -22,8 +22,13 @@ Install using pip:
 
     pip install nismod-snail
 
-This should bring all dependencies with it. If any of these cause difficulties,
-try using a [conda](https://docs.conda.io/en/latest/miniconda.html) environment:
+This should bring all essential dependencies with it. To include optional dependencies,
+run:
+
+    pip install nismod-snail[lazy]
+
+If any of these cause difficulties, try using a
+[conda](https://docs.conda.io/en/latest/miniconda.html) environment:
 
     conda env create -n snail_env \
         python=3.11 geopandas shapely rasterio python-igraph
@@ -124,7 +129,7 @@ Run this to install the source code as a package:
 If you're working on snail itself, install it as "editable" along with test and
 development packages:
 
-    pip install -e .[dev]
+    pip install -e .[dev,docs,lazy,tutorials]
 
 Run tests using [pytest](https://docs.pytest.org/en/latest/) and
 [pytest-cov](https://pytest-cov.readthedocs.io) to check coverage:
