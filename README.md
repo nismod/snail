@@ -196,7 +196,7 @@ Or with C++ headers installed on a Linux machine:
         -I/usr/include/x86_64-linux-gnu/c++/11 \
         -I/usr/include/c++/11 \
         -I{$PWD}/extension/extern/pybind11/include \
-        -I/usr/include/python3.10
+        -I/usr/include/python3.11
 
 ### Integration of C++ and Python using pybind11
 

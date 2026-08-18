@@ -21,7 +21,7 @@ classifiers = [
     "Topic :: Utilities"
 ]
 keywords = []
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "dask[array]",
     "geopandas",
@@ -37,7 +37,7 @@ dependencies = [
     "scipy",
     "shapely",
     "xarray",
-    "zarr",
+    "zarr>=3.0.8",
 ]
 
 [project.optional-dependencies]
