@@ -50,9 +50,7 @@ def shortest_paths_igraph(geodf, source_ensbl, dest_ensbl):
     shortest_paths = []
     for source_id in source_ensbl:
         start = g.vs.find(name=source_id)
-        sp = g.get_shortest_paths(
-            start, dest, weights="length_km", output="epath"
-        )
+        sp = g.get_shortest_paths(start, dest, weights="length_km", output="epath")
         shortest_paths.append(sp)
 
     return shortest_paths
@@ -71,9 +69,7 @@ def shortest_paths_pandana(geodf, nodes_geodf, source_ensbl, dest_ensbl):
     Returns:
     A list of shortest paths (themselves list of vertices).
     """
-    list_of_coords = [
-        (point.x, point.y) for point in nodes_geodf.loc[:, "geometry"]
-    ]
+    list_of_coords = [(point.x, point.y) for point in nodes_geodf.loc[:, "geometry"]]
     nodes = DataFrame(list_of_coords, columns=["x", "y"])
 
     # Transform source and destination columns into lists of integers
@@ -87,9 +83,7 @@ def shortest_paths_pandana(geodf, nodes_geodf, source_ensbl, dest_ensbl):
     net = pandana.Network(
         nodes["x"], nodes["y"], edges["from"], edges["to"], edges[["weight"]]
     )
-    nodes_a, nodes_b = get_input_list(
-        str_to_int(source_ensbl), str_to_int(dest_ensbl)
-    )
+    nodes_a, nodes_b = get_input_list(str_to_int(source_ensbl), str_to_int(dest_ensbl))
     return net.shortest_paths(nodes_a, nodes_b, imp_name="weight")
 
 
@@ -126,7 +120,7 @@ if __name__ == "__main__":
     pandana_reconstruct_times = np.zeros((args.nreps, len(args.sizes)))
 
     for j, size in enumerate(args.sizes):
-        print(f"Size {j+1} of {len(args.sizes)}")
+        print(f"Size {j + 1} of {len(args.sizes)}")
         # Sample source and destination ensembles
         for irep in range(args.nreps):
             print(f"    Rep {irep + 1} of {args.nreps}")
@@ -144,9 +138,7 @@ if __name__ == "__main__":
 
             print("        Timing pandana")
             tic = time.time()
-            vpaths = shortest_paths_pandana(
-                gdf, nodes_gdf, source_ensbl, dest_ensbl
-            )
+            vpaths = shortest_paths_pandana(gdf, nodes_gdf, source_ensbl, dest_ensbl)
             toc = time.time()
             pandana_times[irep, j] = toc - tic
 
@@ -164,12 +156,8 @@ if __name__ == "__main__":
     tbl.add_column("pandana (avg)", np.mean(pandana_times, axis=0))
     tbl.add_column("pandana (std)", np.std(pandana_times, axis=0))
     if args.reconstr:
-        tbl.add_column(
-            "reconstr (avg)", np.mean(pandana_reconstruct_times, axis=0)
-        )
-        tbl.add_column(
-            "reconstr (std)", np.std(pandana_reconstruct_times, axis=0)
-        )
+        tbl.add_column("reconstr (avg)", np.mean(pandana_reconstruct_times, axis=0))
+        tbl.add_column("reconstr (std)", np.std(pandana_reconstruct_times, axis=0))
 
     from prettytable import MARKDOWN
 

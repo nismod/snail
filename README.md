@@ -108,6 +108,25 @@ size, while `c` and `f` define the offset or grid upper-left corner:
 
 See [`rasterio/affine`](https://github.com/rasterio/affine#usage) and [GDAL Raster Data Model](https://gdal.org/user/raster_data_model.html#affine-geotransform) for more documentation.
 
+## Damage curve library
+
+`snail.damage_library` bundles a curated set of infrastructure damage curves
+from [Nirandjan et al. (2023)](https://doi.org/10.5281/zenodo.10203846)
+under the terms of the Creative Commons Attribution 4.0 license. The data are
+installed alongside the package, so no extra download step is required.
+
+```python
+>>> from snail import damage_library
+>>> damage_library.available_curves(hazard="flood").head()["curve_id"].tolist()
+['F1.1', 'F1.2', 'F1.3', 'F1.4', 'F1.5']
+>>> metadata = damage_library.get_metadata("F1.1")
+>>> metadata.exposed_element
+'Small power plants, capacity <100 MW'
+>>> curve = damage_library.load_curve("F1.1")
+>>> curve.damage_fraction([0.0, 0.5, 1.0])
+array([0.     , 0.410105, 0.82021 ])
+```
+
 ## Development
 
 Clone this repository using [GitHub Desktop](https://desktop.github.com/) or on

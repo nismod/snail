@@ -5,6 +5,7 @@
 .eggs
 .pytest_cache
 __pycache__
+*.pyc
 *.egg-info
 .coverage
 venv
@@ -15,6 +16,7 @@ dist
 
 # Data
 data
+!src/snail/data/
 *.asc
 tests/integration/*.parquet
 tests/integration/tmp.geojson

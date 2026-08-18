@@ -1,0 +1,3 @@
+include src/snail/data/damage_curves/curves.csv
+include src/snail/data/damage_curves/metadata.csv
+include src/snail/data/damage_curves/NOTICE

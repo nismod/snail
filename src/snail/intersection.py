@@ -2,7 +2,7 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from typing import Callable, List, Tuple, Union
+from typing import Callable, List, Tuple
 
 import dask.array
 import geopandas

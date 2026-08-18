@@ -7,7 +7,7 @@ The core Python package lives in `src/snail/`, with the command-line interface e
 Set up a clean environment (conda or venv) and run `pip install -e .[dev]` to install editable sources plus tooling. Execute `pytest` for the Python suite; append `--cov=snail --cov-report=term-missing` before opening a PR. For the C++ layer run `cmake -Bbuild ./extension && cmake --build build` and validate with `./build/run_tests`. Regenerate docs locally with `sphinx-build docs/source docs/build/html` if you touch tutorials.
 
 ## Coding Style & Naming Conventions
-Python code is formatted with `black` (line length 79). Use snake_case for functions and variables, PascalCase for classes, and keep module names lowercase. Prefer typing hints for new public APIs and raise `ValueError` or custom errors for invalid inputs. When touching the C++ library, run `clang-format -i extension/src/*.{cpp,hpp}` and keep header guards consistent with existing files.
+Python code is formatted with `ruff format`. Use snake_case for functions and variables, PascalCase for classes, and keep module names lowercase. Prefer typing hints for new public APIs and raise `ValueError` or custom errors for invalid inputs. When touching the C++ library, run `clang-format -i extension/src/*.{cpp,hpp}` and keep header guards consistent with existing files.
 
 ## Testing Guidelines
 Add targeted pytest cases beside the feature under test, using fixtures for geospatial datasets (see `tests/core`). Name tests `test_<behavior>` and keep assertions explicit. Maintain or improve coverage, especially around grid slicing and routing paths. C++ changes require extending the Catch2 suite before calling `./build/run_tests`.

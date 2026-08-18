@@ -7,6 +7,8 @@
 # e.g. uncomment:
 # from snail.network import Network
 
+from . import damage_library
+
 try:
     from importlib.metadata import version
 
@@ -17,4 +19,4 @@ except Exception:
 
 # Define what should be imported as * when a client writes::
 #   from snail import *
-__all__ = []
+__all__ = ["damage_library"]

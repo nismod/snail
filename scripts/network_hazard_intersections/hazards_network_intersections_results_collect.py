@@ -59,13 +59,11 @@ Results
     - max_val - Integer value of maximum value of hazard threshold
 
 """
-import itertools
+
 import os
-import sys
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import Polygon
 from tqdm import tqdm
 
 
@@ -86,9 +84,7 @@ def line_length(line, ellipsoid="WGS-84"):
         return sum(line_length(segment) for segment in line)
 
     return sum(
-        vincenty(
-            tuple(reversed(a)), tuple(reversed(b)), ellipsoid=ellipsoid
-        ).kilometers
+        vincenty(tuple(reversed(a)), tuple(reversed(b)), ellipsoid=ellipsoid).kilometers
         for a, b in pairwise(line.coords)
     )
 
@@ -150,9 +146,7 @@ def spatial_scenario_selection(
                             network_id_column: lines[network_id_column],
                             "length": 1000.0
                             * line_length(
-                                lines["geometry"].intersection(
-                                    poly["geometry"]
-                                )
+                                lines["geometry"].intersection(poly["geometry"])
                             ),
                             "province_id": poly["province_id"],
                             "province_name": poly["province_name"],
@@ -168,9 +162,7 @@ def spatial_scenario_selection(
                             "department_name": poly["department_name"],
                         }
 
-                    data_dictionary.append(
-                        {**value_dictionary, **hazard_dictionary}
-                    )
+                    data_dictionary.append({**value_dictionary, **hazard_dictionary})
 
     del line_gpd, poly_gpd
     return data_dictionary
@@ -271,8 +263,7 @@ def create_hazard_attributes_for_network(
                 hazard_thrs = [
                     (thresholds[t], thresholds[t + 1])
                     for t in range(len(thresholds) - 1)
-                    if "{0}-{1}".format(thresholds[t], thresholds[t + 1])
-                    in file
+                    if "{0}-{1}".format(thresholds[t], thresholds[t + 1]) in file
                 ][0]
                 hazard_dict["min_depth"] = hazard_thrs[0]
                 hazard_dict["max_depth"] = hazard_thrs[1]
@@ -405,12 +396,8 @@ def main():
     # zones.rename(columns={'OBJECTID':'department_id','Name':'department_name'},inplace=True)
 
     zones["geometry_centroid"] = zones.geometry.centroid
-    zones_centriods = zones[
-        ["department_id", "department_name", "geometry_centroid"]
-    ]
-    zones_centriods.rename(
-        columns={"geometry_centroid": "geometry"}, inplace=True
-    )
+    zones_centriods = zones[["department_id", "department_name", "geometry_centroid"]]
+    zones_centriods.rename(columns={"geometry_centroid": "geometry"}, inplace=True)
     zone_matches = gpd.sjoin(
         zones_centriods,
         provinces[["province_id", "province_name", "geometry"]],
@@ -499,9 +486,7 @@ def main():
             mode_data_df.append(data_df)
             del data_df
 
-        mode_data_df = pd.concat(
-            mode_data_df, axis=0, sort="False", ignore_index=True
-        )
+        mode_data_df = pd.concat(mode_data_df, axis=0, sort="False", ignore_index=True)
         data_path = os.path.join(
             output_dir, "{}_hazard_intersections.csv".format(modes[m])
         )
