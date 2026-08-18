@@ -2,35 +2,14 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, List, Tuple, Union
+from typing import Callable, List, Tuple, Union
 
+import dask.array
 import geopandas
 import numpy
 import pandas
 import rasterio
-
-try:
-    import dask.array as _dask_array
-except ImportError:  # pragma: no cover - optional dependency
-    _dask_array = None
-
-try:
-    import xarray as _xarray
-except ImportError:  # pragma: no cover - optional dependency
-    _xarray = None
-
-
-def _is_dask_array(value):
-    return _dask_array is not None and isinstance(value, _dask_array.Array)
-
-
-def _is_xarray_dataarray(value):
-    return _xarray is not None and isinstance(value, _xarray.DataArray)
-
-if TYPE_CHECKING:
-    import dask.array
-    import xarray
-
+import xarray
 from shapely import box
 from shapely.geometry import mapping, shape
 from shapely.ops import linemerge, polygonize
@@ -56,6 +35,14 @@ else:
 # Use some high degree of precision to round polygon coordinates
 # when polygonizing split edges to help avoid floating point errors
 POLYGON_COORDINATE_PRECISION = 9
+
+
+def _is_dask_array(value):
+    return isinstance(value, dask.array.Array)
+
+
+def _is_xarray_dataarray(value):
+    return isinstance(value, xarray.DataArray)
 
 
 @dataclass(frozen=True)
@@ -197,7 +184,7 @@ def prepare_polygons(
 
 
 def split_points(
-    points: geopandas.GeoDataFrame, grid: GridDefinition
+    points: geopandas.GeoDataFrame, _: GridDefinition
 ) -> geopandas.GeoDataFrame:
     """Split points along a grid
 
@@ -236,12 +223,8 @@ def split_linestrings(
                 new_row.geometry = s
                 new_row["split"] = j
                 pieces.append(new_row)
-    logging.info(
-        f"Split {len(linestring_features)} edges into {len(pieces)} pieces"
-    )
-    splits_df = geopandas.GeoDataFrame(
-        pieces, crs=grid.crs, geometry="geometry"
-    )
+    logging.info(f"Split {len(linestring_features)} edges into {len(pieces)} pieces")
+    splits_df = geopandas.GeoDataFrame(pieces, crs=grid.crs, geometry="geometry")
     return splits_df
 
 
@@ -308,8 +291,7 @@ def split_polygons_experimental(
         )
         # round to high precision (avoid floating point errors)
         geom_splits = [
-            _set_precision(s, POLYGON_COORDINATE_PRECISION)
-            for s in geom_splits
+            _set_precision(s, POLYGON_COORDINATE_PRECISION) for s in geom_splits
         ]
         # to polygons
         geom_splits = list(polygonize(geom_splits))
@@ -319,9 +301,7 @@ def split_polygons_experimental(
             new_row.geometry = s
             new_row["split"] = j
             pieces.append(new_row)
-    logging.info(
-        f"  Split {len(polygon_features)} areas into {len(pieces)} pieces"
-    )
+    logging.info(f"  Split {len(polygon_features)} areas into {len(pieces)} pieces")
     splits_df = geopandas.GeoDataFrame(pieces)
     splits_df.crs = grid.crs
     return splits_df
@@ -405,16 +385,12 @@ def get_raster_values_for_splits(
         return _build_series(splits.index, valid_positions, splits_values)
 
     elif _is_dask_array(backing_data):
-        splits_values_da = backing_data.vindex[
-            indices_j_valid, indices_i_valid
-        ]
+        splits_values_da = backing_data.vindex[indices_j_valid, indices_i_valid]
         splits_values = numpy.asarray(splits_values_da.compute())
         return _build_series(splits.index, valid_positions, splits_values)
 
     else:
-        raise NotImplementedError(
-            "data array backends must be NumPy or Dask arrays."
-        )
+        raise NotImplementedError("data array backends must be NumPy or Dask arrays.")
 
 
 def _build_series(
@@ -426,9 +402,7 @@ def _build_series(
     positions, default numpy.nan.
     """
     if len(positions) == len(index):
-        series = pandas.Series(
-            numpy.empty(len(index), dtype=values.dtype), index=index
-        )
+        series = pandas.Series(numpy.empty(len(index), dtype=values.dtype), index=index)
         series.iloc[positions] = values
         return series
     series = pandas.Series(numpy.full(len(index), numpy.nan), index=index)
@@ -451,7 +425,7 @@ def apply_indices(
         empty_df[index_j] = numpy.array([], dtype="int64")
         return empty_df
 
-    def f(geom, *args, **kwargs):
+    def f(geom, *_, **__):
         return get_indices(geom, grid, index_i, index_j)
 
     indices = features.geometry.apply(f, result_type="expand")
@@ -542,9 +516,7 @@ def aggregate_values_to_grid(
 
     if df.empty:
         inferred_dtype = (
-            numpy.array(fill_value).dtype
-            if dtype is None
-            else numpy.dtype(dtype)
+            numpy.array(fill_value).dtype if dtype is None else numpy.dtype(dtype)
         )
         return numpy.full((height, width), fill_value, dtype=inferred_dtype)
 

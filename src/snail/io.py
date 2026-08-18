@@ -7,25 +7,16 @@ import geopandas
 import numpy
 import pandas
 import rasterio
-
-try:
-    import rioxarray as _rioxarray
-except ImportError as exc:
-    _rioxarray = None
-
-try:
-    import xarray as _xarray
-except ImportError:  # pragma: no cover - optional dependency
-    _xarray = None
-
-if TYPE_CHECKING:  # pragma: no cover
-    import xarray
+import rioxarray
 
 from snail.intersection import (
     GridDefinition,
     _is_xarray_dataarray,
     get_raster_values_for_splits,
 )
+
+if TYPE_CHECKING:
+    import xarray
 
 
 def associate_raster_files(splits, rasters, lazy: bool = False):
@@ -76,21 +67,19 @@ def associate_raster_files(splits, rasters, lazy: bool = False):
 
 def read_rasters(rasters, lazy: bool = False):
     for raster in rasters.itertuples():
-        data_array = None
         try:
             if lazy:
-                if _rioxarray is None:
-                    raise RuntimeError(
-                        "Lazy raster reading requires optional dependencies, including "
-                        "xarray, dask and rioxarray. Try 'pip install nismod-snail[lazy]'"
-                    )
-                data_array = _rioxarray.open_rasterio(
-                    raster.path, chunks="auto"
-                )
-            source = data_array if data_array is not None else raster.path
+                data_array = rioxarray.open_rasterio(raster.path, chunks="auto")
+                source = data_array
+            else:
+                data_array = None
+                source = raster.path
+
             for band_number in raster.bands:
-                yield raster, band_number, read_raster_band_data(
-                    source, band_number, lazy=lazy
+                yield (
+                    raster,
+                    band_number,
+                    read_raster_band_data(source, band_number, lazy=lazy),
                 )
         finally:
             if data_array is not None:
@@ -105,11 +94,6 @@ def read_raster_band_data(
     if band_number < 1:
         raise ValueError(f"band_number must be >= 1, got {band_number}")
     if _is_xarray_dataarray(source):
-        if lazy:
-            logging.debug(
-                "Ignoring lazy=True for DataArray input; returning original "
-                "array (consider providing a dask-backed DataArray instead)."
-            )
         return _select_dataarray_band(source, band_number)
 
     if isinstance(source, (str, PathLike)):
@@ -117,19 +101,12 @@ def read_raster_band_data(
             with rasterio.open(source) as dataset:
                 band_data: numpy.ndarray = dataset.read(band_number)
         else:
-            if _rioxarray is None:
-                raise RuntimeError(
-                    "Lazy raster reading requires optional dependencies, including "
-                    "xarray, dask and rioxarray. Try 'pip install nismod-snail[lazy]'"
-                )
-
-            data_array = _rioxarray.open_rasterio(source, chunks="auto")
+            data_array = rioxarray.open_rasterio(source, chunks="auto")
             band_data = _select_dataarray_band(data_array, band_number)
         return band_data
 
     raise TypeError(
-        "Unsupported raster source; expected a path-like object or "
-        "xarray.DataArray."
+        "Unsupported raster source; expected a path-like object or xarray.DataArray."
     )
 
 
@@ -168,7 +145,7 @@ def read_raster_metadata(
 
     with rasterio.open(source) as dataset:
         bands = dataset.indexes
-        grid = GridDefinition.from_rasterio_dataset(dataset)
+        grid = GridDefinition.from_rasterio(dataset)
     return grid, bands
 
 
@@ -226,23 +203,9 @@ def write_grid_to_raster(
         dataset.write(array.astype(target_dtype, copy=False), 1)
 
 
-def _ensure_rioxarray(data_array: "xarray.DataArray") -> None:
-    if not hasattr(data_array, "rio"):
-        raise ValueError(
-            "DataArray is missing the rioxarray accessor. Install rioxarray "
-            "and configure spatial metadata before calling this function."
-        )
-
-
 def _get_spatial_dims(data_array: "xarray.DataArray") -> Tuple[str, str]:
-    _ensure_rioxarray(data_array)
-    try:
-        x_dim = data_array.rio.x_dim
-        y_dim = data_array.rio.y_dim
-    except AttributeError as exc:  # pragma: no cover - defensive
-        raise ValueError(
-            "Unable to determine spatial dimensions from DataArray.rio."
-        ) from exc
+    x_dim = data_array.rio.x_dim
+    y_dim = data_array.rio.y_dim
     if not x_dim or not y_dim:
         raise ValueError("DataArray lacks named spatial dimensions for x/y.")
     return y_dim, x_dim
@@ -254,15 +217,11 @@ def _select_dataarray_band(
     if band_number < 1:
         raise ValueError(f"band_number must be >= 1, got {band_number}")
     spatial_dims = set(_get_spatial_dims(data_array))
-    non_spatial_dims = [
-        dim for dim in data_array.dims if dim not in spatial_dims
-    ]
+    non_spatial_dims = [dim for dim in data_array.dims if dim not in spatial_dims]
 
     if not non_spatial_dims:
         if band_number != 1:
-            raise ValueError(
-                "Single-band DataArray only supports band_number=1."
-            )
+            raise ValueError("Single-band DataArray only supports band_number=1.")
         return data_array
 
     if len(non_spatial_dims) > 1:
@@ -280,8 +239,7 @@ def _select_dataarray_band(
             selected = data_array.isel({band_dim: band_number - 1})
     except (IndexError, KeyError) as exc:
         raise ValueError(
-            f"Band index {band_number} is out of range for dimension "
-            f"{band_dim}."
+            f"Band index {band_number} is out of range for dimension {band_dim}."
         ) from exc
 
     return selected.squeeze(drop=True)
@@ -291,11 +249,9 @@ def _read_dataarray_metadata(
     data_array: "xarray.DataArray",
 ) -> Tuple[GridDefinition, Tuple[int]]:
     spatial_dims = set(_get_spatial_dims(data_array))
-    non_spatial_dims = [
-        dim for dim in data_array.dims if dim not in spatial_dims
-    ]
+    non_spatial_dims = [dim for dim in data_array.dims if dim not in spatial_dims]
 
-    grid = GridDefinition.from_dataarray(data_array)
+    grid = GridDefinition.from_xarray(data_array)
 
     if not non_spatial_dims:
         band_numbers: Tuple[int, ...] = (1,)
@@ -304,8 +260,7 @@ def _read_dataarray_metadata(
         band_size = data_array.sizes[band_dim]
         if band_size < 1:
             raise ValueError(
-                f"DataArray dimension '{band_dim}' has no elements to treat "
-                "as bands."
+                f"DataArray dimension '{band_dim}' has no elements to treat as bands."
             )
         band_numbers = tuple(range(1, band_size + 1))
     else:

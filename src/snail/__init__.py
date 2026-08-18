@@ -1,5 +1,4 @@
-"""snail - the spatial networks impact assessment library
-"""
+"""snail - the spatial networks impact assessment library"""
 
 # Import things to define what is accessible directly on snail, when a client
 # writes::

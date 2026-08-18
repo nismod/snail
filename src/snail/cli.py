@@ -6,6 +6,7 @@ from pathlib import Path
 
 import geopandas
 import pandas
+import rioxarray
 
 from snail.intersection import (
     GridDefinition,
@@ -26,7 +27,6 @@ from snail.io import (
     read_features,
     read_raster_metadata,
     extend_rasters_metadata,
-    _rioxarray,
 )
 
 
@@ -111,9 +111,7 @@ def snail(args=None):
     parser_split.add_argument(
         "--lazy-rasters",
         action="store_true",
-        help=(
-            "Read raster bands lazily with xarray/dask when attributing values."
-        ),
+        help=("Read raster bands lazily with xarray/dask when attributing values."),
     )
     parser_split.add_argument(
         "-o",
@@ -192,7 +190,6 @@ def split(args):
     if args.raster:
         grid, all_bands = read_raster_metadata(args.raster)
     else:
-        crs = None
         width = args.width
         height = args.height
         affine_transform = args.transform
@@ -219,9 +216,7 @@ def split(args):
         logging.info("Preparing linestrings")
         prepared = prepare_linestrings(features)
         logging.info("Splitting linestrings")
-        splits = split_features_for_rasters(
-            prepared, [grid], split_linestrings
-        )
+        splits = split_features_for_rasters(prepared, [grid], split_linestrings)
     elif "Polygon" in geom_type:
         logging.info("Preparing polygons")
         prepared = prepare_polygons(features)
@@ -232,9 +227,7 @@ def split(args):
             )
         else:
             logging.info("Splitting polygons")
-            splits = split_features_for_rasters(
-                prepared, [grid], split_polygons
-            )
+            splits = split_features_for_rasters(prepared, [grid], split_polygons)
     else:
         raise ValueError("Could not process vector data of type %s", geom_type)
 
@@ -252,15 +245,13 @@ def split(args):
         else:
             key = os.path.basename(args.raster)
 
-        data_array = None
         if args.lazy_rasters:
-            if _rioxarray is None:
-                raise RuntimeError(
-                    "Lazy raster reading requires optional dependencies, including "
-                    "xarray, dask and rioxarray. Try 'pip install nismod-snail[lazy]'"
-                )
-            data_array = _rioxarray.open_rasterio(args.raster, chunks="auto")
-        source = data_array if data_array is not None else args.raster
+            data_array = rioxarray.open_rasterio(args.raster, chunks="auto")
+            source = data_array
+        else:
+            data_array = None
+            source = args.raster
+
         try:
             for band_index in bands:
                 if len(bands) == 1:
@@ -279,9 +270,7 @@ def split(args):
                     band_number=int(band_index),
                     lazy=args.lazy_rasters,
                 )
-                splits[band_key] = get_raster_values_for_splits(
-                    splits, band_data
-                )
+                splits[band_key] = get_raster_values_for_splits(splits, band_data)
         finally:
             if data_array is not None:
                 data_array.close()
@@ -317,9 +306,7 @@ def process(args):
     # read networks
     vector_layers = _read_csv_or_quit(args.features)
 
-    vector_layers.path = vector_layers.path.apply(
-        _join_dirname, args=(dirname,)
-    )
+    vector_layers.path = vector_layers.path.apply(_join_dirname, args=(dirname,))
     if "output_path" not in vector_layers.columns:
         vector_layers["output_path"] = vector_layers.path.apply(
             lambda p: f"{p}.processed.parquet"
@@ -357,9 +344,7 @@ def _process_layer(
         with_data = associate_raster_files(split, rasters, lazy=lazy)
     elif "LineString" in geom_type:
         prepared = prepare_linestrings(features)
-        split = split_features_for_rasters(
-            prepared, transforms, split_linestrings
-        )
+        split = split_features_for_rasters(prepared, transforms, split_linestrings)
         with_data = associate_raster_files(split, rasters, lazy=lazy)
     elif "Polygon" in geom_type:
         prepared = prepare_polygons(features)
@@ -369,9 +354,7 @@ def _process_layer(
                 prepared, transforms, split_polygons_experimental
             )
         else:
-            split = split_features_for_rasters(
-                prepared, transforms, split_polygons
-            )
+            split = split_features_for_rasters(prepared, transforms, split_polygons)
         with_data = associate_raster_files(split, rasters, lazy=lazy)
     else:
         raise ValueError(f"Could not process vector data of type {geom_type}")
