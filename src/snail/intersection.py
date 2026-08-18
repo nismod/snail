@@ -108,7 +108,7 @@ class GridDefinition:
         return GridDefinition(crs, width, height, transform)
 
     @classmethod
-    def from_xarray(cls, data_array: "xarray.Dataset" | "xarray.DataArray"):
+    def from_xarray(cls, data_array: xarray.Dataset | xarray.DataArray):
         """GridDefinition for an xarray DataArray or Dataset with spatial metadata.
 
         Requires the DataArray to have a rioxarray accessor with CRS and
