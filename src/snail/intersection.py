@@ -93,10 +93,7 @@ class GridDefinition:
                 raise IOError("Unrecognised driver, expected netCDF or Zarr")
 
             with xarray.open_dataset(
-                fname,
-                chunks="auto",
-                decode_coords="all",
-                engine=engine
+                fname, chunks="auto", decode_coords="all", engine=engine
             ) as dataset:
                 grid = GridDefinition.from_xarray(dataset)
         else:
