@@ -92,7 +92,26 @@ class GridDefinition:
     transform: Tuple[float]
 
     @classmethod
-    def from_rasterio_dataset(cls, dataset):
+    def from_raster(cls, fname):
+        """GridDefinition for a raster file (readable by rasterio)"""
+        with rasterio.open(fname) as dataset:
+            driver = dataset.driver
+
+        if driver in ("netCDF", "Zarr"):
+            with xarray.open_dataset(
+                fname,
+                chunks="auto",
+                decode_coords="all",
+            ) as dataset:
+                grid = GridDefinition.from_xarray(dataset)
+        else:
+            with rasterio.open(fname) as dataset:
+                grid = GridDefinition.from_rasterio(dataset)
+
+        return grid
+
+    @classmethod
+    def from_rasterio(cls, dataset):
         """GridDefinition for a rasterio dataset"""
         crs = dataset.crs
         width = dataset.width
@@ -102,11 +121,24 @@ class GridDefinition:
         return GridDefinition(crs, width, height, transform)
 
     @classmethod
-    def from_raster(cls, fname):
-        """GridDefinition for a raster file (readable by rasterio)"""
-        with rasterio.open(fname) as dataset:
-            grid = GridDefinition.from_rasterio_dataset(dataset)
-        return grid
+    def from_xarray(cls, data_array: "xarray.Dataset" | "xarray.DataArray"):
+        """GridDefinition for an xarray DataArray or Dataset with spatial metadata.
+
+        Requires the DataArray to have a rioxarray accessor with CRS and
+        transform information derived from explicit coordinates.
+        """
+        crs = data_array.rio.crs
+
+        if crs is None:
+            raise ValueError(
+                "data_array.rio.crs is None; assign a CRS using DataArray.rio.write_crs"
+            )
+
+        transform = tuple(data_array.rio.transform())[:6]
+        width = int(data_array.rio.width)
+        height = int(data_array.rio.height)
+
+        return GridDefinition(crs=crs, width=width, height=height, transform=transform)
 
     @classmethod
     def from_extent(
@@ -125,56 +157,6 @@ class GridDefinition:
             width=math.ceil((xmax - xmin) / cell_width),
             height=math.ceil((ymax - ymin) / cell_height),
             transform=(cell_width, 0.0, xmin, 0.0, cell_height, ymin),
-        )
-
-    @classmethod
-    def from_dataarray(cls, data_array: "xarray.DataArray"):
-        """GridDefinition for an xarray DataArray with spatial metadata.
-
-        Requires the DataArray to have a rioxarray accessor with CRS and
-        transform information derived from explicit coordinates.
-        """
-        if _xarray is None:
-            raise RuntimeError(
-                "xarray is not available; install optional dependencies to "
-                "use GridDefinition.from_dataarray"
-            )
-        if not isinstance(data_array, _xarray.DataArray):
-            raise TypeError(
-                "Expected an xarray.DataArray, received "
-                f"{type(data_array).__name__}"
-            )
-        if not hasattr(data_array, "rio"):
-            raise ValueError(
-                "DataArray is missing the rioxarray accessor. Install "
-                "rioxarray and ensure spatial dimensions are configured."
-            )
-
-        try:
-            crs = data_array.rio.crs
-        except AttributeError as exc:  # pragma: no cover - defensive
-            raise ValueError(
-                "Unable to read CRS from DataArray.rio. Ensure the DataArray "
-                "has spatial metadata assigned."
-            ) from exc
-        if crs is None:
-            raise ValueError(
-                "DataArray.rio.crs is None; assign a CRS before constructing "
-                "a GridDefinition."
-            )
-
-        try:
-            transform = tuple(data_array.rio.transform(recalc=True))[:6]
-            width = int(data_array.rio.width)
-            height = int(data_array.rio.height)
-        except AttributeError as exc:  # pragma: no cover - defensive
-            raise ValueError(
-                "DataArray is missing required spatial attributes (width, "
-                "height, transform)."
-            ) from exc
-
-        return GridDefinition(
-            crs=crs, width=width, height=height, transform=transform
         )
 
 

@@ -172,9 +172,21 @@ def test_grid_from_raster():
     assert actual == expected
 
 
+def test_grid_from_zarr_reads_cf_crs():
+    fname = os.path.join(
+        os.path.dirname(__file__),
+        "integration",
+        "climatology-hd35-annual-mean.zarr",
+    )
+
+    grid = GridDefinition.from_raster(fname)
+
+    assert grid.crs == CRS.from_epsg(4326)
+
+
 def test_grid_from_dataarray(sample_dataarray):
     data_array, transform = sample_dataarray
-    grid = GridDefinition.from_dataarray(data_array)
+    grid = GridDefinition.from_xarray(data_array)
 
     assert grid.width == data_array.sizes[data_array.rio.x_dim]
     assert grid.height == data_array.sizes[data_array.rio.y_dim]
