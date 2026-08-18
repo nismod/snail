@@ -22,10 +22,7 @@ Install using pip:
 
     pip install nismod-snail
 
-This should bring all essential dependencies with it. To include optional dependencies,
-run:
-
-    pip install nismod-snail[lazy]
+This should bring all essential dependencies with it.
 
 If any of these cause difficulties, try using a
 [conda](https://docs.conda.io/en/latest/miniconda.html) environment:
@@ -60,7 +57,8 @@ snail split \
     --output split.gpkg
 ```
 
-Split features on a grid defined by a GeoTIFF, optionally adding the values from each raster band to each split feature as a new attribute:
+Split features on a grid defined by a GeoTIFF, optionally adding the values from
+each raster band to each split feature as a new attribute:
 
 ```bash
 snail split \
@@ -72,10 +70,10 @@ snail split \
 ```
 
 Adding `--lazy-rasters` keeps large raster bands on disk and fetches values
-lazily via `xarray`/`dask` (install additional dependencies with `pip install
-snail[lazy]`).
+lazily via `xarray`/`dask`.
 
-Split multiple vector feature files along the grids defined by multiple raster files, attributing all raster values:
+Split multiple vector feature files along the grids defined by multiple raster
+files, attributing all raster values:
 
 ```bash
 snail process -fs features.csv -rs rasters.csv
@@ -88,7 +86,10 @@ large rasters.
 
 ### Transform
 
-A note on `transform` - these six numbers define the transform from `i,j` cell index (column/row) coordinates in the rectangular grid to `x,y` geographic coordinates, in the coordinate reference system of the input and output files. They effectively form the first two rows of a 3x3 matrix:
+A note on `transform` - these six numbers define the transform from `i,j` cell
+index (column/row) coordinates in the rectangular grid to `x,y` geographic
+coordinates, in the coordinate reference system of the input and output files.
+They effectively form the first two rows of a 3x3 matrix:
 
 ```
 | x |   | a  b  c | | i |
@@ -96,7 +97,8 @@ A note on `transform` - these six numbers define the transform from `i,j` cell i
 | 1 |   | 0  0  1 | | 1 |
 ```
 
-In cases without shear or rotation, `a` and `e` define scaling or grid cell size, while `c` and `f` define the offset or grid upper-left corner:
+In cases without shear or rotation, `a` and `e` define scaling or grid cell
+size, while `c` and `f` define the offset or grid upper-left corner:
 
 ```
 | x_scale 0       x_offset |
@@ -129,7 +131,7 @@ Run this to install the source code as a package:
 If you're working on snail itself, install it as "editable" along with test and
 development packages:
 
-    pip install -e .[dev,docs,lazy,tutorials]
+    pip install -e .[dev,docs,tutorials]
 
 Run tests using [pytest](https://docs.pytest.org/en/latest/) and
 [pytest-cov](https://pytest-cov.readthedocs.io) to check coverage:

@@ -23,22 +23,24 @@ classifiers = [
 keywords = []
 requires-python = ">=3.10"
 dependencies = [
+    "dask[array]",
     "geopandas",
+    "igraph",
     "matplotlib",
     "numpy",
     "openpyxl",
     "pandera",
     "pyarrow",
     "pyogrio",
-    "igraph",
     "rasterio",
+    "rioxarray",
+    "scipy",
     "shapely",
-    "scipy"
+    "xarray"
 ]
 
 [project.optional-dependencies]
 dev = ["affine", "black", "hilbertcurve", "nbstripout", "pytest-cov", "pytest"]
-lazy = ["dask[array]", "rioxarray", "xarray"]
 docs = ["sphinx", "nbsphinx", "sphinx_gallery", "numpydoc"]
 tutorials = [
     "contextily",

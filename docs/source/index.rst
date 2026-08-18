@@ -87,8 +87,7 @@ Split features on a grid defined by a GeoTIFF, optionally adding the values from
         --output split_lines_with_raster_values.geojson
 
 Add ``--lazy-rasters`` to keep raster bands on disk and fetch values lazily via
-``xarray``/``dask`` (install the additional dependencies with ``pip install
-snail[lazy]``).
+``xarray``/``dask``.
 
 
 Split multiple vector feature files along the grids defined by multiple raster files, attributing all raster values::
