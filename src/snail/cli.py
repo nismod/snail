@@ -29,6 +29,8 @@ from snail.io import (
     read_raster_metadata,
 )
 
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 def snail(args=None):
     """snail command"""
@@ -158,7 +160,7 @@ def snail(args=None):
     if args.verbose > 2:
         level = logging.DEBUG
     elif args.verbose > 1:
-        level = logging.INFO
+        level = logger.info
     elif args.verbose > 0:
         level = logging.WARNING
     else:
@@ -174,15 +176,15 @@ def snail(args=None):
         level=level,
     )
 
-    logging.debug("Called with %s", args)
+    logger.debug("Called with %s", args)
 
     # Call the subcommand function
-    logging.info("Start.")
+    logger.info("Start.")
     try:
         args.func(args)
     except AttributeError:
         parser.print_help()
-    logging.info("Done.")
+    logger.info("Done.")
 
 
 def split(args):
@@ -198,7 +200,7 @@ def split(args):
                 "Error: Expected either a raster file or transform, width and height of splitting grid"
             )
         grid = None  # read CRS from features
-    logging.info(f"Splitting {grid=}")
+    logger.info(f"Splitting {grid=}")
 
     features = read_features(Path(args.features), args.layer)
     features_crs = features.crs
@@ -208,30 +210,30 @@ def split(args):
     geom_type = _sample_geom_type(features)
 
     if "Point" in geom_type:
-        logging.info("Preparing points")
+        logger.info("Preparing points")
         prepared = prepare_points(features)
-        logging.info("Splitting points")
+        logger.info("Splitting points")
         splits = split_features_for_rasters(prepared, [grid], split_points)
     elif "LineString" in geom_type:
-        logging.info("Preparing linestrings")
+        logger.info("Preparing linestrings")
         prepared = prepare_linestrings(features)
-        logging.info("Splitting linestrings")
+        logger.info("Splitting linestrings")
         splits = split_features_for_rasters(prepared, [grid], split_linestrings)
     elif "Polygon" in geom_type:
-        logging.info("Preparing polygons")
+        logger.info("Preparing polygons")
         prepared = prepare_polygons(features)
         if args.experimental:
-            logging.info("Splitting polygons (experimental)")
+            logger.info("Splitting polygons (experimental)")
             splits = split_features_for_rasters(
                 prepared, [grid], split_polygons_experimental
             )
         else:
-            logging.info("Splitting polygons")
+            logger.info("Splitting polygons")
             splits = split_features_for_rasters(prepared, [grid], split_polygons)
     else:
         raise ValueError("Could not process vector data of type %s", geom_type)
 
-    logging.info("Applying indices")
+    logger.info("Applying indices")
     splits = apply_indices(splits, grid)
 
     if args.attribute and args.raster:
@@ -259,7 +261,7 @@ def split(args):
                 else:
                     band_key = f"{key}_{band_index}"
 
-                logging.info(
+                logger.info(
                     "Attributing raster values, output in column %s from %s band %s",
                     band_key,
                     args.raster,
@@ -332,11 +334,11 @@ def _process_layer(
 ):
     vector_path = Path(vector_layer.path)
     layer = getattr(vector_layer, "layer", None)
-    logging.info("Processing %s", vector_path.name)
+    logger.info("Processing %s", vector_path.name)
 
     features = read_features(vector_path, layer)
     geom_type = _sample_geom_type(features)
-    logging.info("%s Features CRS %s", geom_type, features.crs)
+    logger.info("%s Features CRS %s", geom_type, features.crs)
 
     if "Point" in geom_type:
         prepared = prepare_points(features)
@@ -349,7 +351,7 @@ def _process_layer(
     elif "Polygon" in geom_type:
         prepared = prepare_polygons(features)
         if experimental:
-            logging.info("Split polygons (experimental)")
+            logger.info("Split polygons (experimental)")
             split = split_features_for_rasters(
                 prepared, transforms, split_polygons_experimental
             )
@@ -366,7 +368,7 @@ def _read_csv_or_quit(path) -> pandas.DataFrame:
     try:
         df = pandas.read_csv(path)
     except FileNotFoundError:
-        logging.error("File not found: %s", path)
+        logger.error("File not found: %s", path)
         sys.exit()
     return df
 

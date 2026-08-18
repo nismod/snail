@@ -18,6 +18,8 @@ from snail.intersection import (
 if TYPE_CHECKING:
     import xarray
 
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 def associate_raster_files(splits, rasters, lazy: bool = False):
     """Read values from a list of raster files for a set of indexed split geometries
@@ -46,7 +48,7 @@ def associate_raster_files(splits, rasters, lazy: bool = False):
 
     # associate values
     for raster, band_number, band_data in read_rasters(rasters, lazy=lazy):
-        logging.info(
+        logger.info(
             "Associating values from raster %s grid %s band %s",
             raster.key,
             raster.grid_id,
@@ -118,7 +120,7 @@ def extend_rasters_metadata(
     raster_bands = []
 
     for raster in rasters.itertuples():
-        logging.info("Reading metadata from raster %s", raster.path)
+        logger.info("Reading metadata from raster %s", raster.path)
         grid, bands = read_raster_metadata(raster.path)
 
         # add transform to list if not present

@@ -37,6 +37,9 @@ else:
 # when polygonizing split edges to help avoid floating point errors
 POLYGON_COORDINATE_PRECISION = 9
 
+# Module-level logger
+logger = logging.getLogger(__name__)
+
 
 def _is_dask_array(value):
     return isinstance(value, dask.array.Array)
@@ -160,7 +163,7 @@ def split_features_for_rasters(
 ):
     # lookup per transform
     for i, grid in enumerate(grids):
-        logging.info("Splitting on grid %s %s", i, grid)
+        logger.info("Splitting on grid %s %s", i, grid)
         # transform to grid CRS
         crs_features = features.to_crs(grid.crs)
         crs_features = split_func(crs_features, grid)
@@ -224,12 +227,12 @@ def split_linestrings(
             # however j should be in range: 0 <= j < raster_width
             # as a hacky workaround, drop any splits with length 0
             # do we need a nudge off a cell boundary somewhere when performing the splits?
-            if not s.length == 0:
+            if s.length != 0:
                 new_row = linestring_features.iloc[i].copy()
                 new_row.geometry = s
                 new_row["split"] = j
                 pieces.append(new_row)
-    logging.info(f"Split {len(linestring_features)} edges into {len(pieces)} pieces")
+    logger.info(f"Split {len(linestring_features)} edges into {len(pieces)} pieces")
     splits_df = geopandas.GeoDataFrame(pieces, crs=grid.crs, geometry="geometry")
     return splits_df
 
@@ -307,7 +310,7 @@ def split_polygons_experimental(
             new_row.geometry = s
             new_row["split"] = j
             pieces.append(new_row)
-    logging.info(f"  Split {len(polygon_features)} areas into {len(pieces)} pieces")
+    logger.info(f"  Split {len(polygon_features)} areas into {len(pieces)} pieces")
     splits_df = geopandas.GeoDataFrame(pieces)
     splits_df.crs = grid.crs
     return splits_df
@@ -422,7 +425,7 @@ def apply_indices(
     index_j="index_j",
 ) -> geopandas.GeoDataFrame:
     if features.empty:
-        logging.info("Returning empty dataframe")
+        logger.info("Returning empty dataframe")
         # return an empty dataframe with the expected columns
         empty_df = features.copy()
         empty_df[index_i] = numpy.array([], dtype="int64")
