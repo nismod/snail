@@ -1,9 +1,7 @@
 import pytest
-import shapely.wkt
 import snail.core.intersections
 
 from shapely.geometry import LineString, Polygon
-
 
 nrows = 2
 ncols = 2
@@ -45,9 +43,7 @@ def test_linestring_splitting_issue_61():
     transform = (5.0, 0.0, 54675.0, 0.0, -5.0, 1217320.0)
 
     # reduced test case to single straight-line segment
-    test_linestring = LineString(
-        [(415805.57, 430046.95), (415800.0, 430015.0)]
-    )
+    test_linestring = LineString([(415805.57, 430046.95), (415800.0, 430015.0)])
     expected = [
         LineString([(415805.57, 430046.95), (415805.23004, 430045.0)]),
         LineString([(415805.23004, 430045.0), (415805, 430043.68043)]),
@@ -63,9 +59,9 @@ def test_linestring_splitting_issue_61():
     )
     for split, expected_split in zip(actual, expected):
         if not split.equals_exact(expected_split, 1e-5):
-            assert (
-                False
-            ), f"Expected split coordinates to match, got {split}, {expected_split}"
+            assert False, (
+                f"Expected split coordinates to match, got {split}, {expected_split}"
+            )
 
 
 @pytest.mark.parametrize(

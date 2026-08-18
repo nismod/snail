@@ -28,9 +28,7 @@ def linestrings():
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 0.5), (1.5, 1.5)]),
         LineString([(0.5, 0.5), (0.75, 0.5), (1.5, 1.5)]),
     ]
-    gdf = gpd.GeoDataFrame(
-        {"col1": ["name1", "name2"], "geometry": test_linestrings}
-    )
+    gdf = gpd.GeoDataFrame({"col1": ["name1", "name2"], "geometry": test_linestrings})
     return gdf
 
 
@@ -137,9 +135,7 @@ def polygon_split():
 
 @pytest.fixture
 def grid():
-    return GridDefinition(
-        crs=None, width=4, height=4, transform=(1, 0, 0, 0, 1, 0)
-    )
+    return GridDefinition(crs=None, width=4, height=4, transform=(1, 0, 0, 0, 1, 0))
 
 
 def test_grid_from_extent(grid):
@@ -309,15 +305,11 @@ def sort_polygons(df):
     ndimensions = 2
     hilbert_curve = HilbertCurve(iterations, ndimensions)
     points = df.geometry.centroid
-    coords = np.array(
-        list(zip(points.x.values.tolist(), points.y.values.tolist()))
-    )
+    coords = np.array(list(zip(points.x.values.tolist(), points.y.values.tolist())))
     int_coords = (coords * 10).astype(int)
     distances = hilbert_curve.distances_from_points(int_coords)
     df["hilbert_distance"] = distances
-    return df.sort_values(by="hilbert_distance").drop(
-        columns="hilbert_distance"
-    )
+    return df.sort_values(by="hilbert_distance").drop(columns="hilbert_distance")
 
 
 def test_aggregate_values_to_grid_sum():
@@ -342,23 +334,17 @@ def test_aggregate_values_to_grid_sum():
     assert_array_equal(aggregated, expected)
 
     # negative fill value works okay
-    aggregated = aggregate_values_to_grid(
-        splits, "length_km", grid, fill_value=-99
-    )
+    aggregated = aggregate_values_to_grid(splits, "length_km", grid, fill_value=-99)
     expected = np.array([[3.0, -99, -99], [-99, 0.0, 4.1]])
     assert_array_equal(aggregated, expected)
 
     # nan fill value
-    aggregated = aggregate_values_to_grid(
-        splits, "length_km", grid, fill_value=np.nan
-    )
+    aggregated = aggregate_values_to_grid(splits, "length_km", grid, fill_value=np.nan)
     expected = np.array([[3.0, np.nan, np.nan], [np.nan, 0.0, 4.1]])
     assert_array_equal(aggregated, expected)
 
     # cast to integer dtype
-    aggregated = aggregate_values_to_grid(
-        splits, "length_km", grid, dtype="int"
-    )
+    aggregated = aggregate_values_to_grid(splits, "length_km", grid, dtype="int")
     expected = np.array([[3, 0, 0], [0, 0, 4]], dtype="int64")
     assert_array_equal(aggregated, expected)
 

@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import rasterio
 import pytest
+import xarray
 from numpy.testing import assert_array_equal
 from rasterio.crs import CRS
 
@@ -76,9 +77,6 @@ def test_read_raster_band_data_from_dataarray(sample_dataarray):
 
 @pytest.mark.skipif(not Path("/proc").is_dir(), reason="Linux only")
 def test_lazy_raster_reads_do_not_leak_file_descriptors():
-    pytest.importorskip("dask.array")
-    pytest.importorskip("rioxarray")
-
     path = Path(__file__).parent / "integration" / "range.tif"
     gc.collect()
     initial_fds = len(os.listdir(f"/proc/{os.getpid()}/fd"))
@@ -93,8 +91,6 @@ def test_lazy_raster_reads_do_not_leak_file_descriptors():
 
 
 def test_read_raster_band_data_rejects_zero_band_for_lazy_path():
-    pytest.importorskip("dask.array")
-    pytest.importorskip("rioxarray")
     path = Path(__file__).parent / "integration" / "range.tif"
 
     with pytest.raises(ValueError, match="band_number must be >= 1"):
@@ -111,11 +107,10 @@ def test_read_raster_band_data_rejects_zero_band_for_lazy_dataarray(
 
 
 def test_read_raster_band_data_from_multiband_dataarray(sample_dataarray):
-    xr = pytest.importorskip("xarray")
     data_array, _ = sample_dataarray
 
     second_band = data_array + 7
-    multi = xr.concat([data_array, second_band], dim="band")
+    multi = xarray.concat([data_array, second_band], dim="band")
     multi.coords["band"] = [1, 2]
 
     result = read_raster_band_data(multi, band_number=2)

@@ -1,6 +1,5 @@
-"""Test core objects/concepts
-"""
-import snail
+"""Test core objects/concepts"""
+
 
 
 def test_init():
