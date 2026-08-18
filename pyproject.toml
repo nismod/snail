@@ -36,7 +36,8 @@ dependencies = [
     "rioxarray",
     "scipy",
     "shapely",
-    "xarray"
+    "xarray",
+    "zarr",
 ]
 
 [project.optional-dependencies]
