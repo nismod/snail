@@ -13,20 +13,20 @@ from snail.intersection import (
     apply_indices,
     get_raster_values_for_splits,
     prepare_linestrings,
-    prepare_polygons,
     prepare_points,
+    prepare_polygons,
     split_features_for_rasters,
     split_linestrings,
-    split_polygons,
     split_points,
+    split_polygons,
     split_polygons_experimental,
 )
 from snail.io import (
-    read_raster_band_data,
     associate_raster_files,
-    read_features,
-    read_raster_metadata,
     extend_rasters_metadata,
+    read_features,
+    read_raster_band_data,
+    read_raster_metadata,
 )
 
 

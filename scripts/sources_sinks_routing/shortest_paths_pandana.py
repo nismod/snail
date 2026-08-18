@@ -1,9 +1,9 @@
-import pandana
-from igraph import Graph
 import geopandas as gpd
-from pandas import DataFrame
 import matplotlib.pyplot as plt
 import numpy as np
+import pandana
+from igraph import Graph
+from pandas import DataFrame
 
 gdf = gpd.read_file("jamaica_roads.gpkg")
 

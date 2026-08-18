@@ -1,6 +1,5 @@
 import pytest
 import snail.core.intersections
-
 from shapely.geometry import LineString, Polygon
 
 nrows = 2

@@ -19,11 +19,10 @@ from __future__ import annotations
 
 import argparse
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
 
 import pandas as pd
-
 
 RAW_DATA_DIR = Path("nirandjan-2023-vulnerability-database")
 TABLE_D1 = RAW_DATA_DIR / "Table_D1_Summary_CI_Vulnerability_Data_V1.0.0.xlsx"
@@ -47,9 +46,9 @@ HAZARD_CODE_MAP = {
 EXCLUDED_CURVE_TYPES = {"V (repair rate)", "V (faults/km)"}
 
 
-def normalise_header(row: pd.Series, original: Iterable[str]) -> List[str]:
+def normalise_header(row: pd.Series, original: Iterable[str]) -> list[str]:
     """Fill unnamed Excel columns using header hints from the first row."""
-    headers: List[str] = []
+    headers: list[str] = []
     for idx, col in enumerate(original):
         if isinstance(col, str) and not col.startswith("Unnamed"):
             headers.append(col.strip())
@@ -67,7 +66,7 @@ def normalise_header(row: pd.Series, original: Iterable[str]) -> List[str]:
 
 def parse_table_d1(table_path: Path) -> pd.DataFrame:
     """Parse metadata from Table D1."""
-    metadata_tables: List[pd.DataFrame] = []
+    metadata_tables: list[pd.DataFrame] = []
     workbook = pd.ExcelFile(table_path)
 
     for sheet in workbook.sheet_names:
@@ -132,7 +131,7 @@ def parse_table_d1(table_path: Path) -> pd.DataFrame:
     return metadata
 
 
-def parse_intensity_label(label: str) -> Tuple[str, str | None]:
+def parse_intensity_label(label: str) -> tuple[str, str | None]:
     """Parse an intensity label like 'Depth (m)' into (name, unit)."""
     if not isinstance(label, str):
         return str(label), None
@@ -146,10 +145,10 @@ def parse_intensity_label(label: str) -> Tuple[str, str | None]:
     return name, unit or None
 
 
-def parse_table_d2(table_path: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
+def parse_table_d2(table_path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Parse the piecewise linear curves from Table D2."""
-    curve_rows: List[Dict[str, float]] = []
-    curve_meta: Dict[str, Dict[str, str]] = {}
+    curve_rows: list[dict[str, float]] = []
+    curve_meta: dict[str, dict[str, str]] = {}
 
     workbook = pd.ExcelFile(table_path)
     for sheet in workbook.sheet_names:

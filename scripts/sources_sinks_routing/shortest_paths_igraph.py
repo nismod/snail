@@ -1,6 +1,6 @@
-from igraph import Graph
 import geopandas as gpd
 import matplotlib.pyplot as plt
+from igraph import Graph
 
 gdf = gpd.read_file("jamaica_roads.gpkg")
 edges = gdf.loc[:, ["from_node", "to_node", "length_km"]]

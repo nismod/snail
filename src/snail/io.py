@@ -1,7 +1,7 @@
 import importlib.util
 import logging
 from os import PathLike
-from typing import List, Tuple, TYPE_CHECKING, Union
+from typing import TYPE_CHECKING, Union
 
 import geopandas
 import numpy
@@ -112,7 +112,7 @@ def read_raster_band_data(
 
 def extend_rasters_metadata(
     rasters: pandas.DataFrame,
-) -> Tuple[pandas.DataFrame, List[GridDefinition]]:
+) -> tuple[pandas.DataFrame, list[GridDefinition]]:
     grids = []
     grid_ids = []
     raster_bands = []
@@ -139,7 +139,7 @@ def extend_rasters_metadata(
 
 def read_raster_metadata(
     source: Union[str, PathLike, "xarray.DataArray"],
-) -> Tuple[GridDefinition, Tuple[int]]:
+) -> tuple[GridDefinition, tuple[int]]:
     if _is_xarray_dataarray(source):
         return _read_dataarray_metadata(source)
 
@@ -203,7 +203,7 @@ def write_grid_to_raster(
         dataset.write(array.astype(target_dtype, copy=False), 1)
 
 
-def _get_spatial_dims(data_array: "xarray.DataArray") -> Tuple[str, str]:
+def _get_spatial_dims(data_array: "xarray.DataArray") -> tuple[str, str]:
     x_dim = data_array.rio.x_dim
     y_dim = data_array.rio.y_dim
     if not x_dim or not y_dim:
@@ -247,14 +247,14 @@ def _select_dataarray_band(
 
 def _read_dataarray_metadata(
     data_array: "xarray.DataArray",
-) -> Tuple[GridDefinition, Tuple[int]]:
+) -> tuple[GridDefinition, tuple[int]]:
     spatial_dims = set(_get_spatial_dims(data_array))
     non_spatial_dims = [dim for dim in data_array.dims if dim not in spatial_dims]
 
     grid = GridDefinition.from_xarray(data_array)
 
     if not non_spatial_dims:
-        band_numbers: Tuple[int, ...] = (1,)
+        band_numbers: tuple[int, ...] = (1,)
     elif len(non_spatial_dims) == 1:
         band_dim = non_spatial_dims[0]
         band_size = data_array.sizes[band_dim]

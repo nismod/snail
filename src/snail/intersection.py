@@ -1,8 +1,9 @@
 import logging
 import math
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, List, Tuple, Union
+from typing import Union
 
 import dask.array
 import geopandas
@@ -76,7 +77,7 @@ class GridDefinition:
     crs: str
     width: int
     height: int
-    transform: Tuple[float]
+    transform: tuple[float]
 
     @classmethod
     def from_raster(cls, fname):
@@ -90,7 +91,7 @@ class GridDefinition:
             elif driver == "Zarr":
                 engine = "zarr"
             else:
-                raise IOError("Unrecognised driver, expected netCDF or Zarr")
+                raise OSError("Unrecognised driver, expected netCDF or Zarr")
 
             with xarray.open_dataset(
                 fname, chunks="auto", decode_coords="all", engine=engine
@@ -154,7 +155,7 @@ class GridDefinition:
 
 def split_features_for_rasters(
     features: geopandas.GeoDataFrame,
-    grids: List[GridDefinition],
+    grids: list[GridDefinition],
     split_func: Callable,
 ):
     # lookup per transform
@@ -233,7 +234,7 @@ def split_linestrings(
     return splits_df
 
 
-def _transform(i, j, a, b, c, d, e, f) -> Tuple[float]:
+def _transform(i, j, a, b, c, d, e, f) -> tuple[float]:
     return (i * a + j * b + c, i * d + j * e + f)
 
 
@@ -371,9 +372,7 @@ def get_raster_values_for_splits(
     if len(valid_positions) == 0:
         return _build_series(splits.index, valid_positions, numpy.array([]))
 
-    if isinstance(data, numpy.ndarray):
-        backing_data = data
-    elif _is_dask_array(data):
+    if isinstance(data, numpy.ndarray) or _is_dask_array(data):
         backing_data = data
     elif _is_xarray_dataarray(data):
         backing_data = data.data
@@ -458,11 +457,11 @@ def get_indices(
     return pandas.Series(index=(index_i, index_j), data=[i, j])
 
 
-def idx_to_ij(idx: int, width: int, height: int) -> Tuple[int]:
+def idx_to_ij(idx: int, width: int, height: int) -> tuple[int]:
     return numpy.unravel_index(idx, (height, width))
 
 
-def ij_to_idx(ij: Tuple[int], width: int, height: int):
+def ij_to_idx(ij: tuple[int], width: int, height: int):
     return numpy.ravel_multi_index(ij, (height, width))
 
 

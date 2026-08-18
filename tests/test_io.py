@@ -3,8 +3,8 @@ import os
 from pathlib import Path
 
 import numpy as np
-import rasterio
 import pytest
+import rasterio
 import xarray
 from numpy.testing import assert_array_equal
 from rasterio.crs import CRS

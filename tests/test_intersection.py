@@ -10,16 +10,16 @@ from pandas.testing import assert_series_equal
 from rasterio.crs import CRS
 from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.polygon import LinearRing, orient
+from snail.core.intersections import split_linestring as core_split_linestring
 
 from snail.intersection import (
-    aggregate_values_to_grid,
     GridDefinition,
+    aggregate_values_to_grid,
+    generate_grid_boxes,
     get_raster_values_for_splits,
     split_linestrings,
     split_polygons,
-    generate_grid_boxes,
 )
-from snail.core.intersections import split_linestring as core_split_linestring
 
 
 @pytest.fixture

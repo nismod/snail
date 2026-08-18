@@ -6,6 +6,7 @@ import numpy
 import pandas
 import pytest
 from numpy.testing import assert_allclose
+
 from snail.damages import DamageCurve, PiecewiseLinearDamageCurve
 
 
