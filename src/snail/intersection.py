@@ -85,10 +85,18 @@ class GridDefinition:
             driver = dataset.driver
 
         if driver in ("netCDF", "Zarr"):
+            if driver == "netCDF":
+                engine = "netcdf4"
+            elif driver == "Zarr":
+                engine = "zarr"
+            else:
+                raise IOError("Unrecognised driver, expected netCDF or Zarr")
+
             with xarray.open_dataset(
                 fname,
                 chunks="auto",
                 decode_coords="all",
+                engine=engine
             ) as dataset:
                 grid = GridDefinition.from_xarray(dataset)
         else:
