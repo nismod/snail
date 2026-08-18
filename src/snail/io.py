@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 # Module-level logger
 logger = logging.getLogger(__name__)
 
+
 def associate_raster_files(splits, rasters, lazy: bool = False):
     """Read values from a list of raster files for a set of indexed split geometries
 

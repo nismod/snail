@@ -15,6 +15,7 @@ Include a short code snippet to reproduce the problem.
 
 ```python
 import snail
+
 input = {"example": "data"}
 output = snail.do_something(input)
 ```

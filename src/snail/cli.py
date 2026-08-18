@@ -32,6 +32,7 @@ from snail.io import (
 # Module-level logger
 logger = logging.getLogger(__name__)
 
+
 def snail(args=None):
     """snail command"""
     parser = argparse.ArgumentParser(prog="snail")
