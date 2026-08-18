@@ -17,12 +17,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Optional
-
-import pandas as pd
-
 from importlib import resources
 
+import pandas as pd
 
 _PACKAGE = "snail.data.damage_curves"
 _METADATA_FILE = "metadata.csv"
@@ -63,20 +60,20 @@ class DamageCurveMetadata:
     sheet_name: str
     intensity_metric: str
     intensity_axis: str
-    intensity_unit: Optional[str]
+    intensity_unit: str | None
     exposed_element: str
-    additional_characteristics: Optional[str]
-    curve_type: Optional[str]
-    curve_characteristics: Optional[str]
-    damage_states: Optional[str]
-    cost_feature: Optional[str]
-    uncertainty_range: Optional[str]
-    derivation_methodology: Optional[str]
-    geographical_application: Optional[str]
-    readily_available: Optional[str]
+    additional_characteristics: str | None
+    curve_type: str | None
+    curve_characteristics: str | None
+    damage_states: str | None
+    cost_feature: str | None
+    uncertainty_range: str | None
+    derivation_methodology: str | None
+    geographical_application: str | None
+    readily_available: str | None
     source: str
-    source_details: Optional[str]
-    original_id: Optional[str]
+    source_details: str | None
+    original_id: str | None
 
 
 def _load_metadata() -> pd.DataFrame:
@@ -93,15 +90,15 @@ def _load_curves() -> pd.DataFrame:
     return curves
 
 
-_METADATA_CACHE: Optional[pd.DataFrame] = None
-_CURVES_CACHE: Optional[pd.DataFrame] = None
+_METADATA_CACHE: pd.DataFrame | None = None
+_CURVES_CACHE: pd.DataFrame | None = None
 
 
 def available_curves(
-    hazard: Optional[str] = None,
-    sector: Optional[str] = None,
-    exposed_element: Optional[str] = None,
-    curve_type: Optional[str] = None,
+    hazard: str | None = None,
+    sector: str | None = None,
+    exposed_element: str | None = None,
+    curve_type: str | None = None,
 ) -> pd.DataFrame:
     """Return metadata for available curves, with optional filters."""
     global _METADATA_CACHE

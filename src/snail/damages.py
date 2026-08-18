@@ -1,12 +1,12 @@
 """Damage assessment"""
 
 from abc import ABC
+
 import numpy
 import pandas
 import pandera.pandas as pandera
-from scipy.interpolate import interp1d
 from pandera.typing import DataFrame, Series
-
+from scipy.interpolate import interp1d
 
 # TODO check `nismod/east-africa-transport` and `nismod/jamaica-infrastructure`
 # manipulations of damage curves
@@ -20,7 +20,6 @@ class DamageCurve(ABC):
 
     def damage_fraction(exposure: numpy.array) -> numpy.array:
         """Evaluate damage fraction for exposure to a given hazard intensity"""
-        pass
 
 
 class PiecewiseLinearDamageCurveSchema(pandera.DataFrameModel):

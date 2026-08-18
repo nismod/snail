@@ -22,8 +22,10 @@ Install using pip:
 
     pip install nismod-snail
 
-This should bring all dependencies with it. If any of these cause difficulties,
-try using a [conda](https://docs.conda.io/en/latest/miniconda.html) environment:
+This should bring all essential dependencies with it.
+
+If any of these cause difficulties, try using a
+[conda](https://docs.conda.io/en/latest/miniconda.html) environment:
 
     conda env create -n snail_env \
         python=3.11 geopandas shapely rasterio python-igraph
@@ -55,17 +57,23 @@ snail split \
     --output split.gpkg
 ```
 
-Split features on a grid defined by a GeoTIFF, optionally adding the values from each raster band to each split feature as a new attribute:
+Split features on a grid defined by a GeoTIFF, optionally adding the values from
+each raster band to each split feature as a new attribute:
 
 ```bash
 snail split \
     --features lines.geojson \
     --raster gridded_data.tif \
     --attribute \
+    --lazy-rasters \
     --output split_lines_with_raster_values.geojson
 ```
 
-Split multiple vector feature files along the grids defined by multiple raster files, attributing all raster values:
+Adding `--lazy-rasters` keeps large raster bands on disk and fetches values
+lazily via `xarray`/`dask`.
+
+Split multiple vector feature files along the grids defined by multiple raster
+files, attributing all raster values:
 
 ```bash
 snail process -fs features.csv -rs rasters.csv
@@ -73,9 +81,15 @@ snail process -fs features.csv -rs rasters.csv
 
 Where at a minimum, each CSV has a column `path` with the path to each file.
 
+The `--lazy-rasters` flag can be supplied to `snail process` when working with
+large rasters.
+
 ### Transform
 
-A note on `transform` - these six numbers define the transform from `i,j` cell index (column/row) coordinates in the rectangular grid to `x,y` geographic coordinates, in the coordinate reference system of the input and output files. They effectively form the first two rows of a 3x3 matrix:
+A note on `transform` - these six numbers define the transform from `i,j` cell
+index (column/row) coordinates in the rectangular grid to `x,y` geographic
+coordinates, in the coordinate reference system of the input and output files.
+They effectively form the first two rows of a 3x3 matrix:
 
 ```
 | x |   | a  b  c | | i |
@@ -83,7 +97,8 @@ A note on `transform` - these six numbers define the transform from `i,j` cell i
 | 1 |   | 0  0  1 | | 1 |
 ```
 
-In cases without shear or rotation, `a` and `e` define scaling or grid cell size, while `c` and `f` define the offset or grid upper-left corner:
+In cases without shear or rotation, `a` and `e` define scaling or grid cell
+size, while `c` and `f` define the offset or grid upper-left corner:
 
 ```
 | x_scale 0       x_offset |
@@ -135,7 +150,7 @@ Run this to install the source code as a package:
 If you're working on snail itself, install it as "editable" along with test and
 development packages:
 
-    pip install -e .[dev]
+    pip install -e .[dev,docs,tutorials]
 
 Run tests using [pytest](https://docs.pytest.org/en/latest/) and
 [pytest-cov](https://pytest-cov.readthedocs.io) to check coverage:
@@ -200,7 +215,7 @@ Or with C++ headers installed on a Linux machine:
         -I/usr/include/x86_64-linux-gnu/c++/11 \
         -I/usr/include/c++/11 \
         -I{$PWD}/extension/extern/pybind11/include \
-        -I/usr/include/python3.10
+        -I/usr/include/python3.11
 
 ### Integration of C++ and Python using pybind11
 

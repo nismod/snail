@@ -1,4 +1,5 @@
 from igraph import Graph
+
 from snail.routing import shortest_paths
 
 

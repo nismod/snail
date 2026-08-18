@@ -21,19 +21,23 @@ classifiers = [
     "Topic :: Utilities"
 ]
 keywords = []
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
+    "dask[array]",
     "geopandas",
+    "igraph",
     "matplotlib",
     "numpy",
     "openpyxl",
     "pandera",
     "pyarrow",
     "pyogrio",
-    "igraph",
     "rasterio",
+    "rioxarray",
+    "scipy",
     "shapely",
-    "scipy"
+    "xarray",
+    "zarr>=3.0.8",
 ]
 
 [project.optional-dependencies]

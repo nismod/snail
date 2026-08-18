@@ -1,13 +1,16 @@
 import logging
 import math
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, List, Tuple
+from typing import Union
 
+import dask.array
 import geopandas
 import numpy
 import pandas
 import rasterio
+import xarray
 from shapely import box
 from shapely.geometry import mapping, shape
 from shapely.ops import linemerge, polygonize
@@ -33,6 +36,17 @@ else:
 # Use some high degree of precision to round polygon coordinates
 # when polygonizing split edges to help avoid floating point errors
 POLYGON_COORDINATE_PRECISION = 9
+
+# Module-level logger
+logger = logging.getLogger(__name__)
+
+
+def _is_dask_array(value):
+    return isinstance(value, dask.array.Array)
+
+
+def _is_xarray_dataarray(value):
+    return isinstance(value, xarray.DataArray)
 
 
 @dataclass(frozen=True)
@@ -66,10 +80,34 @@ class GridDefinition:
     crs: str
     width: int
     height: int
-    transform: Tuple[float]
+    transform: tuple[float]
 
     @classmethod
-    def from_rasterio_dataset(cls, dataset):
+    def from_raster(cls, fname):
+        """GridDefinition for a raster file (readable by rasterio)"""
+        with rasterio.open(fname) as dataset:
+            driver = dataset.driver
+
+        if driver in ("netCDF", "Zarr"):
+            if driver == "netCDF":
+                engine = "netcdf4"
+            elif driver == "Zarr":
+                engine = "zarr"
+            else:
+                raise OSError("Unrecognised driver, expected netCDF or Zarr")
+
+            with xarray.open_dataset(
+                fname, chunks="auto", decode_coords="all", engine=engine
+            ) as dataset:
+                grid = GridDefinition.from_xarray(dataset)
+        else:
+            with rasterio.open(fname) as dataset:
+                grid = GridDefinition.from_rasterio(dataset)
+
+        return grid
+
+    @classmethod
+    def from_rasterio(cls, dataset):
         """GridDefinition for a rasterio dataset"""
         crs = dataset.crs
         width = dataset.width
@@ -79,11 +117,24 @@ class GridDefinition:
         return GridDefinition(crs, width, height, transform)
 
     @classmethod
-    def from_raster(cls, fname):
-        """GridDefinition for a raster file (readable by rasterio)"""
-        with rasterio.open(fname) as dataset:
-            grid = GridDefinition.from_rasterio_dataset(dataset)
-        return grid
+    def from_xarray(cls, data_array: xarray.Dataset | xarray.DataArray):
+        """GridDefinition for an xarray DataArray or Dataset with spatial metadata.
+
+        Requires the DataArray to have a rioxarray accessor with CRS and
+        transform information derived from explicit coordinates.
+        """
+        crs = data_array.rio.crs
+
+        if crs is None:
+            raise ValueError(
+                "data_array.rio.crs is None; assign a CRS using DataArray.rio.write_crs"
+            )
+
+        transform = tuple(data_array.rio.transform())[:6]
+        width = int(data_array.rio.width)
+        height = int(data_array.rio.height)
+
+        return GridDefinition(crs=crs, width=width, height=height, transform=transform)
 
     @classmethod
     def from_extent(
@@ -107,12 +158,12 @@ class GridDefinition:
 
 def split_features_for_rasters(
     features: geopandas.GeoDataFrame,
-    grids: List[GridDefinition],
+    grids: list[GridDefinition],
     split_func: Callable,
 ):
     # lookup per transform
     for i, grid in enumerate(grids):
-        logging.info("Splitting on grid %s %s", i, grid)
+        logger.info("Splitting on grid %s %s", i, grid)
         # transform to grid CRS
         crs_features = features.to_crs(grid.crs)
         crs_features = split_func(crs_features, grid)
@@ -142,7 +193,7 @@ def prepare_polygons(
 
 
 def split_points(
-    points: geopandas.GeoDataFrame, grid: GridDefinition
+    points: geopandas.GeoDataFrame, _: GridDefinition
 ) -> geopandas.GeoDataFrame:
     """Split points along a grid
 
@@ -176,17 +227,17 @@ def split_linestrings(
             # however j should be in range: 0 <= j < raster_width
             # as a hacky workaround, drop any splits with length 0
             # do we need a nudge off a cell boundary somewhere when performing the splits?
-            if not s.length == 0:
+            if s.length != 0:
                 new_row = linestring_features.iloc[i].copy()
                 new_row.geometry = s
                 new_row["split"] = j
                 pieces.append(new_row)
-    logging.info(f"Split {len(linestring_features)} edges into {len(pieces)} pieces")
+    logger.info(f"Split {len(linestring_features)} edges into {len(pieces)} pieces")
     splits_df = geopandas.GeoDataFrame(pieces, crs=grid.crs, geometry="geometry")
     return splits_df
 
 
-def _transform(i, j, a, b, c, d, e, f) -> Tuple[float]:
+def _transform(i, j, a, b, c, d, e, f) -> tuple[float]:
     return (i * a + j * b + c, i * d + j * e + f)
 
 
@@ -259,7 +310,7 @@ def split_polygons_experimental(
             new_row.geometry = s
             new_row["split"] = j
             pieces.append(new_row)
-    logging.info(f"  Split {len(polygon_features)} areas into {len(pieces)} pieces")
+    logger.info(f"  Split {len(polygon_features)} areas into {len(pieces)} pieces")
     splits_df = geopandas.GeoDataFrame(pieces)
     splits_df.crs = grid.crs
     return splits_df
@@ -282,7 +333,11 @@ def _set_precision(geom, precision):
 
 def get_raster_values_for_splits(
     splits: pandas.DataFrame,
-    data: numpy.ndarray,
+    data: Union[
+        numpy.ndarray,
+        "xarray.DataArray",
+        "dask.array.Array",
+    ],
     index_i: str = "index_i",
     index_j: str = "index_j",
 ) -> pandas.Series:
@@ -299,8 +354,9 @@ def get_raster_values_for_splits(
         Table of features, each with cell indices
         to look up raster pixel. Indices must be stored under columns with
         names referenced by index_i and index_j.
-    data:  numpy.ndarray
-        Raster data (2D array)
+    data: numpy.ndarray or xarray.DataArray or dask.array.Array
+        2D raster values. DataArray inputs must have two spatial
+        dimensions (band dimensions should be squeezed prior to calling).
     index_i: str
         Column name for i-indices
     index_j: str
@@ -311,13 +367,55 @@ def get_raster_values_for_splits(
     pd.Series
         Series of raster values, with same row indexing as df.
     """
-    # 2D numpy indexing is j, i (i.e. row, column)
-    with_data = pandas.Series(
-        index=splits.index, data=data[splits[index_j], splits[index_i]]
-    )
-    # set NaN for out-of-bounds
-    with_data[(splits[index_i] == -1) | (splits[index_j] == -1)] = numpy.nan
-    return with_data
+    indices_i = splits[index_i].to_numpy()
+    indices_j = splits[index_j].to_numpy()
+    valid_mask = (indices_i >= 0) & (indices_j >= 0)
+    valid_positions = numpy.nonzero(valid_mask)[0]
+
+    if len(valid_positions) == 0:
+        return _build_series(splits.index, valid_positions, numpy.array([]))
+
+    if isinstance(data, numpy.ndarray) or _is_dask_array(data):
+        backing_data = data
+    elif _is_xarray_dataarray(data):
+        backing_data = data.data
+    else:
+        raise TypeError(
+            "Unsupported raster data type; expected numpy.ndarray, xarray.DataArray or dask.array.Array."
+        )
+
+    indices_i_valid = indices_i[valid_positions]
+    indices_j_valid = indices_j[valid_positions]
+
+    if isinstance(backing_data, numpy.ndarray):
+        splits_values = backing_data[indices_j_valid, indices_i_valid]
+        return _build_series(splits.index, valid_positions, splits_values)
+
+    elif _is_dask_array(backing_data):
+        splits_values_da = backing_data.vindex[indices_j_valid, indices_i_valid]
+        splits_values = numpy.asarray(splits_values_da.compute())
+        return _build_series(splits.index, valid_positions, splits_values)
+
+    else:
+        raise NotImplementedError("data array backends must be NumPy or Dask arrays.")
+
+
+def _build_series(
+    index: pandas.Index,
+    positions: numpy.ndarray,
+    values: numpy.ndarray,
+) -> pandas.Series:
+    """Create a Series indexed by index, filled with specific values at given
+    positions, default numpy.nan.
+    """
+    if len(positions) == len(index):
+        series = pandas.Series(numpy.empty(len(index), dtype=values.dtype), index=index)
+        series.iloc[positions] = values
+        return series
+    series = pandas.Series(numpy.full(len(index), numpy.nan), index=index)
+    if len(positions):
+        series.iloc[positions] = values
+    return series
 
 
 def apply_indices(
@@ -327,14 +425,14 @@ def apply_indices(
     index_j="index_j",
 ) -> geopandas.GeoDataFrame:
     if features.empty:
-        logging.info("Returning empty dataframe")
+        logger.info("Returning empty dataframe")
         # return an empty dataframe with the expected columns
         empty_df = features.copy()
         empty_df[index_i] = numpy.array([], dtype="int64")
         empty_df[index_j] = numpy.array([], dtype="int64")
         return empty_df
 
-    def f(geom, *args, **kwargs):
+    def f(geom, *_, **__):
         return get_indices(geom, grid, index_i, index_j)
 
     indices = features.geometry.apply(f, result_type="expand")
@@ -362,11 +460,11 @@ def get_indices(
     return pandas.Series(index=(index_i, index_j), data=[i, j])
 
 
-def idx_to_ij(idx: int, width: int, height: int) -> Tuple[int]:
+def idx_to_ij(idx: int, width: int, height: int) -> tuple[int]:
     return numpy.unravel_index(idx, (height, width))
 
 
-def ij_to_idx(ij: Tuple[int], width: int, height: int):
+def ij_to_idx(ij: tuple[int], width: int, height: int):
     return numpy.ravel_multi_index(ij, (height, width))
 
 

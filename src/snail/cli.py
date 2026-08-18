@@ -6,27 +6,31 @@ from pathlib import Path
 
 import geopandas
 import pandas
+import rioxarray
 
 from snail.intersection import (
     GridDefinition,
     apply_indices,
     get_raster_values_for_splits,
     prepare_linestrings,
-    prepare_polygons,
     prepare_points,
+    prepare_polygons,
     split_features_for_rasters,
     split_linestrings,
-    split_polygons,
     split_points,
+    split_polygons,
     split_polygons_experimental,
 )
 from snail.io import (
-    read_raster_band_data,
     associate_raster_files,
-    read_features,
-    read_raster_metadata,
     extend_rasters_metadata,
+    read_features,
+    read_raster_band_data,
+    read_raster_metadata,
 )
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 def snail(args=None):
@@ -108,6 +112,11 @@ def snail(args=None):
         help="Column name to use when attributing raster values, defaults to raster filename",
     )
     parser_split.add_argument(
+        "--lazy-rasters",
+        action="store_true",
+        help=("Read raster bands lazily with xarray/dask when attributing values."),
+    )
+    parser_split.add_argument(
         "-o",
         "--output",
         type=str,
@@ -139,6 +148,11 @@ def snail(args=None):
         required=True,
         help="CSV file with raster layers",
     )
+    parser_process.add_argument(
+        "--lazy-rasters",
+        action="store_true",
+        help="Read raster bands lazily with xarray/dask during processing.",
+    )
     parser_process.set_defaults(func=process)
 
     args = parser.parse_args(args)
@@ -147,7 +161,7 @@ def snail(args=None):
     if args.verbose > 2:
         level = logging.DEBUG
     elif args.verbose > 1:
-        level = logging.INFO
+        level = logger.info
     elif args.verbose > 0:
         level = logging.WARNING
     else:
@@ -163,12 +177,15 @@ def snail(args=None):
         level=level,
     )
 
-    logging.debug("Called with %s", args)
+    logger.debug("Called with %s", args)
 
     # Call the subcommand function
-    logging.info("Start.")
-    args.func(args)
-    logging.info("Done.")
+    logger.info("Start.")
+    try:
+        args.func(args)
+    except AttributeError:
+        parser.print_help()
+    logger.info("Done.")
 
 
 def split(args):
@@ -184,7 +201,7 @@ def split(args):
                 "Error: Expected either a raster file or transform, width and height of splitting grid"
             )
         grid = None  # read CRS from features
-    logging.info(f"Splitting {grid=}")
+    logger.info(f"Splitting {grid=}")
 
     features = read_features(Path(args.features), args.layer)
     features_crs = features.crs
@@ -194,30 +211,30 @@ def split(args):
     geom_type = _sample_geom_type(features)
 
     if "Point" in geom_type:
-        logging.info("Preparing points")
+        logger.info("Preparing points")
         prepared = prepare_points(features)
-        logging.info("Splitting points")
+        logger.info("Splitting points")
         splits = split_features_for_rasters(prepared, [grid], split_points)
     elif "LineString" in geom_type:
-        logging.info("Preparing linestrings")
+        logger.info("Preparing linestrings")
         prepared = prepare_linestrings(features)
-        logging.info("Splitting linestrings")
+        logger.info("Splitting linestrings")
         splits = split_features_for_rasters(prepared, [grid], split_linestrings)
     elif "Polygon" in geom_type:
-        logging.info("Preparing polygons")
+        logger.info("Preparing polygons")
         prepared = prepare_polygons(features)
         if args.experimental:
-            logging.info("Splitting polygons (experimental)")
+            logger.info("Splitting polygons (experimental)")
             splits = split_features_for_rasters(
                 prepared, [grid], split_polygons_experimental
             )
         else:
-            logging.info("Splitting polygons")
+            logger.info("Splitting polygons")
             splits = split_features_for_rasters(prepared, [grid], split_polygons)
     else:
         raise ValueError("Could not process vector data of type %s", geom_type)
 
-    logging.info("Applying indices")
+    logger.info("Applying indices")
     splits = apply_indices(splits, grid)
 
     if args.attribute and args.raster:
@@ -231,20 +248,35 @@ def split(args):
         else:
             key = os.path.basename(args.raster)
 
-        for band_index in bands:
-            if len(bands) == 1:
-                band_key = key
-            else:
-                band_key = f"{key}_{band_index}"
+        if args.lazy_rasters:
+            data_array = rioxarray.open_rasterio(args.raster, chunks="auto")
+            source = data_array
+        else:
+            data_array = None
+            source = args.raster
 
-            logging.info(
-                "Attributing raster values, output in column %s from %s band %s",
-                band_key,
-                args.raster,
-                band_index,
-            )
-            band_data = read_raster_band_data(args.raster, band_number=int(band_index))
-            splits[key] = get_raster_values_for_splits(splits, band_data)
+        try:
+            for band_index in bands:
+                if len(bands) == 1:
+                    band_key = key
+                else:
+                    band_key = f"{key}_{band_index}"
+
+                logger.info(
+                    "Attributing raster values, output in column %s from %s band %s",
+                    band_key,
+                    args.raster,
+                    band_index,
+                )
+                band_data = read_raster_band_data(
+                    source,
+                    band_number=int(band_index),
+                    lazy=args.lazy_rasters,
+                )
+                splits[band_key] = get_raster_values_for_splits(splits, band_data)
+        finally:
+            if data_array is not None:
+                data_array.close()
 
     splits.set_crs(features_crs, inplace=True)
     splits.to_file(args.output)
@@ -284,36 +316,49 @@ def process(args):
         )
 
     for vector_layer in vector_layers.itertuples():
-        _process_layer(vector_layer, transforms, rasters, args.experimental)
+        _process_layer(
+            vector_layer,
+            transforms,
+            rasters,
+            experimental=args.experimental,
+            lazy=args.lazy_rasters,
+        )
 
 
-def _process_layer(vector_layer, transforms, rasters, experimental=False):
+def _process_layer(
+    vector_layer,
+    transforms,
+    rasters,
+    *,
+    experimental: bool = False,
+    lazy: bool = False,
+):
     vector_path = Path(vector_layer.path)
     layer = getattr(vector_layer, "layer", None)
-    logging.info("Processing %s", vector_path.name)
+    logger.info("Processing %s", vector_path.name)
 
     features = read_features(vector_path, layer)
     geom_type = _sample_geom_type(features)
-    logging.info("%s Features CRS %s", geom_type, features.crs)
+    logger.info("%s Features CRS %s", geom_type, features.crs)
 
     if "Point" in geom_type:
         prepared = prepare_points(features)
         split = split_features_for_rasters(prepared, transforms, split_points)
-        with_data = associate_raster_files(split, rasters)
+        with_data = associate_raster_files(split, rasters, lazy=lazy)
     elif "LineString" in geom_type:
         prepared = prepare_linestrings(features)
         split = split_features_for_rasters(prepared, transforms, split_linestrings)
-        with_data = associate_raster_files(split, rasters)
+        with_data = associate_raster_files(split, rasters, lazy=lazy)
     elif "Polygon" in geom_type:
         prepared = prepare_polygons(features)
         if experimental:
-            logging.info("Split polygons (experimental)")
+            logger.info("Split polygons (experimental)")
             split = split_features_for_rasters(
                 prepared, transforms, split_polygons_experimental
             )
         else:
             split = split_features_for_rasters(prepared, transforms, split_polygons)
-        with_data = associate_raster_files(split, rasters)
+        with_data = associate_raster_files(split, rasters, lazy=lazy)
     else:
         raise ValueError(f"Could not process vector data of type {geom_type}")
 
@@ -324,7 +369,7 @@ def _read_csv_or_quit(path) -> pandas.DataFrame:
     try:
         df = pandas.read_csv(path)
     except FileNotFoundError:
-        logging.error("File not found: %s", path)
+        logger.error("File not found: %s", path)
         sys.exit()
     return df
 

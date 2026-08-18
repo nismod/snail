@@ -2,21 +2,24 @@ import os
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pytest
 from hilbertcurve.hilbertcurve import HilbertCurve
 from numpy.testing import assert_array_equal
+from pandas.testing import assert_series_equal
 from rasterio.crs import CRS
 from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.polygon import LinearRing, orient
+from snail.core.intersections import split_linestring as core_split_linestring
 
 from snail.intersection import (
-    aggregate_values_to_grid,
     GridDefinition,
+    aggregate_values_to_grid,
+    generate_grid_boxes,
+    get_raster_values_for_splits,
     split_linestrings,
     split_polygons,
-    generate_grid_boxes,
 )
-from snail.core.intersections import split_linestring as core_split_linestring
 
 
 @pytest.fixture
@@ -165,6 +168,28 @@ def test_grid_from_raster():
     assert actual == expected
 
 
+def test_grid_from_zarr_reads_cf_crs():
+    fname = os.path.join(
+        os.path.dirname(__file__),
+        "integration",
+        "climatology-hd35-annual-mean.zarr",
+    )
+
+    grid = GridDefinition.from_raster(fname)
+
+    assert grid.crs == CRS.from_epsg(4326)
+
+
+def test_grid_from_dataarray(sample_dataarray):
+    data_array, transform = sample_dataarray
+    grid = GridDefinition.from_xarray(data_array)
+
+    assert grid.width == data_array.sizes[data_array.rio.x_dim]
+    assert grid.height == data_array.sizes[data_array.rio.y_dim]
+    assert tuple(transform)[:6] == grid.transform
+    assert grid.crs == CRS.from_epsg(4326)
+
+
 class TestSnailIntersections:
     def test_split_linestrings(self, grid, linestrings, linestrings_split):
         actual = split_linestrings(linestrings, grid)
@@ -193,6 +218,60 @@ class TestSnailIntersections:
             expected_geom = expected.iloc[i, 1]
             assert actual_geom.equals(expected_geom)
         assert_array_equal(actual["col1"].values, expected["col1"].values)
+
+
+def _make_sample_splits():
+    return pd.DataFrame(
+        {
+            "index_i": [0, 1, 2, -1],
+            "index_j": [0, 0, 1, -1],
+        }
+    )
+
+
+def _expected_series(index):
+    return pd.Series(
+        [100.0, 101.0, 202.0, np.nan],
+        index=index,
+        dtype=float,
+    )
+
+
+def test_get_raster_values_for_splits_numpy_handles_invalid_indices():
+    splits = _make_sample_splits()
+    raster = np.array([[100, 101, 102], [200, 201, 202]], dtype=float)
+    result = get_raster_values_for_splits(splits, raster)
+    assert_series_equal(result, _expected_series(splits.index), check_dtype=False)
+
+
+def test_get_raster_values_preserves_dtype_when_all_indices_are_valid():
+    splits = pd.DataFrame({"index_i": [0, 1], "index_j": [0, 0]})
+    raster = np.array([[5, 6]], dtype=np.uint8)
+    result = get_raster_values_for_splits(splits, raster)
+    assert result.dtype == raster.dtype
+    assert_array_equal(result, [5, 6])
+
+
+def test_get_raster_values_for_splits_supports_xarray():
+    xr = pytest.importorskip("xarray")
+    splits = _make_sample_splits()
+    raster = xr.DataArray(
+        np.array([[100, 101, 102], [200, 201, 202]], dtype=float),
+        dims=("y", "x"),
+    )
+    result = get_raster_values_for_splits(splits, raster)
+    assert_series_equal(result, _expected_series(splits.index), check_dtype=False)
+
+
+def test_get_raster_values_for_splits_supports_dask():
+    da = pytest.importorskip("dask.array")
+    splits = _make_sample_splits()
+    raster = da.from_array(
+        np.array([[100, 101, 102], [200, 201, 202]], dtype=float),
+        chunks=(1, 2),
+    )
+    result = get_raster_values_for_splits(splits, raster)
+    assert_series_equal(result, _expected_series(splits.index), check_dtype=False)
 
 
 def test_box_geom_bounds():

@@ -1,12 +1,12 @@
+import argparse
 import random
 import time
-import argparse
 
+import geopandas as gpd
 import numpy as np
 import pandana
-from pandas import DataFrame
 from igraph import Graph
-import geopandas as gpd
+from pandas import DataFrame
 from prettytable import PrettyTable
 
 

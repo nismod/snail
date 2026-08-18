@@ -6,14 +6,13 @@
 
 # e.g. uncomment:
 # from snail.network import Network
+from importlib.metadata import PackageNotFoundError, version
 
 from . import damage_library
 
 try:
-    from importlib.metadata import version
-
     __version__ = version("nismod-snail")
-except Exception:
+except PackageNotFoundError:
     __version__ = "unknown"
 
 
