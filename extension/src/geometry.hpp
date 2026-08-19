@@ -76,7 +76,7 @@ struct Line {
     double t =
         (_dx * (start.y - l.start.y) - _dy * (start.x - l.start.x)) / denom;
 
-    // NOTE: If needed, lines cross as this point Coord
+    // NOTE: If needed, lines cross at this point Coord
     // intersection(p0_x + (t * s1_x), p0_y + (t * s1_y));
     if (s >= 0 && s <= 1 && t >= 0 && t <= 1)
       return true;
