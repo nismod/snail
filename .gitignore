@@ -4,6 +4,7 @@
 # Python
 .eggs
 .pytest_cache
+.cache
 __pycache__
 *.pyc
 *.egg-info
