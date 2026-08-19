@@ -293,6 +293,106 @@ TEST_CASE("LineString partially overlapping grid splits correctly",
   }
 }
 
+TEST_CASE("Bounded intersection leaves non-intersecting lines unsplit",
+          "[bounds]") {
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+
+  SECTION("Overlaps x and y range with near-touch at {2.,0.}") {
+    snail::geometry::LineString line({{1., -1.}, {3.0000000001, 1.}});
+    auto splits = snail::operations::findIntersectionsLineString(
+        line, test_raster, true);
+
+    REQUIRE(splits.size() == 1);
+    REQUIRE(splits[0][0] == snail::geometry::Coord(1., -1.));
+    REQUIRE(splits[0][1] == snail::geometry::Coord(3.0000000001, 1.));
+  }
+
+  SECTION("Overlaps x and y range without intersecting") {
+    snail::geometry::LineString line({{1., -2.}, {2.5, -0.5}, {4., 1.}});
+    auto splits = snail::operations::findIntersectionsLineString(
+        line, test_raster, true);
+
+    REQUIRE(splits.size() == 1);
+    REQUIRE(splits[0][0] == snail::geometry::Coord(1., -2.));
+    REQUIRE(splits[0][2] == snail::geometry::Coord(4., 1.));
+  }
+}
+
+TEST_CASE("Bounded intersection handles reversed segment endpoints",
+          "[bounds]") {
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+
+  SECTION("reversed x direction") {
+    snail::geometry::LineString line({{1.5, 0.5}, {-5.0, 0.5}});
+    auto splits = snail::operations::findIntersectionsLineString(
+        line, test_raster, true);
+
+    REQUIRE(splits.size() == 3);
+    REQUIRE(splits[0][1] == snail::geometry::Coord(1.0, 0.5));
+    REQUIRE(splits[1][1] == snail::geometry::Coord(0.0, 0.5));
+  }
+
+  SECTION("reversed y direction") {
+    snail::geometry::LineString line({{0.5, 1.5}, {0.5, -5.0}});
+    auto splits = snail::operations::findIntersectionsLineString(
+        line, test_raster, true);
+
+    REQUIRE(splits.size() == 3);
+    REQUIRE(splits[0][1] == snail::geometry::Coord(0.5, 1.0));
+    REQUIRE(splits[1][1] == snail::geometry::Coord(0.5, 0.0));
+  }
+}
+
+TEST_CASE("Bounded intersection handles segments parallel to grid bounds",
+          "[bounds]") {
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+
+  SECTION("vertical segment on a grid boundary") {
+    snail::geometry::LineString line({{0.0, -1.0}, {0.0, 5.0}});
+    auto splits = snail::operations::findIntersectionsLineString(
+        line, test_raster, true);
+
+    REQUIRE(splits == std::vector<linestr>{
+      {{0.0, -1.0}, {0.0, 0.0}},
+      {{0.0, 0.0}, {0.0, 1.0}},
+      {{0.0, 1.0}, {0.0, 2.0}},
+      {{0.0, 2.0}, {0.0, 5.0}},
+    });
+  }
+
+  SECTION("horizontal segment on a grid boundary") {
+    snail::geometry::LineString line({{-1.0, 0.0}, {5.0, 0.0}});
+    auto splits = snail::operations::findIntersectionsLineString(
+        line, test_raster, true);
+
+    REQUIRE(splits == std::vector<linestr>{
+      {{-1.0, 0.0}, {0.0, 0.0}},
+      {{0.0, 0.0}, {1.0, 0.0}},
+      {{1.0, 0.0}, {2.0, 0.0}},
+      {{2.0, 0.0}, {5.0, 0.0}},
+    });
+  }
+}
+
+TEST_CASE("Bounded intersection leaves disjoint parallel segments unchanged",
+          "[bounds]") {
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+
+  SECTION("vertical segment outside") {
+    snail::geometry::LineString line({{3.0, -1.0}, {3.0, 3.0}});
+    auto splits = snail::operations::findIntersectionsLineString(
+        line, test_raster, true);
+    REQUIRE(splits == std::vector<linestr>{{{3.0, -1.0}, {3.0, 3.0}}});
+  }
+
+  SECTION("horizontal segment outside") {
+    snail::geometry::LineString line({{-1.0, 3.0}, {3.0, 3.0}});
+    auto splits = snail::operations::findIntersectionsLineString(
+        line, test_raster, true);
+    REQUIRE(splits == std::vector<linestr>{{{-1.0, 3.0}, {3.0, 3.0}}});
+  }
+}
+
 TEST_CASE("Bounded splits keep interior vertices within grid extents",
           "[decomposition]") {
   snail::grid::Grid test_raster(2, 2, snail::transform::Affine());

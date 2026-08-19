@@ -10,9 +10,11 @@ namespace operations {
 
 using linestr = std::vector<geometry::Coord>;
 
+/// Does any part of a straight line segment intersect the grid extent, either
+/// partially (i.e. crossing one or more of bounding box lines) or entirely.
 bool segmentIntersectsGridBounds(const geometry::Line &line,
                                  const grid::Grid &raster) {
-
+  // Pick out line endpoint coordinates
   auto xy0 = line.start;
   auto xy1 = line.end;
   const double x0 = xy0.x;
@@ -20,24 +22,37 @@ bool segmentIntersectsGridBounds(const geometry::Line &line,
   const double x1 = xy1.x;
   const double y1 = xy1.y;
 
-  auto xymin = raster.grid_to_world * geometry::Coord(0.0, 0.0);
-  auto xymax =
-      raster.grid_to_world * geometry::Coord(raster.ncols, raster.nrows);
-  const double xmin = xymin.x;
-  const double ymin = xymin.y;
-  const double xmax = xymax.x;
-  const double ymax = xymax.y;
+  // Pick out grid bounding box coordinates
+  auto ll = raster.grid_to_world * geometry::Coord(0.0, 0.0);
+  auto ur = raster.grid_to_world * geometry::Coord(raster.ncols, raster.nrows);
+  const double xmin = ll.x;
+  const double ymin = ll.y;
+  const double xmax = ur.x;
+  const double ymax = ur.y;
 
+  // Test if an x/y point falls within the grid extent
   auto inside = [&](const double &x, const double &y) {
     return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
   };
 
+  // If either endpoint or both falls within the grid extent, the line segment intersects
   if (inside(x0, y0) || inside(x1, y1)) {
     return true;
   }
 
+  const double line_xmin = std::min(x0, x1);
+  const double line_xmax = std::max(x0, x1);
+  const double line_ymin = std::min(y0, y1);
+  const double line_ymax = std::max(y0, y1);
+
   auto crosses_x = [&](const double &xtest) {
-    if (x0 <= xtest && xtest <= x1) {
+    // Does line cross the vertical ray at xtest?
+    if (line_xmin <= xtest && xtest <= line_xmax) {
+      // If line is vertical, does it overlap y range?
+      if (line_xmin == line_xmax) {
+        return std::max(line_ymin, ymin) <= std::min(line_ymax, ymax);
+      }
+      // Else does the crossing point overlap y range?
       const double ycross = y0 + (xtest - x0) * (y1 - y0) / (x1 - x0);
       return ymin <= ycross && ycross <= ymax;
     }
@@ -45,7 +60,13 @@ bool segmentIntersectsGridBounds(const geometry::Line &line,
   };
 
   auto crosses_y = [&](const double &ytest) {
-    if (y0 <= ytest && ytest <= y1) {
+    // Does line cross the horizontal ray at ytest?
+    if (line_ymin <= ytest && ytest <= line_ymax) {
+      // If line is horizontal, does it overlap x range?
+      if (line_ymin == line_ymax) {
+        return std::max(line_xmin, xmin) <= std::min(line_xmax, xmax);
+      }
+      // Else does the crossing point overlap x range?
       const double xcross = x0 + (ytest - y0) * (x1 - x0) / (y1 - y0);
       return xmin <= xcross && xcross <= xmax;
     }
