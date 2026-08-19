@@ -1,14 +1,14 @@
 """snail - the spatial networks impact assessment library"""
 
+from importlib.metadata import PackageNotFoundError, version
+
 # Import things to define what is accessible directly on snail, when a client
 # writes::
 #   from snail import Something
 
 # e.g. uncomment:
 # from snail.network import Network
-from importlib.metadata import PackageNotFoundError, version
-
-from . import damage_library
+from snail import damage_library
 
 try:
     __version__ = version("nismod-snail")
