@@ -16,7 +16,7 @@ namespace transform {
  * including scaling, rotation, translation or shear.
  *
  * This holds all the metadata needed to define world-to-grid or grid-to-world
- * coordinate transformations for a raster::Grid.
+ * coordinate transformations for a grid::Grid.
  */
 struct Affine {
   double a;
