@@ -1,10 +1,11 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include <cmath>
 #include <exception>
 #include <iostream>
 #include <limits>
-#include <cmath>
+#include <vector>
 
 namespace snail {
 namespace utils {
