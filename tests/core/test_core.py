@@ -29,10 +29,11 @@ transform = [1, 0, 0, 0, 1, 0]
     ],
 )
 def test_linestring_splitting(test_linestring, expected):
-    splits = snail.core.intersections.split_linestring(
+    actual = snail.core.intersections.split_linestring(
         test_linestring, nrows, ncols, transform
     )
-    for split, expected_split in zip(splits, expected):
+    assert len(actual) == len(expected), "Expected the same number of splits"
+    for split, expected_split in zip(actual, expected):
         assert split.equals_exact(expected_split, 1e-7)
 
 
@@ -56,6 +57,7 @@ def test_linestring_splitting_issue_61():
     actual = snail.core.intersections.split_linestring(
         test_linestring, nrows, ncols, transform
     )
+    assert len(actual) == len(expected), "Expected the same number of splits"
     for split, expected_split in zip(actual, expected):
         if not split.equals_exact(expected_split, 1e-5):
             assert False, (

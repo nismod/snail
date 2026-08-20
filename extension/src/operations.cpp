@@ -10,6 +10,73 @@ namespace operations {
 
 using linestr = std::vector<geometry::Coord>;
 
+/// Does any part of a straight line segment intersect the grid extent, either
+/// partially (i.e. crossing one or more of bounding box lines) or entirely.
+bool segmentIntersectsGridBounds(const geometry::Line &line,
+                                 const grid::Grid &raster) {
+  // Pick out line endpoint coordinates
+  auto xy0 = line.start;
+  auto xy1 = line.end;
+  const double x0 = xy0.x;
+  const double y0 = xy0.y;
+  const double x1 = xy1.x;
+  const double y1 = xy1.y;
+
+  // Pick out grid bounding box coordinates
+  auto ll = raster.grid_to_world * geometry::Coord(0.0, 0.0);
+  auto ur = raster.grid_to_world * geometry::Coord(raster.ncols, raster.nrows);
+  const double xmin = ll.x;
+  const double ymin = ll.y;
+  const double xmax = ur.x;
+  const double ymax = ur.y;
+
+  // Test if an x/y point falls within the grid extent
+  auto inside = [&](const double &x, const double &y) {
+    return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
+  };
+
+  // If either endpoint or both falls within the grid extent, the line segment intersects
+  if (inside(x0, y0) || inside(x1, y1)) {
+    return true;
+  }
+
+  const double line_xmin = std::min(x0, x1);
+  const double line_xmax = std::max(x0, x1);
+  const double line_ymin = std::min(y0, y1);
+  const double line_ymax = std::max(y0, y1);
+
+  auto crosses_x = [&](const double &xtest) {
+    // Does line cross the vertical ray at xtest?
+    if (line_xmin <= xtest && xtest <= line_xmax) {
+      // If line is vertical, does it overlap y range?
+      if (line_xmin == line_xmax) {
+        return std::max(line_ymin, ymin) <= std::min(line_ymax, ymax);
+      }
+      // Else does the crossing point overlap y range?
+      const double ycross = y0 + (xtest - x0) * (y1 - y0) / (x1 - x0);
+      return ymin <= ycross && ycross <= ymax;
+    }
+    return false;
+  };
+
+  auto crosses_y = [&](const double &ytest) {
+    // Does line cross the horizontal ray at ytest?
+    if (line_ymin <= ytest && ytest <= line_ymax) {
+      // If line is horizontal, does it overlap x range?
+      if (line_ymin == line_ymax) {
+        return std::max(line_xmin, xmin) <= std::min(line_xmax, xmax);
+      }
+      // Else does the crossing point overlap x range?
+      const double xcross = x0 + (ytest - y0) * (x1 - x0) / (y1 - y0);
+      return xmin <= xcross && xcross <= xmax;
+    }
+    return false;
+  };
+
+  return crosses_x(xmin) || crosses_x(xmax) || crosses_y(ymin) ||
+         crosses_y(ymax);
+}
+
 /// Piecewise decomposition of a linestring according to intersection points
 std::vector<linestr> split_linestr(linestr linestring, linestr intersections) {
   // Add line start point
@@ -28,8 +95,8 @@ std::vector<linestr> split_linestr(linestr linestring, linestr intersections) {
 
 /// Find intersection points of a linestring with a raster grid
 std::vector<linestr>
-findIntersectionsLineString(geometry::LineString linestring,
-                            grid::Grid raster) {
+findIntersectionsLineString(geometry::LineString linestring, grid::Grid raster,
+                            bool bounded) {
   linestr coords = linestring.coordinates;
 
   std::vector<linestr> allsplits;
@@ -37,9 +104,33 @@ findIntersectionsLineString(geometry::LineString linestring,
   for (std::size_t i = 0; i < coords.size() - 1; i++) {
     geometry::Line line(coords.at(i), coords.at(i + 1));
 
-    // If the line starts and ends in different cells, it needs to be cleaned.
-    if (raster.cellIndex(line.start) != raster.cellIndex(line.end)) {
+    bool single_cell =
+        raster.cellIndices(line.start) == raster.cellIndices(line.end);
+
+    // If the line starts and ends in the same cell,
+    // or (bounded and (segment does not intersect overall grid bounds))
+    if (single_cell ||
+        (bounded && !segmentIntersectsGridBounds(line, raster))) {
+      // then don't split, just push back the coordinate
+      linestr_piece.push_back(coords.at(i));
+    } else {
+      // otherwise do split this straight-line segment
       linestr intersections = raster.findIntersections(line);
+      // if only splitting within grid bounds, filter the intersections
+      if (bounded) {
+        linestr filtered;
+        filtered.reserve(intersections.size());
+        for (std::size_t idx = 0; idx < intersections.size(); ++idx) {
+          const auto &coordinate = intersections[idx];
+          bool endpoint = (idx == 0) || (idx == intersections.size() - 1);
+          // keep the endpoints as original coordinates in the linestring
+          // and keep any split intersections from within the grid bounds
+          if (endpoint || pointInBounds(coordinate, raster)) {
+            filtered.push_back(coordinate);
+          }
+        }
+        intersections = std::move(filtered);
+      }
       std::vector<linestr> splits = split_linestr(linestr_piece, intersections);
       allsplits.insert(allsplits.end(), splits.begin(), splits.end());
       if (line.end == intersections.back()) {
@@ -47,8 +138,6 @@ findIntersectionsLineString(geometry::LineString linestring,
       } else {
         linestr_piece = {intersections.back()};
       }
-    } else {
-      linestr_piece.push_back(coords.at(i));
     }
   }
 
@@ -57,8 +146,15 @@ findIntersectionsLineString(geometry::LineString linestring,
     allsplits.push_back(linestr_piece);
   }
 
-  return (allsplits);
+  return allsplits;
 }
+
+bool pointInBounds(const geometry::Coord &pt, const grid::Grid &raster) {
+  auto ll = raster.grid_to_world * geometry::Coord(0.0, 0.0);
+  auto ur = raster.grid_to_world * geometry::Coord(raster.ncols, raster.nrows);
+
+  return pt.x >= ll.x && pt.x <= ur.x && pt.y >= ll.y && pt.y <= ur.y;
+};
 
 bool isOnGridLine(geometry::Coord point, Direction direction, double level,
                   double cellSize) {
@@ -81,7 +177,7 @@ bool isOnGridLine(geometry::Coord point, Direction direction, double level,
 //  >>-----x----o-----o-----  (don't include x)
 //        /.\   |..../
 //
-// TODO figure out what to do when some portion of the boundary is already
+// figure out what to do when some portion of the boundary is already
 // along the grid line. This is a legitimate case for odd number of crossings:
 //
 //              |......|

@@ -15,6 +15,7 @@ from snail.core.intersections import split_linestring as core_split_linestring
 from snail.intersection import (
     GridDefinition,
     aggregate_values_to_grid,
+    apply_indices,
     generate_grid_boxes,
     get_raster_values_for_splits,
     split_linestrings,
@@ -272,6 +273,55 @@ def test_get_raster_values_for_splits_supports_dask():
     )
     result = get_raster_values_for_splits(splits, raster)
     assert_series_equal(result, _expected_series(splits.index), check_dtype=False)
+
+
+def test_split_linestrings_outside_grid_returns_geometry(grid):
+    outside = gpd.GeoDataFrame(
+        {"id": [1]}, geometry=[LineString([(5.0, 0.5), (16.0, 1.5)])]
+    )
+    # must pass bounded=True for non-splitting behaviour
+    splits = split_linestrings(outside, grid, bounded=True)
+    assert len(splits) == 1
+    assert splits.geometry.iloc[0].equals(outside.geometry.iloc[0])
+    with_indices = apply_indices(splits, grid)
+    assert (with_indices["index_i"] == -1).all()
+    assert (with_indices["index_j"] == -1).all()
+
+    # default behaviour would split even outside grid bounds
+    splits = split_linestrings(outside, grid, bounded=False)
+    assert len(splits) > 1
+
+
+def test_split_linestrings_partial_overlap(grid):
+    line = gpd.GeoDataFrame(
+        {"id": [1]}, geometry=[LineString([(-2.0, 0.5), (1.5, 0.5)])]
+    )
+    splits = split_linestrings(line, grid, bounded=True)
+    coords = [list(geom.coords) for geom in splits.geometry]
+    expected_coords = [
+        [(-2.0, 0.5), (0.0, 0.5)],
+        [(0.0, 0.5), (1.0, 0.5)],
+        [(1.0, 0.5), (1.5, 0.5)],
+    ]
+    assert coords == expected_coords
+    with_indices = apply_indices(splits, grid)
+    assert list(
+        zip(
+            with_indices["index_i"].to_list(),
+            with_indices["index_j"].to_list(),
+        )
+    ) == [(-1, -1), (0, 0), (1, 0)]
+
+    # default behaviour would split even outside grid bounds
+    splits = split_linestrings(line, grid, bounded=False)
+    coords = [list(geom.coords) for geom in splits.geometry]
+    expected_coords = [
+        [(-2.0, 0.5), (-1.0, 0.5)],
+        [(-1.0, 0.5), (0.0, 0.5)],
+        [(0.0, 0.5), (1.0, 0.5)],
+        [(1.0, 0.5), (1.5, 0.5)],
+    ]
+    assert coords == expected_coords
 
 
 def test_box_geom_bounds():
