@@ -393,6 +393,167 @@ TEST_CASE("Bounded intersection leaves disjoint parallel segments unchanged",
   }
 }
 
+TEST_CASE("LineString crossing whole grid splits when bounded, any direction",
+          "[decomposition]") {
+  // Regression test: segments crossing the grid with both endpoints outside
+  // must be detected (and split) whatever their orientation, including
+  // right-to-left and top-to-bottom.
+  Config right_to_left;
+  right_to_left.linestring = {{5.0, 0.5}, {-5.0, 0.5}};
+  right_to_left.expected_splits = {
+      {{5.0, 0.5}, {2.0, 0.5}},
+      {{2.0, 0.5}, {1.0, 0.5}},
+      {{1.0, 0.5}, {0.0, 0.5}},
+      {{0.0, 0.5}, {-5.0, 0.5}},
+  };
+
+  Config top_to_bottom;
+  top_to_bottom.linestring = {{0.5, 5.0}, {0.5, -5.0}};
+  top_to_bottom.expected_splits = {
+      {{0.5, 5.0}, {0.5, 2.0}},
+      {{0.5, 2.0}, {0.5, 1.0}},
+      {{0.5, 1.0}, {0.5, 0.0}},
+      {{0.5, 0.0}, {0.5, -5.0}},
+  };
+
+  auto test_data = GENERATE_COPY(right_to_left, top_to_bottom);
+  std::vector<linestr> expected = test_data.expected_splits;
+
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+  snail::geometry::LineString line(test_data.linestring);
+
+  auto splits =
+      snail::operations::findIntersectionsLineString(line, test_raster, true);
+
+  REQUIRE(splits.size() == expected.size());
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    REQUIRE(splits[i].size() == expected[i].size());
+    for (std::size_t j = 0; j < expected[i].size(); ++j) {
+      REQUIRE(std::abs(splits[i][j].x - expected[i][j].x) < TOL);
+      REQUIRE(std::abs(splits[i][j].y - expected[i][j].y) < TOL);
+    }
+  }
+}
+
+TEST_CASE("Segment collinear with grid edge splits within bounds when bounded",
+          "[decomposition]") {
+  // Regression test: a vertical segment collinear with a grid edge used to
+  // trigger a 0/0 division in the bounded-intersection test. A segment on
+  // the boundary counts as inside (consistent with pointInBounds), so it is
+  // split at the gridlines within the grid extent and left in one piece
+  // beyond it.
+  Config left_edge;
+  left_edge.linestring = {{0.0, -1.0}, {0.0, 3.0}};
+  left_edge.expected_splits = {
+      {{0.0, -1.0}, {0.0, 0.0}},
+      {{0.0, 0.0}, {0.0, 1.0}},
+      {{0.0, 1.0}, {0.0, 2.0}},
+      {{0.0, 2.0}, {0.0, 3.0}},
+  };
+
+  Config right_edge;
+  right_edge.linestring = {{2.0, -1.0}, {2.0, 3.0}};
+  right_edge.expected_splits = {
+      {{2.0, -1.0}, {2.0, 0.0}},
+      {{2.0, 0.0}, {2.0, 1.0}},
+      {{2.0, 1.0}, {2.0, 2.0}},
+      {{2.0, 2.0}, {2.0, 3.0}},
+  };
+
+  auto test_data = GENERATE_COPY(left_edge, right_edge);
+  std::vector<linestr> expected = test_data.expected_splits;
+
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+  snail::geometry::LineString line(test_data.linestring);
+
+  auto splits =
+      snail::operations::findIntersectionsLineString(line, test_raster, true);
+
+  REQUIRE(splits.size() == expected.size());
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    REQUIRE(splits[i].size() == expected[i].size());
+    for (std::size_t j = 0; j < expected[i].size(); ++j) {
+      REQUIRE(std::abs(splits[i][j].x - expected[i][j].x) < TOL);
+      REQUIRE(std::abs(splits[i][j].y - expected[i][j].y) < TOL);
+    }
+  }
+}
+
+TEST_CASE("Segment collinear with grid edge outside extent remains unchanged",
+          "[decomposition]") {
+  // collinear with the left grid edge (x = 0) but wholly beyond the top of
+  // the grid: no part of the segment is within the grid extent, so with
+  // bounded=true it is returned unchanged.
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+  linestr coordinates = {{0.0, 3.0}, {0.0, 5.0}};
+  snail::geometry::LineString line(coordinates);
+
+  auto splits =
+      snail::operations::findIntersectionsLineString(line, test_raster, true);
+
+  REQUIRE(splits.size() == 1);
+  REQUIRE(splits[0].size() == coordinates.size());
+  for (std::size_t i = 0; i < coordinates.size(); ++i) {
+    REQUIRE(std::abs(splits[0][i].x - coordinates[i].x) < TOL);
+    REQUIRE(std::abs(splits[0][i].y - coordinates[i].y) < TOL);
+  }
+}
+
+TEST_CASE("Segment collinear with interior gridline splits at crossings",
+          "[decomposition]") {
+  // A segment lying along an interior gridline (y = 1) is split at the
+  // vertical gridline it crosses (x = 1); bounded and unbounded behaviour
+  // agree because the segment is entirely inside the grid.
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+  linestr coordinates = {{0.5, 1.0}, {1.5, 1.0}};
+  snail::geometry::LineString line(coordinates);
+
+  std::vector<linestr> expected = {
+      {{0.5, 1.0}, {1.0, 1.0}},
+      {{1.0, 1.0}, {1.5, 1.0}},
+  };
+
+  bool bounded = GENERATE(true, false);
+  auto splits = snail::operations::findIntersectionsLineString(
+      line, test_raster, bounded);
+
+  REQUIRE(splits.size() == expected.size());
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    REQUIRE(splits[i].size() == expected[i].size());
+    for (std::size_t j = 0; j < expected[i].size(); ++j) {
+      REQUIRE(std::abs(splits[i][j].x - expected[i][j].x) < TOL);
+      REQUIRE(std::abs(splits[i][j].y - expected[i][j].y) < TOL);
+    }
+  }
+}
+
+TEST_CASE("Diagonal segment inside grid is split when bounded",
+          "[decomposition]") {
+  // A segment entirely inside the grid must still be split when bounded=true
+  // (both endpoints inside means the segment intersects the grid extent).
+  snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
+  linestr coordinates = {{0.3, 0.4}, {1.8, 1.6}};
+  snail::geometry::LineString line(coordinates);
+
+  std::vector<linestr> expected = {
+      {{0.3, 0.4}, {1.0, 0.96}},
+      {{1.0, 0.96}, {1.05, 1.0}},
+      {{1.05, 1.0}, {1.8, 1.6}},
+  };
+
+  auto splits =
+      snail::operations::findIntersectionsLineString(line, test_raster, true);
+
+  REQUIRE(splits.size() == expected.size());
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    REQUIRE(splits[i].size() == expected[i].size());
+    for (std::size_t j = 0; j < expected[i].size(); ++j) {
+      REQUIRE(std::abs(splits[i][j].x - expected[i][j].x) < TOL);
+      REQUIRE(std::abs(splits[i][j].y - expected[i][j].y) < TOL);
+    }
+  }
+}
+
 TEST_CASE("Bounded splits keep interior vertices within grid extents",
           "[decomposition]") {
   snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
