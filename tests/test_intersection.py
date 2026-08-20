@@ -324,6 +324,50 @@ def test_split_linestrings_partial_overlap(grid):
     assert coords == expected_coords
 
 
+def test_split_linestrings_partial_overlap_reversed(grid):
+    # crosses the whole grid right-to-left, both endpoints outside - must
+    # still be split within the grid when bounded (regression test for
+    # direction-dependent bounds check)
+    line = gpd.GeoDataFrame(
+        {"id": [1]}, geometry=[LineString([(1.5, 0.5), (-2.0, 0.5)])]
+    )
+    splits = split_linestrings(line, grid, bounded=True)
+    coords = [list(geom.coords) for geom in splits.geometry]
+    expected_coords = [
+        [(1.5, 0.5), (1.0, 0.5)],
+        [(1.0, 0.5), (0.0, 0.5)],
+        [(0.0, 0.5), (-2.0, 0.5)],
+    ]
+    assert coords == expected_coords
+    with_indices = apply_indices(splits, grid)
+    assert list(
+        zip(
+            with_indices["index_i"].to_list(),
+            with_indices["index_j"].to_list(),
+        )
+    ) == [(1, 0), (0, 0), (-1, -1)]
+
+
+def test_split_linestrings_collinear_with_grid_edge(grid):
+    # collinear with the left grid edge (x = 0), extending beyond the grid:
+    # must not error, and splits at the gridlines within the grid extent
+    # while the overhanging pieces remain unsplit
+    line = gpd.GeoDataFrame(
+        {"id": [1]}, geometry=[LineString([(0.0, -12.0), (0.0, 7.0)])]
+    )
+    splits = split_linestrings(line, grid, bounded=True)
+    coords = [list(geom.coords) for geom in splits.geometry]
+    expected_coords = [
+        [(0.0, -12.0), (0.0, 0.0)],
+        [(0.0, 0.0), (0.0, 1.0)],
+        [(0.0, 1.0), (0.0, 2.0)],
+        [(0.0, 2.0), (0.0, 3.0)],
+        [(0.0, 3.0), (0.0, 4.0)],
+        [(0.0, 4.0), (0.0, 7.0)],
+    ]
+    assert coords == expected_coords
+
+
 def test_box_geom_bounds():
     """Values take from tests/integration/range.tif"""
     grid = GridDefinition(
