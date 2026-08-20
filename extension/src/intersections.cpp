@@ -95,11 +95,16 @@ std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
   }
 
   std::vector<linestr> horiz_splits = operations::splitAlongGridlines(
-      exterior_with_crossings, floor(std::min(ll.y, ur.y)),
-      ceil(std::max(ll.y, ur.y)) + 1, operations::Direction::horizontal, grid);
+      exterior_with_crossings,
+      static_cast<int>(std::floor(std::min(ll.y, ur.y))),
+      static_cast<int>(std::ceil(std::max(ll.y, ur.y))) + 1,
+      operations::Direction::horizontal, grid);
+
   std::vector<linestr> vert_splits = operations::splitAlongGridlines(
-      exterior_with_crossings, floor(std::min(ll.x, ur.x)),
-      ceil(std::max(ll.x, ur.x)) + 1, operations::Direction::vertical, grid);
+      exterior_with_crossings,
+      static_cast<int>(std::floor(std::min(ll.x, ur.x))),
+      static_cast<int>(std::ceil(std::max(ll.x, ur.x))) + 1,
+      operations::Direction::vertical, grid);
 
   std::vector<linestr> all_splits;
   all_splits.insert(all_splits.end(), exterior_splits.begin(),
