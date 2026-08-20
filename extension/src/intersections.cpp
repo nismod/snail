@@ -130,14 +130,14 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
 
 } // namespace snail
 
+// NOLINTNEXTLINE
 PYBIND11_MODULE(intersections, m) {
   m.doc() = "Vector geometry to grid intersections";
 
   m.def("split_linestring", &snail::splitLineString,
         pybind11::arg("linestring_py"), pybind11::arg("nrows"),
         pybind11::arg("ncols"), pybind11::arg("transform"),
-        pybind11::arg("bounded") = false,
-        "Split LineString along a grid");
+        pybind11::arg("bounded") = false, "Split LineString along a grid");
   m.def("get_cell_indices", &snail::get_cell_indices,
         "Get LineString cell indices in a grid");
   m.def("split_polygon", &snail::splitPolygon, "Split Polygon along a grid");
