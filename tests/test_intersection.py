@@ -325,7 +325,7 @@ def test_split_linestrings_partial_overlap(grid):
 
 
 def test_split_linestrings_partial_overlap_reversed(grid):
-    # crosses the whole grid right-to-left, both endpoints outside - must
+    # partially overlaps the grid right-to-left, with one endpoint outside - must
     # still be split within the grid when bounded (regression test for
     # direction-dependent bounds check)
     line = gpd.GeoDataFrame(
