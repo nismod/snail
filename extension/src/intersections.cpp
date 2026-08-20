@@ -56,8 +56,9 @@ std::vector<py::object> splitLineString(py::object linestring_py, int nrows,
                                         std::vector<double> transform,
                                         bool bounded = false) {
   linestr linestring = convert_py2cpp(linestring_py);
-  transform::Affine affine(transform[0], transform[1], transform[2],
-                           transform[3], transform[4], transform[5]);
+  transform::Affine affine(
+      transform[0], transform[1], transform[2], transform[3], transform[4],
+      transform[5]); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
   grid::Grid grid(ncols, nrows, affine);
   geometry::LineString line(linestring);
   std::vector<linestr> splits =
@@ -75,8 +76,9 @@ std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
   double maxy = (py::float_)bounds[3];
 
   linestr exterior = convert_py2cpp(polygon.attr("exterior"));
-  transform::Affine affine(transform[0], transform[1], transform[2],
-                           transform[3], transform[4], transform[5]);
+  transform::Affine affine(
+      transform[0], transform[1], transform[2], transform[3], transform[4],
+      transform[5]); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
   grid::Grid grid(ncols, nrows, affine);
 
   // Corners of geometry bbox as cell indices
@@ -116,10 +118,12 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
   double miny = (py::float_)bounds[1];
   double maxx = (py::float_)bounds[2];
   double maxy = (py::float_)bounds[3];
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
   geo::Coord midpoint = geo::Coord((maxx + minx) * 0.5, (maxy + miny) * 0.5);
 
-  transform::Affine affine(transform[0], transform[1], transform[2],
-                           transform[3], transform[4], transform[5]);
+  transform::Affine affine(
+      transform[0], transform[1], transform[2], transform[3], transform[4],
+      transform[5]); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
   grid::Grid grid(ncols, nrows, affine);
   return grid.cellIndices(midpoint);
 }
