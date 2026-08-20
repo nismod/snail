@@ -5,7 +5,6 @@ from importlib.metadata import PackageNotFoundError, version
 # Import things to define what is accessible directly on snail, when a client
 # writes::
 #   from snail import Something
-
 # e.g. uncomment:
 # from snail.network import Network
 from snail import damage_library
