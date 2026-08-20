@@ -25,6 +25,8 @@ struct Coord {
   // Divide a Coord by a constant
   Coord operator/(const double a) const { return Coord(x / a, y / a); }
 
+  // Default constructor: zero Coord
+  Coord() : x(0.0), y(0.0) {}
   // Construct a Coord from doubles
   Coord(const double x, const double y) : x(x), y(y) {}
   // Construct a Coord from tuple of two ints
