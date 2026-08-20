@@ -205,7 +205,7 @@ This may need some includes for `pybind11` - which will vary depending on your
 python installation. For example, with python via miniconda:
 
     clang-tidy --checks 'cppcoreguidelines-*' extension/src/* -- \
-        -I/home/username/miniconda3/include/python3.11/ \
+        -I/home/username/miniconda3/include/python3.12/ \
         -I./pybind11/include/
 
 Or with C++ headers installed on a Linux machine:
@@ -215,7 +215,7 @@ Or with C++ headers installed on a Linux machine:
         -I/usr/include/x86_64-linux-gnu/c++/11 \
         -I/usr/include/c++/11 \
         -I{$PWD}/extension/extern/pybind11/include \
-        -I/usr/include/python3.11
+        -I/usr/include/python3.12
 
 ### Integration of C++ and Python using pybind11
 

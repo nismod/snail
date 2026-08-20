@@ -25,6 +25,8 @@ struct Coord {
   // Divide a Coord by a constant
   Coord operator/(const double a) const { return Coord(x / a, y / a); }
 
+  // Default constructor: zero Coord
+  Coord() : x(0.0), y(0.0) {}
   // Construct a Coord from doubles
   Coord(const double x, const double y) : x(x), y(y) {}
   // Construct a Coord from tuple of two ints
@@ -103,12 +105,15 @@ struct LineString {
 /// of the earth, using great-circles (NOTE: Only use with data in
 /// latitude/longitude coordinates).
 inline double haversine(Line line) {
-  double dLat_2 = ((line.end.y - line.start.y) * utils::toRad) / 2.0;
-  double dLon_2 = ((line.end.x - line.start.x) * utils::toRad) / 2.0;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
+  double dLat_2 = ((line.end.y - line.start.y) * utils::toRad) * 0.5;
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
+  double dLon_2 = ((line.end.x - line.start.x) * utils::toRad) * 0.5;
 
   double a = sin(dLat_2) * sin(dLat_2) + cos(line.start.y * utils::toRad) *
                                              cos(line.end.y * utils::toRad) *
                                              sin(dLon_2) * sin(dLon_2);
+  // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
   double c = 2.0 * atan2(sqrt(a), sqrt(1 - a));
 
   return utils::R * c;

@@ -14,32 +14,27 @@ using linestr = std::vector<geometry::Coord>;
 /// partially (i.e. crossing one or more of bounding box lines) or entirely.
 bool segmentIntersectsGridBounds(const geometry::Line &line,
                                  const grid::Grid &raster) {
-  // Pick out line endpoint coordinates
+  // If either endpoint or both falls within the grid extent, the line segment
+  // intersects
   auto xy0 = line.start;
   auto xy1 = line.end;
-  const double x0 = xy0.x;
-  const double y0 = xy0.y;
-  const double x1 = xy1.x;
-  const double y1 = xy1.y;
+  if (pointInBounds(xy0, raster) || pointInBounds(xy1, raster)) {
+    return true;
+  }
 
   // Pick out grid bounding box coordinates
-  auto ll = raster.grid_to_world * geometry::Coord(0.0, 0.0);
-  auto ur = raster.grid_to_world * geometry::Coord(raster.ncols, raster.nrows);
+  auto ll = raster.ll;
+  auto ur = raster.ur;
   const double xmin = ll.x;
   const double ymin = ll.y;
   const double xmax = ur.x;
   const double ymax = ur.y;
 
-  // Test if an x/y point falls within the grid extent
-  auto inside = [&](const double &x, const double &y) {
-    return x >= xmin && x <= xmax && y >= ymin && y <= ymax;
-  };
-
-  // If either endpoint or both falls within the grid extent, the line segment intersects
-  if (inside(x0, y0) || inside(x1, y1)) {
-    return true;
-  }
-
+  // Pick out line endpoint coordinates
+  const double x0 = xy0.x;
+  const double y0 = xy0.y;
+  const double x1 = xy1.x;
+  const double y1 = xy1.y;
   const double line_xmin = std::min(x0, x1);
   const double line_xmax = std::max(x0, x1);
   const double line_ymin = std::min(y0, y1);
@@ -150,8 +145,8 @@ findIntersectionsLineString(geometry::LineString linestring, grid::Grid raster,
 }
 
 bool pointInBounds(const geometry::Coord &pt, const grid::Grid &raster) {
-  auto ll = raster.grid_to_world * geometry::Coord(0.0, 0.0);
-  auto ur = raster.grid_to_world * geometry::Coord(raster.ncols, raster.nrows);
+  auto ll = raster.ll;
+  auto ur = raster.ur;
 
   return pt.x >= ll.x && pt.x <= ur.x && pt.y >= ll.y && pt.y <= ur.y;
 };
