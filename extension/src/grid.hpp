@@ -25,25 +25,23 @@ struct Grid {
   Affine grid_to_world;
   /// world to grid transform - calculated
   Affine world_to_grid;
-  /// 1D vector of doubles storing the data (conceptually a 2D grid)
-  std::vector<double> data;
+  /// Upper right corner
+  geometry::Coord ur;
+  /// Lower left corner
+  geometry::Coord ll;
 
   Grid()
-      : ncols{0}, nrows{0}, grid_to_world{Affine()},
-        data{std::vector<double>()} {
+      : ncols{0}, nrows{0}, grid_to_world{Affine()}, ur{0.0, 0.0},
+        ll{0.0, 0.0} {
     world_to_grid = ~grid_to_world;
   };
 
   Grid(size_t ncols, size_t nrows, Affine grid_to_world)
-      : ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world},
-        data{std::vector<double>()} {
+      : ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world} {
     world_to_grid = ~grid_to_world;
-  };
-
-  Grid(size_t ncols, size_t nrows, Affine grid_to_world,
-       std::vector<double> data)
-      : ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world}, data{data} {
-    world_to_grid = ~grid_to_world;
+    ll = grid_to_world * geometry::Coord(0.0, 0.0);
+    ur = grid_to_world * geometry::Coord(static_cast<double>(ncols),
+                                         static_cast<double>(nrows));
   };
 
   /// Calculate hashed index in raster.

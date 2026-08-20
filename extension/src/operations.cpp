@@ -23,8 +23,8 @@ bool segmentIntersectsGridBounds(const geometry::Line &line,
   const double y1 = xy1.y;
 
   // Pick out grid bounding box coordinates
-  auto ll = raster.grid_to_world * geometry::Coord(0.0, 0.0);
-  auto ur = raster.grid_to_world * geometry::Coord(raster.ncols, raster.nrows);
+  auto ll = raster.ll;
+  auto ur = raster.ur;
   const double xmin = ll.x;
   const double ymin = ll.y;
   const double xmax = ur.x;
@@ -150,8 +150,8 @@ findIntersectionsLineString(geometry::LineString linestring, grid::Grid raster,
 }
 
 bool pointInBounds(const geometry::Coord &pt, const grid::Grid &raster) {
-  auto ll = raster.grid_to_world * geometry::Coord(0.0, 0.0);
-  auto ur = raster.grid_to_world * geometry::Coord(raster.ncols, raster.nrows);
+  auto ll = raster.ll;
+  auto ur = raster.ur;
 
   return pt.x >= ll.x && pt.x <= ur.x && pt.y >= ll.y && pt.y <= ur.y;
 };
