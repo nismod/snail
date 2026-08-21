@@ -18,11 +18,9 @@ namespace snail {
 namespace py = pybind11;
 namespace geo = geometry;
 
-using linestr = std::vector<geometry::Coord>;
-
-linestr convert_py2cpp(py::object linestring_py) {
+geo::Ring convert_py2cpp(py::object linestring_py) {
   py::object coords = linestring_py.attr("coords");
-  linestr linestring;
+  geo::Ring linestring;
   for (py::size_t i = 0; i < py::len(coords); i++) {
     py::tuple xy = (py::tuple)coords[py::cast(i)];
     geo::Coord p((py::float_)xy[0], (py::float_)xy[1]);
@@ -31,9 +29,8 @@ linestr convert_py2cpp(py::object linestring_py) {
   return linestring;
 }
 
-std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
-  const py::object shapely_linestr =
-      py::module_::import("shapely.geometry").attr("LineString");
+std::vector<py::object> convert_cpp2py(std::vector<geo::Ring> splits) {
+  const py::object shapely_linestr = py::module_::import("shapely.geometry").attr("LineString");
 
   std::vector<py::object> splits_py;
   std::vector<std::vector<double>> split_py;
@@ -51,72 +48,57 @@ std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
   return splits_py;
 }
 
-std::vector<py::object> splitLineString(py::object linestring_py, int nrows,
-                                        int ncols,
-                                        std::vector<double> transform,
-                                        bool bounded = false) {
-  linestr linestring = convert_py2cpp(linestring_py);
-  transform::Affine affine(
-      transform[0], transform[1], transform[2], transform[3], transform[4],
-      transform[5]); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+std::vector<py::object> splitLineString(py::object linestring_py, int nrows, int ncols,
+                                        std::vector<double> transform, bool bounded = false) {
+  geo::Ring linestring = convert_py2cpp(linestring_py);
+  transform::Affine affine(transform[0], transform[1], transform[2], transform[3], transform[4],
+                           transform[5]); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
   grid::Grid grid(ncols, nrows, affine);
   geometry::LineString line(linestring);
-  std::vector<linestr> splits =
-      operations::findIntersectionsLineString(line, grid, bounded);
+  std::vector<geo::Ring> splits = operations::findIntersectionsLineString(line, grid, bounded);
   return convert_cpp2py(splits);
 }
 
 std::vector<py::object> splitPolygon(py::object polygon, int nrows, int ncols,
                                      std::vector<double> transform) {
-  /// It is assumed that polygon is oriented (counter-clockwise)
-  py::tuple bounds = polygon.attr("bounds");
-  double minx = (py::float_)bounds[0];
-  double miny = (py::float_)bounds[1];
-  double maxx = (py::float_)bounds[2];
-  double maxy = (py::float_)bounds[3];
-
-  linestr exterior = convert_py2cpp(polygon.attr("exterior"));
-  transform::Affine affine(
-      transform[0], transform[1], transform[2], transform[3], transform[4],
-      transform[5]); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
-  grid::Grid grid(ncols, nrows, affine);
-
-  // Corners of geometry bbox as cell indices
-  geometry::Coord ll = grid.world_to_grid * geometry::Coord(minx, miny);
-  geometry::Coord ur = grid.world_to_grid * geometry::Coord(maxx, maxy);
-
-  geometry::LineString line(exterior);
-  std::vector<linestr> exterior_splits =
-      operations::findIntersectionsLineString(line, grid);
-  std::vector<geometry::Coord> exterior_with_crossings;
-  for (auto split : exterior_splits) {
-    exterior_with_crossings.insert(exterior_with_crossings.end(), split.begin(),
-                                   split.end());
+  // All rings of the polygon: exterior first, then any interiors (holes)
+  std::vector<geo::Ring> rings;
+  rings.push_back(convert_py2cpp(polygon.attr("exterior")));
+  py::object interiors = polygon.attr("interiors");
+  for (py::handle interior : interiors) {
+    rings.push_back(convert_py2cpp(py::reinterpret_borrow<py::object>(interior)));
   }
 
-  std::vector<linestr> horiz_splits = operations::splitAlongGridlines(
-      exterior_with_crossings,
-      static_cast<int>(std::floor(std::min(ll.y, ur.y))),
-      static_cast<int>(std::ceil(std::max(ll.y, ur.y))) + 1,
-      operations::Direction::horizontal, grid);
+  geo::Ring exterior = convert_py2cpp(polygon.attr("exterior"));
+  transform::Affine affine(transform[0], transform[1], transform[2], transform[3], transform[4],
+                           transform[5]); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+  grid::Grid grid(ncols, nrows, affine);
 
-  std::vector<linestr> vert_splits = operations::splitAlongGridlines(
-      exterior_with_crossings,
-      static_cast<int>(std::floor(std::min(ll.x, ur.x))),
-      static_cast<int>(std::ceil(std::max(ll.x, ur.x))) + 1,
-      operations::Direction::vertical, grid);
+  std::vector<geo::Polygon> splits = operations::splitPolygonGrid(rings, grid);
 
-  std::vector<linestr> all_splits;
-  all_splits.insert(all_splits.end(), exterior_splits.begin(),
-                    exterior_splits.end());
-  all_splits.insert(all_splits.end(), horiz_splits.begin(), horiz_splits.end());
-  all_splits.insert(all_splits.end(), vert_splits.begin(), vert_splits.end());
+  const py::object shapely_polygon = py::module_::import("shapely.geometry").attr("Polygon");
 
-  return convert_cpp2py(all_splits);
+  std::vector<py::object> splits_py;
+  std::vector<std::vector<double>> ring_py;
+  for (const geo::Polygon &split : splits) {
+    for (const geo::Coord &point : split.exterior) {
+      ring_py.push_back({point.x, point.y});
+    }
+    std::vector<std::vector<std::vector<double>>> interiors_py;
+    for (const geo::Ring &interior : split.interiors) {
+      std::vector<std::vector<double>> interior_py;
+      for (const geo::Coord &point : interior) {
+        interior_py.push_back({point.x, point.y});
+      }
+      interiors_py.push_back(interior_py);
+    }
+    splits_py.push_back(shapely_polygon(ring_py, interiors_py));
+    ring_py.clear();
+  }
+  return splits_py;
 }
 
-std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
-                                      int ncols,
+std::tuple<int, int> get_cell_indices(py::object linestring, int nrows, int ncols,
                                       std::vector<double> transform) {
   py::tuple bounds = linestring.attr("bounds");
   double minx = (py::float_)bounds[0];
@@ -126,9 +108,8 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
   // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
   geo::Coord midpoint = geo::Coord((maxx + minx) * 0.5, (maxy + miny) * 0.5);
 
-  transform::Affine affine(
-      transform[0], transform[1], transform[2], transform[3], transform[4],
-      transform[5]); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+  transform::Affine affine(transform[0], transform[1], transform[2], transform[3], transform[4],
+                           transform[5]); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
   grid::Grid grid(ncols, nrows, affine);
   return grid.cellIndices(midpoint);
 }
@@ -139,11 +120,9 @@ std::tuple<int, int> get_cell_indices(py::object linestring, int nrows,
 PYBIND11_MODULE(intersections, m) {
   m.doc() = "Vector geometry to grid intersections";
 
-  m.def("split_linestring", &snail::splitLineString,
-        pybind11::arg("linestring_py"), pybind11::arg("nrows"),
-        pybind11::arg("ncols"), pybind11::arg("transform"),
-        pybind11::arg("bounded") = false, "Split LineString along a grid");
-  m.def("get_cell_indices", &snail::get_cell_indices,
-        "Get LineString cell indices in a grid");
+  m.def("split_linestring", &snail::splitLineString, pybind11::arg("linestring_py"), pybind11::arg("nrows"),
+        pybind11::arg("ncols"), pybind11::arg("transform"), pybind11::arg("bounded") = false,
+        "Split LineString along a grid");
+  m.def("get_cell_indices", &snail::get_cell_indices, "Get LineString cell indices in a grid");
   m.def("split_polygon", &snail::splitPolygon, "Split Polygon along a grid");
 }

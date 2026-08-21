@@ -30,9 +30,7 @@ struct Grid {
   /// Lower left corner
   geometry::Coord ll;
 
-  Grid()
-      : ncols{0}, nrows{0}, grid_to_world{Affine()}, ur{0.0, 0.0},
-        ll{0.0, 0.0} {
+  Grid() : ncols{0}, nrows{0}, grid_to_world{Affine()}, ur{0.0, 0.0}, ll{0.0, 0.0} {
     world_to_grid = ~grid_to_world;
   };
 
@@ -40,8 +38,7 @@ struct Grid {
       : ncols{ncols}, nrows{nrows}, grid_to_world{grid_to_world} {
     world_to_grid = ~grid_to_world;
     ll = grid_to_world * geometry::Coord(0.0, 0.0);
-    ur = grid_to_world * geometry::Coord(static_cast<double>(ncols),
-                                         static_cast<double>(nrows));
+    ur = grid_to_world * geometry::Coord(static_cast<double>(ncols), static_cast<double>(nrows));
   };
 
   /// Calculate hashed index in raster.
@@ -51,9 +48,8 @@ struct Grid {
   }
 
   /// Recover i, j index in raster.
-  std::tuple<int, int>
-  cellIndices(const geometry::Coord p,
-              double epsilon = std::numeric_limits<double>::epsilon()) const {
+  std::tuple<int, int> cellIndices(const geometry::Coord p,
+                                   double epsilon = std::numeric_limits<double>::epsilon()) const {
     // Note on epsilon: nudge point slightly in the x and y direction towards
     // the cell centre
     // - this should allow for some tolerance in coordinate precision and avoid
@@ -77,8 +73,7 @@ struct Grid {
 
   /// Calculate the points at which a line-segment intersects the
   /// grid lines / graticules.
-  std::vector<geometry::Coord>
-  findIntersections(const geometry::Line line) const {
+  std::vector<geometry::Coord> findIntersections(const geometry::Line line) const {
     // Create a vector of grid / graticule crossings to return to the caller.
     std::vector<geometry::Coord> crossings;
 
@@ -177,10 +172,8 @@ struct Grid {
           msg << "  start(" << line.start.x << "," << line.start.y << ")\n";
           msg << "  end(" << line.end.x << "," << line.end.y << ")\n";
           msg << "  run: " << run << " rise: " << rise << "\n";
-          msg << "  pE(" << pE.x << "," << pE.y << ") length " << pE.length()
-              << "\n";
-          msg << "  pN(" << pN.x << "," << pN.y << ") length " << pN.length()
-              << "\n";
+          msg << "  pE(" << pE.x << "," << pE.y << ") length " << pE.length() << "\n";
+          msg << "  pN(" << pN.x << "," << pN.y << ") length " << pN.length() << "\n";
           utils::Exception(msg.str());
           break;
         }

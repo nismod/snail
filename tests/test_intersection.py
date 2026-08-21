@@ -20,6 +20,7 @@ from snail.intersection import (
     get_raster_values_for_splits,
     split_linestrings,
     split_polygons,
+    split_polygons_experimental,
 )
 
 
@@ -219,6 +220,32 @@ class TestSnailIntersections:
             expected_geom = expected.iloc[i, 1]
             assert actual_geom.equals(expected_geom)
         assert_array_equal(actual["col1"].values, expected["col1"].values)
+
+    def test_split_polygons_experimental(self, grid, polygon, polygon_split):
+        actual = sort_polygons(split_polygons_experimental(polygon, grid))
+        expected = sort_polygons(polygon_split)
+
+        assert len(actual) == len(expected)
+        for i in range(len(actual)):
+            actual_geom = actual.iloc[i, 1]
+            expected_geom = expected.iloc[i, 1]
+            assert actual_geom.equals(expected_geom)
+        assert_array_equal(actual["col1"].values, expected["col1"].values)
+
+    def test_split_polygons_experimental_with_hole(self, grid):
+        polygon_with_hole = Polygon(
+            [(0.5, 0.5), (2.5, 0.5), (2.5, 2.5), (0.5, 2.5)],
+            [[(1.25, 1.25), (1.75, 1.25), (1.75, 1.75), (1.25, 1.75)]],
+        )
+        gdf = gpd.GeoDataFrame({"col1": ["name1"], "geometry": [polygon_with_hole]})
+        expected = sort_polygons(split_polygons(gdf.copy(), grid))
+        actual = sort_polygons(split_polygons_experimental(gdf.copy(), grid))
+
+        assert len(actual) == 9
+        assert actual.geometry.area.sum() == pytest.approx(polygon_with_hole.area)
+        assert len(actual) == len(expected)
+        for i in range(len(actual)):
+            assert actual.iloc[i, 1].equals(expected.iloc[i, 1])
 
 
 def _make_sample_splits():

@@ -8,14 +8,13 @@
 namespace snail {
 namespace operations {
 
-enum class Direction { horizontal, vertical };
+/// Find intersection points of a linestring with a raster grid
+std::vector<std::vector<geometry::Coord>> findIntersectionsLineString(geometry::LineString, grid::Grid,
+                                                                      bool bounded = false);
 
-std::vector<std::vector<geometry::Coord>>
-findIntersectionsLineString(geometry::LineString, grid::Grid,
-                            bool bounded = false);
-std::vector<std::vector<geometry::Coord>>
-splitAlongGridlines(std::vector<geometry::Coord>, int, int, Direction,
-                    grid::Grid);
+/// Split a valid polygon along the lines of a raster grid
+std::vector<geometry::Polygon> splitPolygonGrid(const std::vector<std::vector<geometry::Coord>> &rings,
+                                                const grid::Grid &grid);
 
 bool pointInBounds(const geometry::Coord &pt, const grid::Grid &raster);
 

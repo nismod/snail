@@ -30,14 +30,12 @@ struct Affine {
   Affine() : a{1}, b{0}, c{0}, d{0}, e{1}, f{0} {};
 
   /// Construct with six parameters, first two rows of 3x3 matrix
-  Affine(double a, double b, double c, double d, double e, double f)
-      : a{a}, b{b}, c{c}, d{d}, e{e}, f{f} {};
+  Affine(double a, double b, double c, double d, double e, double f) : a{a}, b{b}, c{c}, d{d}, e{e}, f{f} {};
 
   /// Construct from GDALGeoTransform ordering of parameters
   /// see
   /// https://gdal.org/api/gdaldataset_cpp.html#_CPPv4N11GDALDataset15GetGeoTransformEPd
-  static Affine from_gdal(double c, double a, double b, double f, double d,
-                          double e) {
+  static Affine from_gdal(double c, double a, double b, double f, double d, double e) {
     return Affine(a, b, c, d, e, f);
   }
 
@@ -57,13 +55,17 @@ struct Affine {
     double inverse_e = a * ideterminant;
     double inverse_c = -c * inverse_a - f * inverse_b;
     double inverse_f = -c * inverse_d - f * inverse_e;
-    return Affine(inverse_a, inverse_b, inverse_c, inverse_d, inverse_e,
-                  inverse_f);
+    return Affine(inverse_a, inverse_b, inverse_c, inverse_d, inverse_e, inverse_f);
   }
 
   /// Apply transform to a 2-dimensional point
   geometry::Coord operator*(const geometry::Coord &p) const {
     return geometry::Coord(p.x * a + p.y * b + c, p.x * d + p.y * e + f);
+  }
+
+  /// Apply transform to a 2-dimensional line segment
+  geometry::Line operator*(const geometry::Line &segment) const {
+    return geometry::Line(*this * segment.start, *this * segment.end);
   }
 };
 
