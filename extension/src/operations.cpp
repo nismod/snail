@@ -288,13 +288,20 @@ geometry::Polygon cellBoxPolygon(const CellIndex index) {
   return geometry::Polygon{ring, {}};
 }
 
-/// Append a whole cell as a polygon piece, without allocating
+/// Append a whole cell as a polygon piece, without allocating. The corners
+/// are written straight out rather than looked up one at a time: this runs
+/// once for every cell a polygon covers, which for a large polygon is most
+/// of the output.
 void appendCellBox(const CellIndex index, PolygonPieces &pieces) {
-  CellBorder border(index);
-  for (int k = 0; k < 4; k++) {
-    pieces.coordinates.push_back(border.corner(k));
-  }
-  pieces.coordinates.push_back(border.corner(0));
+  const double x0 = (double)index.first;
+  const double y0 = (double)index.second;
+  const double x1 = x0 + 1;
+  const double y1 = y0 + 1;
+  pieces.coordinates.push_back(Coord(x0, y0));
+  pieces.coordinates.push_back(Coord(x1, y0));
+  pieces.coordinates.push_back(Coord(x1, y1));
+  pieces.coordinates.push_back(Coord(x0, y1));
+  pieces.coordinates.push_back(Coord(x0, y0));
   pieces.endRing();
   pieces.endPolygon();
 }
@@ -946,6 +953,29 @@ PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
   // the boundary passes through, and it changes there exactly when that
   // cell's crossings are odd. The half-open crossing rule makes the parity
   // along a whole row even, so every row ends outside.
+  // count the interior cells first, so the output is grown once rather
+  // than repeatedly as they are appended: for a large polygon they are
+  // most of the result
+  std::size_t interior = 0;
+  for (std::size_t start = 0; start < boundary.size();) {
+    const long j = boundary[start].cell.second;
+    bool inside = false;
+    long previous_i = 0;
+    std::size_t at = start;
+    for (; at < boundary.size() && boundary[at].cell.second == j; at++) {
+      const long i = boundary[at].cell.first;
+      if (inside && i > previous_i + 1) {
+        interior += (std::size_t)(i - previous_i - 1);
+      }
+      inside = inside != boundary[at].crossed;
+      previous_i = i;
+    }
+    start = at;
+  }
+  results.coordinates.reserve(results.coordinates.size() + interior * 5);
+  results.ring_offsets.reserve(results.ring_offsets.size() + interior);
+  results.polygon_offsets.reserve(results.polygon_offsets.size() + interior);
+
   for (std::size_t start = 0; start < boundary.size();) {
     const long j = boundary[start].cell.second;
     bool inside = false;
