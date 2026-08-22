@@ -8,8 +8,28 @@
 namespace snail {
 namespace operations {
 
-std::vector<std::vector<geometry::Coord>>
-    findIntersectionsLineString(geometry::LineString, grid::Grid);
+/// Linestring pieces held as flat arrays: every piece's points concatenated
+/// in order, piece p spanning [offsets[p], offsets[p + 1]). The offsets
+/// carry a closing entry, so there is one more of them than there are
+/// pieces. As with PolygonPieces, this is the layout shapely consumes.
+struct LinePieces {
+  std::vector<geometry::Coord> coordinates;
+  std::vector<std::size_t> offsets;
+
+  LinePieces() : offsets{0} {}
+
+  std::size_t size() const { return offsets.size() - 1; }
+
+  /// Close off the piece whose points have just been appended
+  void endPiece() { offsets.push_back(coordinates.size()); }
+};
+
+/// Split a linestring along the lines of a raster grid, so that each piece
+/// lies within a single grid cell. Consecutive pieces meet at the point
+/// where the line leaves one cell for the next, and together they are the
+/// line: the split conserves its length and its endpoints.
+LinePieces splitLineStringGrid(const std::vector<geometry::Coord> &coordinates,
+                               const grid::Grid &grid);
 
 /// Polygon pieces held as flat arrays: every ring's points concatenated in
 /// order, with the rings of a polygon contiguous and its exterior ring

@@ -16,6 +16,20 @@
 
 using linestr = std::vector<snail::geometry::Coord>;
 
+/// Split a linestring, as a list of pieces, so that the expectations below
+/// can be written as plain lists of points
+static std::vector<linestr> split_line(const linestr &coordinates,
+                                       const snail::grid::Grid &grid) {
+  snail::operations::LinePieces pieces =
+      snail::operations::splitLineStringGrid(coordinates, grid);
+  std::vector<linestr> out;
+  for (std::size_t p = 0; p + 1 < pieces.offsets.size(); p++) {
+    out.push_back(linestr(pieces.coordinates.begin() + pieces.offsets[p],
+                          pieces.coordinates.begin() + pieces.offsets[p + 1]));
+  }
+  return out;
+}
+
 struct Config {
   linestr linestring;
   std::vector<linestr> expected_splits;
@@ -55,8 +69,8 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   Config case1;
   case1.linestring = {{0.5, 0.5}, {0.75, 0.5}, {1.5, 0.5}, {1.5, 1.5}};
   case1.expected_splits = {{{0.5, 0.5}, {0.75, 0.5}, {1., 0.5}},
-			   {{1., 0.5}, {1.5, 0.5}, {1.5, 1.}},
-			   {{1.5, 1.}, {1.5, 1.5}}};
+                           {{1., 0.5}, {1.5, 0.5}, {1.5, 1.}},
+                           {{1.5, 1.}, {1.5, 1.5}}};
 
   // Linestring points are marked by o:
   // Intersection points are marked by (o):
@@ -81,8 +95,8 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   Config case2;
   case2.linestring = {{0.5, 0.5}, {0.75, 0.5}, {1.5, 1.5}};
   case2.expected_splits = {{{0.5, 0.5}, {0.75, 0.5}, {1., 0.8333}},
-			   {{1., 0.8333}, {1.125, 1.}},
-			   {{1.125, 1.}, {1.5, 1.5}}};
+                           {{1., 0.8333}, {1.125, 1.}},
+                           {{1.125, 1.}, {1.5, 1.5}}};
 
   // Linestring points are marked by o:
   // Intersection points are marked by (o):
@@ -106,8 +120,7 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   // (0,0)         (1,0)          (2,0)
   Config case3;
   case3.linestring = {{1.0, 0.5}, {1.5, 1.0}, {1.5, 2.0}};
-  case3.expected_splits = {{{1.0, 0.5}, {1.5, 1.0}},
-			   {{1.5, 1.0}, {1.5, 2.0}}};
+  case3.expected_splits = {{{1.0, 0.5}, {1.5, 1.0}}, {{1.5, 1.0}, {1.5, 2.0}}};
 
   // Linestring points are marked by o:
   // Intersection points are marked by (o):
@@ -131,8 +144,7 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   // (0,0)         (1,0)          (2,0)
   Config case4;
   case4.linestring = {{0.5, 0.5}, {1.5, 1.5}};
-  case4.expected_splits = {{{0.5, 0.5}, {1.0, 1.0}},
-			   {{1.0, 1.0}, {1.5, 1.5}}};
+  case4.expected_splits = {{{0.5, 0.5}, {1.0, 1.0}}, {{1.0, 1.0}, {1.5, 1.5}}};
 
   // vertical along gridline
   Config case5;
@@ -159,14 +171,10 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 
   // V shape with floating point error
   Config case8;
-  case8.linestring = {
-    {0.5,1.1}, {1.5, 0.9}, {2.5, 1.1}
-  };
-  case8.expected_splits = {
-    {{0.5,1.1}, {1.,1.}},
-    {{1.,1.}, {1.5,0.9}, {2.,1.}},
-    {{2.,1.}, {2.5,1.1}}
-  };
+  case8.linestring = {{0.5, 1.1}, {1.5, 0.9}, {2.5, 1.1}};
+  case8.expected_splits = {{{0.5, 1.1}, {1., 1.}},
+                           {{1., 1.}, {1.5, 0.9}, {2., 1.}},
+                           {{2., 1.}, {2.5, 1.1}}};
 
   // Linestring points are marked by o:
   // Intersection points are marked by (o):
@@ -193,18 +201,10 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   case9.expected_splits = {{{0, 0}, {0.5, 0.5}}};
 
   // TODO case7, case8
-  auto test_data = GENERATE_COPY(
-    case1,
-    case2,
-    case3,
-    case4,
-    case5,
-    case6,
-    // case7,
-    // case8,
-    case9
-  );
-
+  auto test_data = GENERATE_COPY(case1, case2, case3, case4, case5, case6,
+                                 // case7,
+                                 // case8,
+                                 case9);
 
   std::vector<linestr> expected_splits = test_data.expected_splits;
 
@@ -213,8 +213,7 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 
   // Using default Affine transform(1, 0, 0, 0, 1, 0)
   snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
-  std::vector<linestr> splits =
-      snail::operations::findIntersectionsLineString(line, test_raster);
+  std::vector<linestr> splits = split_line(geom, test_raster);
 
   // DEBUG
   /*
@@ -249,10 +248,8 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 TEST_CASE("LineString corner produces zero-length split", "[decomposition]") {
   snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
   linestr coordinates = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
-  snail::geometry::LineString line(coordinates);
 
-  auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster);
+  auto splits = split_line(coordinates, test_raster);
 
   bool zero_length_found = false;
   for (const auto &segment : splits) {
@@ -263,9 +260,8 @@ TEST_CASE("LineString corner produces zero-length split", "[decomposition]") {
     }
   }
 
-  REQUIRE(! zero_length_found);
+  REQUIRE(!zero_length_found);
 }
-
 
 TEST_CASE("Split with different grid", "[decomposition]") {
   Config case1;
@@ -296,8 +292,7 @@ TEST_CASE("Split with different grid", "[decomposition]") {
   snail::grid::Grid test_raster(
       2, 2,
       snail::transform::Affine(90.0, 0.0, 132165.0, 0.0, -90.0, 2055230.0));
-  std::vector<linestr> splits =
-      snail::operations::findIntersectionsLineString(line, test_raster);
+  std::vector<linestr> splits = split_line(geom, test_raster);
 
   // Test that we're getting the expected number of splits
   REQUIRE(splits.size() == expected_splits.size());
@@ -316,7 +311,6 @@ TEST_CASE("Split with different grid", "[decomposition]") {
     }
   }
 }
-
 
 static double ring_area2(const linestr &ring) {
   // relative to the first point, to avoid cancellation for small rings far
@@ -374,8 +368,7 @@ TEST_CASE("Square is split into cell pieces", "[polygon]") {
   REQUIRE(std::abs(total_area(pieces) - 1.0) < TOL);
 }
 
-TEST_CASE("Concave polygon may split to several pieces per cell",
-          "[polygon]") {
+TEST_CASE("Concave polygon may split to several pieces per cell", "[polygon]") {
   // U-shape: both arms cross into the cell above, so cell (0,1) holds two
   // disjoint pieces
   snail::grid::Grid grid(2, 2, snail::transform::Affine());
@@ -488,8 +481,7 @@ TEST_CASE("Issue 45 polygons with vertices near gridlines", "[polygon]") {
   // crossings on gridline": vertices sit within ~1e-14 of a gridline
   snail::grid::Grid grid(
       698, 252,
-      snail::transform::Affine(0.0031, 0.0, -78.34655, 0.0, -0.0031,
-                               18.52365));
+      snail::transform::Affine(0.0031, 0.0, -78.34655, 0.0, -0.0031, 18.52365));
 
   linestr building1 = {{-77.280182457, 17.97282044099908},
                        {-77.28015690000001, 17.97282209999907},
@@ -519,11 +511,9 @@ TEST_CASE("Issue 45 polygons with vertices near gridlines", "[polygon]") {
 
   auto test_ring = GENERATE_COPY(building1, building2, building3);
 
-  auto pieces =
-      snail::operations::splitPolygonGrid({test_ring}, grid);
+  auto pieces = snail::operations::splitPolygonGrid({test_ring}, grid);
 
   double expected_area = std::abs(ring_area2(test_ring)) / 2.0;
   REQUIRE(pieces.size() >= 1);
-  REQUIRE(std::abs(total_area(pieces) - expected_area) <
-          1e-6 * expected_area);
+  REQUIRE(std::abs(total_area(pieces) - expected_area) < 1e-6 * expected_area);
 }

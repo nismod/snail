@@ -77,11 +77,60 @@ int main() {
   // A large circle with a large hole: boundary-heavy, few interior cells
   std::vector<linestr> annulus = {large_circle, circle(50.0, 50.0, 42.0, 256)};
 
+  // Many small buildings split in one batch: the realistic workload, and
+  // the one where per-polygon setup shows up
+  std::vector<linestr> buildings;
+  for (int i = 0; i < 500; i++) {
+    double cx = -78.0 + 0.0009 * (i % 25);
+    double cy = 18.0 + 0.0009 * (i / 25);
+    double w = 0.00021, h = 0.00017;
+    buildings.push_back(linestr{Coord(cx - w, cy - h), Coord(cx + w, cy - h),
+                                Coord(cx + w, cy + h), Coord(cx - w, cy + h),
+                                Coord(cx - w, cy - h)});
+  }
+
   benchmark("building (2 cells)", {building}, building_grid, 200000);
   benchmark("small circle (~5x5 cells)", {small_circle}, unit_grid, 50000);
   benchmark("medium circle (~20x20 cells)", {medium_circle}, unit_grid, 20000);
   benchmark("large circle (~90x90 cells)", {large_circle}, unit_grid, 2000);
   benchmark("annulus (~90x90, wide hole)", annulus, unit_grid, 2000);
+
+  // 500 small polygons, split one after another as the batch entry point
+  // does, to show the per-polygon cost rather than the per-piece one
+  {
+    std::size_t pieces = 0;
+    for (const linestr &ring : buildings) {
+      pieces += snail::operations::splitPolygonGridPieces({ring}, building_grid)
+                    .size();
+    }
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 400; i++) {
+      for (const linestr &ring : buildings) {
+        snail::operations::splitPolygonGridPieces({ring}, building_grid);
+      }
+    }
+    auto end = std::chrono::steady_clock::now();
+    double micros =
+        std::chrono::duration<double, std::micro>(end - start).count() / 400;
+    std::printf("%-32s %10.2f us/batch %6zu pieces  (x%d)\n",
+                "500 buildings (one batch)", micros, pieces, 400);
+  }
+
+  // Linestrings, which now share the ring splitter's crossing enumeration
+  {
+    linestr line = circle(50.0, 50.0, 40.0, 512);
+    std::size_t pieces =
+        snail::operations::splitLineStringGrid(line, unit_grid).size();
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 5000; i++) {
+      snail::operations::splitLineStringGrid(line, unit_grid);
+    }
+    auto end = std::chrono::steady_clock::now();
+    double micros =
+        std::chrono::duration<double, std::micro>(end - start).count() / 5000;
+    std::printf("%-32s %10.2f us/split %6zu pieces  (x%d)\n",
+                "linestring (~500 cells)", micros, pieces, 5000);
+  }
 
   return 0;
 }

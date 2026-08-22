@@ -15,105 +15,6 @@ namespace operations {
 using geometry::Coord;
 using linestr = std::vector<geometry::Coord>;
 
-/// Piecewise decomposition of a linestring according to intersection points
-std::vector<linestr> split_linestr(linestr linestring, linestr intersections) {
-  // Add line start point
-  linestring.push_back(intersections.at(0));
-  // Loop over each intersection, and add a new feature for each
-  std::vector<linestr> splits;
-  for (std::size_t j = 1; j < intersections.size(); j++) {
-    // Add the crossing point to the cleaned features geometry.
-    linestring.push_back(intersections.at(j));
-    splits.push_back(linestring);
-    linestring.clear();
-    linestring.push_back(intersections.at(j));
-  }
-  return (splits);
-}
-
-/// Find intersection points of a linestring with a raster grid
-std::vector<linestr>
-findIntersectionsLineString(geometry::LineString linestring,
-                            grid::Grid raster) {
-  linestr coords = linestring.coordinates;
-
-  std::vector<linestr> allsplits;
-  linestr linestr_piece;
-  for (std::size_t i = 0; i < coords.size() - 1; i++) {
-    geometry::Line line(coords.at(i), coords.at(i + 1));
-
-    // If the line starts and ends in different cells, it needs to be cleaned.
-    if (raster.cellIndex(line.start) != raster.cellIndex(line.end)) {
-      linestr intersections = raster.findIntersections(line);
-      if (intersections.size() == 1) {
-        // The segment changes cell, but no crossing point was found within
-        // it: the grid line it crosses passes exactly through the start or
-        // the end of the segment (the crossing at zero or full segment
-        // length was lost to rounding). Find which endpoint sits on the
-        // boundary between the two cells, and break the running piece
-        // there.
-        std::tuple<int, int> start_cell = raster.cellIndices(line.start);
-        std::tuple<int, int> end_cell = raster.cellIndices(line.end);
-        geometry::Coord g_start = raster.world_to_grid * line.start;
-        geometry::Coord g_end = raster.world_to_grid * line.end;
-        double d_start = std::numeric_limits<double>::max();
-        double d_end = std::numeric_limits<double>::max();
-        if (std::get<0>(start_cell) != std::get<0>(end_cell)) {
-          double boundary =
-              std::max(std::get<0>(start_cell), std::get<0>(end_cell));
-          d_start = std::min(d_start, std::fabs(g_start.x - boundary));
-          d_end = std::min(d_end, std::fabs(g_end.x - boundary));
-        }
-        if (std::get<1>(start_cell) != std::get<1>(end_cell)) {
-          double boundary =
-              std::max(std::get<1>(start_cell), std::get<1>(end_cell));
-          d_start = std::min(d_start, std::fabs(g_start.y - boundary));
-          d_end = std::min(d_end, std::fabs(g_end.y - boundary));
-        }
-        if (d_start <= d_end) {
-          // break at the start point: close any running piece there and
-          // carry on from it
-          if (!linestr_piece.empty()) {
-            if (!(linestr_piece.back() == line.start)) {
-              linestr_piece.push_back(line.start);
-            }
-            if (linestr_piece.size() >= 2) {
-              allsplits.push_back(linestr_piece);
-            }
-          }
-          linestr_piece = {line.start};
-        } else {
-          // break at the end point, treating it as the crossing
-          if (linestr_piece.empty() || !(linestr_piece.back() == line.start)) {
-            linestr_piece.push_back(line.start);
-          }
-          linestr_piece.push_back(line.end);
-          allsplits.push_back(linestr_piece);
-          linestr_piece = {};
-        }
-      } else {
-        std::vector<linestr> splits =
-            split_linestr(linestr_piece, intersections);
-        allsplits.insert(allsplits.end(), splits.begin(), splits.end());
-        if (line.end == intersections.back()) {
-          linestr_piece = {};
-        } else {
-          linestr_piece = {intersections.back()};
-        }
-      }
-    } else {
-      linestr_piece.push_back(coords.at(i));
-    }
-  }
-
-  if (linestr_piece.size() > 0) {
-    linestr_piece.push_back(coords.back());
-    allsplits.push_back(linestr_piece);
-  }
-
-  return (allsplits);
-}
-
 // The machinery below splits a polygon along the lines of a raster grid.
 // All of the work happens in grid coordinates, where the regular grid makes
 // cell borders exact: each ring vertex is transformed to grid space once
@@ -411,6 +312,67 @@ Coord ringInsidePoint(const linestr &points, double area2) {
                mid.y + dx / length * side * delta);
 }
 
+/// Call `emit` at each point where the segment from a to b crosses a grid
+/// line, strictly between the two, in order along the segment. Both
+/// coordinates of a crossing are exact: the crossed one is the integer
+/// level itself, and the other is snapped when it lands on a grid line
+/// too, so that a crossing through a cell corner is a single point.
+///
+/// The direction of travel is resolved once, up front, and the number of
+/// crossings on each axis is known before the walk, so the loop is a merge
+/// of two monotone sequences with no per-crossing sign tests.
+template <class Emit>
+void forEachCrossing(const Coord a, const Coord b, Emit &&emit) {
+  const double dx = b.x - a.x;
+  const double dy = b.y - a.y;
+
+  // Levels strictly between a and b on each axis, counted up front. Going
+  // up, they run from floor(a)+1 while below b; going down, from
+  // ceil(a)-1 while above b. Using counts rather than a comparison per
+  // step keeps the loop free of sign branches.
+  const double sx = (dx >= 0) ? 1.0 : -1.0;
+  const double sy = (dy >= 0) ? 1.0 : -1.0;
+  double kx = (dx >= 0) ? std::floor(a.x) + 1 : std::ceil(a.x) - 1;
+  double ky = (dy >= 0) ? std::floor(a.y) + 1 : std::ceil(a.y) - 1;
+  long nx =
+      (dx == 0)
+          ? 0
+          : (long)std::max(0.0, sx * (b.x - kx) + (isInteger(b.x) ? 0.0 : 1.0));
+  long ny =
+      (dy == 0)
+          ? 0
+          : (long)std::max(0.0, sy * (b.y - ky) + (isInteger(b.y) ? 0.0 : 1.0));
+
+  // Divide rather than multiply by a reciprocal: the crossing positions
+  // must come out bit for bit the same as they would from any other
+  // segment meeting the same grid line, or neighbouring cells stop sharing
+  // exactly the point between them.
+  while (nx > 0 || ny > 0) {
+    const double tx = (nx > 0) ? (kx - a.x) / dx : 2.0;
+    const double ty = (ny > 0) ? (ky - a.y) / dy : 2.0;
+    Coord crossing(0, 0);
+    if (tx <= ty) {
+      crossing = Coord(kx, snapped(a.y + tx * dy));
+      kx += sx;
+      nx--;
+      // a crossing through a cell corner consumes a level on both axes
+      if (ny > 0 && crossing.y == ky) {
+        ky += sy;
+        ny--;
+      }
+    } else {
+      crossing = Coord(snapped(a.x + ty * dx), ky);
+      ky += sy;
+      ny--;
+      if (nx > 0 && crossing.x == kx) {
+        kx += sx;
+        nx--;
+      }
+    }
+    emit(crossing);
+  }
+}
+
 /// Split a closed grid-space ring at every crossing with a grid line,
 /// breaking also at any vertex which lies on a grid line (a crossing may
 /// pass exactly through a vertex). Every returned piece lies within a
@@ -423,39 +385,8 @@ std::vector<linestr> splitRing(const linestr &ring) {
   for (std::size_t i = 0; i + 1 < ring.size(); i++) {
     const Coord a = ring[i];
     const Coord b = ring[i + 1];
-    double dx = b.x - a.x;
-    double dy = b.y - a.y;
 
-    // Crossings with the integer x and y levels strictly between a and b,
-    // in order of position along the segment
-    double sx = (dx > 0) ? 1.0 : -1.0;
-    double sy = (dy > 0) ? 1.0 : -1.0;
-    double kx = (sx > 0) ? std::floor(a.x) + 1 : std::ceil(a.x) - 1;
-    double ky = (sy > 0) ? std::floor(a.y) + 1 : std::ceil(a.y) - 1;
-    bool has_x = (dx != 0) && (sx > 0 ? kx < b.x : kx > b.x);
-    bool has_y = (dy != 0) && (sy > 0 ? ky < b.y : ky > b.y);
-    while (has_x || has_y) {
-      double tx = has_x ? (kx - a.x) / dx : 2.0;
-      double ty = has_y ? (ky - a.y) / dy : 2.0;
-      Coord crossing(0, 0);
-      if (tx <= ty) {
-        crossing = Coord(kx, snapped(a.y + tx * dy));
-        kx += sx;
-        has_x = (sx > 0) ? kx < b.x : kx > b.x;
-        // a crossing through a cell corner consumes both levels
-        if (has_y && crossing.y == ky) {
-          ky += sy;
-          has_y = (sy > 0) ? ky < b.y : ky > b.y;
-        }
-      } else {
-        crossing = Coord(snapped(a.x + ty * dx), ky);
-        ky += sy;
-        has_y = (sy > 0) ? ky < b.y : ky > b.y;
-        if (has_x && crossing.x == kx) {
-          kx += sx;
-          has_x = (sx > 0) ? kx < b.x : kx > b.x;
-        }
-      }
+    forEachCrossing(a, b, [&](const Coord crossing) {
       if (!(piece.back() == crossing)) {
         piece.push_back(crossing);
       }
@@ -463,7 +394,7 @@ std::vector<linestr> splitRing(const linestr &ring) {
         pieces.push_back(std::move(piece));
       }
       piece = {crossing};
-    }
+    });
 
     // the segment end: break here too if it lies on a grid line (unless it
     // is the ring's closing vertex, which ends the final piece anyway)
@@ -931,6 +862,95 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
     polygons.push_back(std::move(polygon));
   }
   return polygons;
+}
+
+/// The cell a segment lies in. Its endpoints may sit on cell borders, so
+/// the midpoint decides; a segment running along a grid line is taken to
+/// belong to the cell above or to the right of it, matching how
+/// grid::Grid::cellIndices resolves a point on a border.
+static CellIndex segmentCell(const Coord a, const Coord b) {
+  const double mx = (a.x + b.x) / 2;
+  const double my = (a.y + b.y) / 2;
+  return CellIndex((long)std::floor(mx), (long)std::floor(my));
+}
+
+LinePieces splitLineStringGrid(const linestr &coordinates,
+                               const grid::Grid &grid) {
+  LinePieces pieces;
+
+  // Into grid coordinates once, snapping vertices onto grid lines where
+  // they lie within tolerance, and dropping points repeated in place. Each
+  // is remembered against the input vertex it came from, so that the
+  // line's own points can be given back exactly as they arrived rather
+  // than as the transform round-trips them.
+  linestr line;
+  std::vector<std::size_t> line_source;
+  line.reserve(coordinates.size());
+  line_source.reserve(coordinates.size());
+  for (std::size_t i = 0; i < coordinates.size(); i++) {
+    Coord g = grid.world_to_grid * coordinates[i];
+    g.x = snapped(g.x);
+    g.y = snapped(g.y);
+    if (line.empty() || !(line.back() == g)) {
+      line.push_back(g);
+      line_source.push_back(i);
+    }
+  }
+  if (line.size() < 2) {
+    return pieces;
+  }
+
+  // Every point at which the line may change cell: its own vertices, and
+  // its crossings with the grid lines. A crossing has no input vertex
+  // behind it, marked here by an out-of-range source.
+  const std::size_t computed = coordinates.size();
+  linestr nodes;
+  std::vector<std::size_t> node_source;
+  nodes.reserve(line.size() * 2);
+  node_source.reserve(line.size() * 2);
+  nodes.push_back(line.front());
+  node_source.push_back(line_source.front());
+  for (std::size_t i = 0; i + 1 < line.size(); i++) {
+    forEachCrossing(line[i], line[i + 1], [&](const Coord crossing) {
+      if (!(nodes.back() == crossing)) {
+        nodes.push_back(crossing);
+        node_source.push_back(computed);
+      }
+    });
+    if (!(nodes.back() == line[i + 1])) {
+      nodes.push_back(line[i + 1]);
+      node_source.push_back(line_source[i + 1]);
+    }
+  }
+  if (nodes.size() < 2) {
+    return pieces;
+  }
+
+  // Run of consecutive spans sharing a cell becomes one piece. Taking the
+  // cell span by span, rather than breaking at every node, keeps a vertex
+  // which only touches a grid line from cutting the line in two.
+  auto emit = [&](std::size_t from, std::size_t to) {
+    for (std::size_t k = from; k <= to; k++) {
+      pieces.coordinates.push_back(node_source[k] < computed
+                                       ? coordinates[node_source[k]]
+                                       : grid.grid_to_world * nodes[k]);
+    }
+    pieces.endPiece();
+  };
+
+  std::size_t start = 0;
+  CellIndex current = segmentCell(nodes[0], nodes[1]);
+  for (std::size_t k = 1; k + 1 < nodes.size(); k++) {
+    CellIndex cell = segmentCell(nodes[k], nodes[k + 1]);
+    if (cell != current) {
+      emit(start, k);
+      start = k;
+      current = cell;
+    }
+  }
+  emit(start, nodes.size() - 1);
+
+  return pieces;
 }
 
 } // namespace operations

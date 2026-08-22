@@ -73,37 +73,92 @@ linestr convert_py2cpp(py::object linestring_py) {
   return linestring;
 }
 
-std::vector<py::object> convert_cpp2py(std::vector<linestr> splits) {
-  const py::object shapely_linestr =
-      py::module_::import("shapely.geometry").attr("LineString");
+/// Build shapely LineStrings from split pieces, in a single bulk call
+py::object lineStringsFromPieces(const operations::LinePieces &pieces) {
+  py::array_t<double> coords(
+      {(py::ssize_t)pieces.coordinates.size(), (py::ssize_t)2});
+  std::memcpy(coords.mutable_data(), pieces.coordinates.data(),
+              pieces.coordinates.size() * sizeof(geo::Coord));
 
-  std::vector<py::object> splits_py;
-  std::vector<std::vector<double>> split_py;
-  std::vector<double> point_py;
-  for (auto split : splits) {
-    for (auto point : split) {
-      point_py.push_back(point.x);
-      point_py.push_back(point.y);
-      split_py.push_back(point_py);
-      point_py.clear();
-    }
-    splits_py.push_back(shapely_linestr(split_py));
-    split_py.clear();
-  }
-  return splits_py;
+  py::module_ shapely = py::module_::import("shapely");
+  return shapely.attr("from_ragged_array")(
+      shapely.attr("GeometryType").attr("LINESTRING"), coords,
+      py::make_tuple(offsetArray(pieces.offsets)));
 }
 
-std::vector<py::object> splitLineString(py::object linestring_py, int nrows,
-                                        int ncols,
-                                        std::vector<double> transform) {
+py::object splitLineString(py::object linestring_py, int nrows, int ncols,
+                           std::vector<double> transform) {
   linestr linestring = convert_py2cpp(linestring_py);
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);
   grid::Grid grid(ncols, nrows, affine);
-  geometry::LineString line(linestring);
-  std::vector<linestr> splits =
-      operations::findIntersectionsLineString(line, grid);
-  return convert_cpp2py(splits);
+  operations::LinePieces splits =
+      operations::splitLineStringGrid(linestring, grid);
+  if (splits.size() == 0) {
+    return py::list();
+  }
+  return lineStringsFromPieces(splits);
+}
+
+py::object splitLineStrings(py::object linestrings, int nrows, int ncols,
+                            std::vector<double> transform) {
+  // Read every linestring in one call, as flat coordinate and offset
+  // arrays, so that splitting a whole table crosses into Python twice
+  // rather than twice per feature
+  py::module_ shapely = py::module_::import("shapely");
+  py::tuple ragged = shapely.attr("to_ragged_array")(linestrings);
+  int geometry_type = py::cast<int>(ragged[0].attr("value"));
+  int linestring_type = py::cast<int>(
+      shapely.attr("GeometryType").attr("LINESTRING").attr("value"));
+  if (geometry_type != linestring_type) {
+    throw py::type_error("split_linestrings expects LineString geometries; "
+                         "merge or explode MultiLineStrings before splitting");
+  }
+
+  using OffsetArray =
+      py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>;
+  auto coords =
+      py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(
+          ragged[1]);
+  py::tuple offsets = ragged[2];
+  auto line_offsets = OffsetArray::ensure(offsets[0]);
+
+  auto xy = coords.unchecked<2>();
+  auto line_at = line_offsets.unchecked<1>();
+
+  transform::Affine affine(transform[0], transform[1], transform[2],
+                           transform[3], transform[4], transform[5]);
+  grid::Grid grid(ncols, nrows, affine);
+
+  operations::LinePieces all_pieces;
+  std::vector<std::int64_t> parent;
+  linestr line;
+  py::ssize_t n_lines = line_at.shape(0) - 1;
+  for (py::ssize_t l = 0; l < n_lines; l++) {
+    line.clear();
+    line.reserve(line_at(l + 1) - line_at(l));
+    for (std::int64_t i = line_at(l); i < line_at(l + 1); i++) {
+      line.push_back(geo::Coord(xy(i, 0), xy(i, 1)));
+    }
+
+    operations::LinePieces pieces = operations::splitLineStringGrid(line, grid);
+
+    std::size_t base = all_pieces.coordinates.size();
+    all_pieces.coordinates.insert(all_pieces.coordinates.end(),
+                                  pieces.coordinates.begin(),
+                                  pieces.coordinates.end());
+    for (std::size_t p = 1; p < pieces.offsets.size(); p++) {
+      all_pieces.offsets.push_back(base + pieces.offsets[p]);
+      parent.push_back((std::int64_t)l);
+    }
+  }
+
+  py::array_t<std::int64_t> parent_out((py::ssize_t)parent.size());
+  if (!parent.empty()) {
+    std::memcpy(parent_out.mutable_data(), parent.data(),
+                parent.size() * sizeof(std::int64_t));
+  }
+  return py::make_tuple(lineStringsFromPieces(all_pieces), parent_out);
 }
 
 py::object splitPolygon(py::object polygon, int nrows, int ncols,
@@ -248,7 +303,10 @@ PYBIND11_MODULE(intersections, m) {
   m.doc() = "Vector geometry to grid intersections";
 
   m.def("split_linestring", &snail::splitLineString,
-        "Split LineString along a grid");
+        "Split LineString along a grid, returning LineString pieces");
+  m.def("split_linestrings", &snail::splitLineStrings,
+        "Split LineStrings along a grid, returning LineString pieces and the "
+        "index of the linestring each piece came from");
   m.def("get_cell_indices", &snail::get_cell_indices,
         "Get LineString cell indices in a grid");
   m.def("split_polygon", &snail::splitPolygon,

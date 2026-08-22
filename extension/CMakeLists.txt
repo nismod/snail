@@ -8,6 +8,7 @@ add_subdirectory(extern/Catch2)
 add_executable(run_tests
   ${CPP_TESTS_DIR}/run_tests.cpp
   ${CPP_TESTS_DIR}/tests_intersections.cpp
+  ${CPP_TESTS_DIR}/tests_stress.cpp
   ${CPP_TESTS_DIR}/tests_transform.cpp
   ${CPP_SRC_DIR}/operations.cpp
 )
