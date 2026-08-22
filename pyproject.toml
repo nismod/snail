@@ -32,7 +32,7 @@ dependencies = [
     "pyogrio",
     "igraph",
     "rasterio",
-    "shapely",
+    "shapely>=2",
     "scipy"
 ]
 
