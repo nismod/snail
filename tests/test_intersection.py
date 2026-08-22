@@ -1,6 +1,8 @@
 import os
+import random
 
 import geopandas as gpd
+import shapely
 import numpy as np
 import pytest
 from hilbertcurve.hilbertcurve import HilbertCurve
@@ -307,3 +309,57 @@ def test_core_split_linestring_zero_length_on_corner():
     )
     lengths = [geom.length for geom in parts]
     assert all(length > 0 for length in lengths)
+
+
+def _random_test_polygons(seed, count):
+    """Polygons chosen to stress grid splitting: some with holes, and some
+    with coordinates rounded onto grid lines to provoke degenerate cases
+    (vertices and edges exactly on a cell border)"""
+    rng = random.Random(seed)
+    polygons = []
+    while len(polygons) < count:
+        centre = Point(rng.uniform(1, 9), rng.uniform(1, 9))
+        radius = rng.uniform(0.05, 3.0)
+        resolution = rng.choice([1, 2, 4, 8])
+        geom = centre.buffer(radius, resolution=resolution)
+        if rng.random() < 0.4:
+            geom = geom.difference(centre.buffer(radius * 0.4, resolution=resolution))
+        if rng.random() < 0.5:
+            geom = shapely.set_precision(geom, 0.1)
+        if geom.geom_type == "Polygon" and geom.is_valid and not geom.is_empty:
+            polygons.append(geom)
+    return polygons
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [
+        (1, 0, 0, 0, 1, 0),  # y increasing north
+        (1, 0, 0, 0, -1, 10),  # y increasing south, as for a north-up raster
+        (0.5, 0, -1, 0, -0.5, 11),  # offset, fractional cell size
+    ],
+)
+def test_split_polygons_experimental_random(transform):
+    """Splitting must conserve area and yield valid pieces, each within a
+    single cell, however the polygon falls on the grid"""
+    grid = GridDefinition(crs=None, width=40, height=40, transform=transform)
+    cell_width, cell_height = abs(transform[0]), abs(transform[4])
+
+    polygons = _random_test_polygons(seed=20220309, count=200)
+    features = gpd.GeoDataFrame({"col1": range(len(polygons)), "geometry": polygons})
+    splits = split_polygons_experimental(features, grid)
+
+    assert splits.geometry.is_valid.all()
+    assert (splits.geometry.geom_type == "Polygon").all()
+
+    # each polygon's pieces account for exactly its area
+    areas = splits.geometry.area.groupby(splits["col1"]).sum()
+    for i, polygon in enumerate(polygons):
+        assert areas[i] == pytest.approx(polygon.area, rel=1e-9), (
+            f"polygon {i} not conserved: {polygon.wkt}"
+        )
+
+    # every piece lies within one cell, so is no larger than one
+    bounds = splits.geometry.bounds
+    assert ((bounds.maxx - bounds.minx) <= cell_width + 1e-9).all()
+    assert ((bounds.maxy - bounds.miny) <= cell_height + 1e-9).all()

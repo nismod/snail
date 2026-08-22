@@ -227,8 +227,9 @@ def split_polygons_experimental(
     is assumed to be valid) along the grid lines and assemble the polygon
     pieces that cover each cell.
     """
-    pieces = []
-    polygon_features["split"] = 0
+    geometry = []
+    parent = []
+    split = []
     for i in tqdm(range(len(polygon_features))):
         # split area
         geom_splits = split_polygon(
@@ -238,13 +239,14 @@ def split_polygons_experimental(
             grid.transform,
         )
         # add to collection
-        for j, s in enumerate(geom_splits):
-            new_row = polygon_features.iloc[i].copy()
-            new_row.geometry = s
-            new_row["split"] = j
-            pieces.append(new_row)
-    logging.info(f"  Split {len(polygon_features)} areas into {len(pieces)} pieces")
-    splits_df = geopandas.GeoDataFrame(pieces)
+        geometry.extend(geom_splits)
+        parent.extend([i] * len(geom_splits))
+        split.extend(range(len(geom_splits)))
+    logging.info(f"  Split {len(polygon_features)} areas into {len(geometry)} pieces")
+    # repeat each parent feature's attributes for each of its pieces
+    splits_df = geopandas.GeoDataFrame(polygon_features.iloc[parent])
+    splits_df["split"] = split
+    splits_df.geometry = numpy.array(geometry, dtype=object)
     splits_df.crs = grid.crs
     return splits_df
 

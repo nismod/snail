@@ -13,3 +13,12 @@ add_executable(run_tests
 )
 target_include_directories(run_tests PUBLIC ${CPP_SRC_DIR})
 target_link_libraries(run_tests PRIVATE Catch2::Catch2)
+
+add_executable(run_benchmarks
+  benchmarks/benchmark_split.cpp
+  ${CPP_SRC_DIR}/operations.cpp
+)
+target_include_directories(run_benchmarks PUBLIC ${CPP_SRC_DIR})
+if(NOT MSVC)
+  target_compile_options(run_benchmarks PRIVATE -O2)
+endif()

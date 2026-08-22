@@ -216,6 +216,30 @@ struct Piece {
   bool used = false;
 };
 
+/// The ring pieces bucketed to a single cell, plus the parity of their
+/// crossings of the horizontal line through the cell's centre - tracked so
+/// the interior scan can update its inside/outside status from the cells it
+/// encounters, without testing points against the whole set of rings
+struct CellPieces {
+  std::vector<Piece> pieces;
+  /// true if the boundary within this cell crosses the row-centre line an
+  /// odd number of times
+  bool crossed = false;
+};
+
+/// Order cells by row, then column, so the interior scan can sweep along
+/// each row of cells
+struct RowMajorOrder {
+  bool operator()(const CellIndex &a, const CellIndex &b) const {
+    if (a.second != b.second) {
+      return a.second < b.second;
+    }
+    return a.first < b.first;
+  }
+};
+
+using CellMap = std::map<CellIndex, CellPieces, RowMajorOrder>;
+
 /// Border geometry of a single grid cell: integer corner coordinates and a
 /// counter-clockwise border parameterisation, in grid space
 struct CellBorder {
@@ -230,6 +254,20 @@ struct CellBorder {
     static const int du[4] = {0, 1, 1, 0};
     static const int dv[4] = {0, 0, 1, 1};
     return Coord(ci + du[k], cj + dv[k]);
+  }
+
+  /// Direction of the counter-clockwise border walk at parameter t
+  static Coord direction(double t) {
+    switch ((int)std::floor(t)) {
+    case 0:
+      return Coord(1, 0); // bottom edge, left to right
+    case 1:
+      return Coord(0, 1); // right edge, upwards
+    case 2:
+      return Coord(-1, 0); // top edge, right to left
+    default:
+      return Coord(0, -1); // left edge, downwards
+    }
   }
 
   /// Position of a (near-border) grid-space point along the border walk, in
@@ -253,6 +291,18 @@ struct CellBorder {
     return (t >= 4.0) ? t - 4.0 : t;
   }
 };
+
+/// The angle swept turning clockwise from direction `from` to direction
+/// `to`, in (0, 2*PI]. Directions which double back exactly (a zero turn)
+/// are reported as a full turn, so that retracing the way we came is only
+/// ever chosen as a last resort.
+double clockwiseTurn(const Coord from, const Coord to) {
+  double turn = std::atan2(from.y, from.x) - std::atan2(to.y, to.x);
+  while (turn <= BORDER_PARAM_TOL) {
+    turn += 2 * utils::PI;
+  }
+  return turn;
+}
 
 /// Index of the longest segment of a piece
 std::size_t longestSegment(const linestr &points) {
@@ -447,7 +497,7 @@ void assembleCell(const CellIndex index, std::vector<Piece> &pieces,
   CellBorder border(index);
 
   std::vector<Piece *> chains;
-  std::vector<Piece *> closed_holes;
+  std::vector<linestr> holes;
   std::vector<geometry::Polygon> faces;
   for (Piece &piece : pieces) {
     if (!piece.closed) {
@@ -456,7 +506,8 @@ void assembleCell(const CellIndex index, std::vector<Piece> &pieces,
       // a ring that never leaves the cell is a piece in itself
       faces.push_back(geometry::Polygon{piece.points, {}});
     } else if (piece.area2 < 0) {
-      closed_holes.push_back(&piece);
+      // an interior ring that never leaves the cell
+      holes.push_back(piece.points);
     }
     // pieces with exactly zero area are degenerate - ignored
   }
@@ -502,6 +553,7 @@ void assembleCell(const CellIndex index, std::vector<Piece> &pieces,
       Piece *next = nullptr;
       double best_dt = 5.0;
       double start_dt = 5.0;
+      std::vector<Piece *> coincident;
       for (Piece *candidate : chains) {
         if (candidate->used && candidate != start) {
           continue;
@@ -515,6 +567,16 @@ void assembleCell(const CellIndex index, std::vector<Piece> &pieces,
         if (dt > 4.0 - BORDER_PARAM_TOL) {
           dt = 0.0;
         }
+        if (dt < BORDER_PARAM_TOL) {
+          // This chain begins exactly where we are: the boundary touches
+          // the cell border here without crossing it. Whether to follow the
+          // chain or carry on along the border is decided below, by which
+          // of them comes first turning clockwise away from the direction
+          // we arrived from - the rule which keeps the covered area on our
+          // left, as it is along every chain.
+          coincident.push_back(candidate);
+          continue;
+        }
         if (dt < best_dt) {
           best_dt = dt;
           next = candidate;
@@ -527,6 +589,29 @@ void assembleCell(const CellIndex index, std::vector<Piece> &pieces,
       if (start_dt <= best_dt + BORDER_PARAM_TOL) {
         best_dt = start_dt;
         next = start;
+      }
+
+      if (!coincident.empty()) {
+        // direction we arrived from, reversed
+        const linestr &arriving = current->points;
+        Coord back(arriving[arriving.size() - 2].x - arriving.back().x,
+                   arriving[arriving.size() - 2].y - arriving.back().y);
+        // Carrying on along the border is the alternative to beat. A chain
+        // ties with it when the chain runs along the border itself, and
+        // then the chain must win: it is the same path, and leaving it
+        // untraced would strand it as a piece of its own.
+        double least_turn =
+            clockwiseTurn(back, CellBorder::direction(t)) + BORDER_PARAM_TOL;
+        for (Piece *candidate : coincident) {
+          Coord away(candidate->points[1].x - candidate->points[0].x,
+                     candidate->points[1].y - candidate->points[0].y);
+          double turn = clockwiseTurn(back, away);
+          if (turn < least_turn) {
+            least_turn = turn;
+            next = candidate;
+            best_dt = 0.0;
+          }
+        }
       }
 
       // Walk the border, adding any corners passed on the way, and noding
@@ -582,16 +667,26 @@ void assembleCell(const CellIndex index, std::vector<Piece> &pieces,
       std::vector<linestr> simple_rings;
       splitAtRepeatedVertices(ring, simple_rings);
       for (const linestr &simple : simple_rings) {
-        if (simple.size() >= 4 && ringSignedArea2(simple) > 0) {
+        if (simple.size() < 4) {
+          continue;
+        }
+        double area2 = ringSignedArea2(simple);
+        if (area2 > 0) {
           faces.push_back(geometry::Polygon{simple, {}});
+        } else if (area2 < 0) {
+          // An interior ring which meets the cell border only where it
+          // touches it (tangentially), so that it was split into chains
+          // rather than staying a closed piece: traced clockwise, it bounds
+          // a hole rather than a covered region.
+          holes.push_back(simple);
         }
       }
     }
   }
 
-  // Attach holes that never leave the cell to the face that contains them
-  for (Piece *hole : closed_holes) {
-    Coord inside = ringInsidePoint(hole->points, hole->area2);
+  // Attach each interior ring to the face that contains it
+  for (const linestr &hole : holes) {
+    Coord inside = ringInsidePoint(hole, ringSignedArea2(hole));
     std::size_t target = faces.size();
     for (std::size_t i = 0; i < faces.size(); i++) {
       if (pointInRing(inside, faces[i].exterior)) {
@@ -616,7 +711,7 @@ void assembleCell(const CellIndex index, std::vector<Piece> &pieces,
         }
       }
     }
-    faces[target].interiors.push_back(hole->points);
+    faces[target].interiors.push_back(hole);
   }
 
   results.insert(results.end(), faces.begin(), faces.end());
@@ -630,13 +725,8 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
   // vertices onto grid lines where they lie within tolerance; drop
   // consecutive duplicate points, close each ring, and orient rings so that
   // the polygon interior is always on the left of the direction of travel
-  // in grid space (exterior counter-clockwise, holes clockwise). The
-  // grid-space bounding box is folded into the same pass.
+  // in grid space (exterior counter-clockwise, holes clockwise).
   std::vector<linestr> rings;
-  double gx_min = std::numeric_limits<double>::max();
-  double gx_max = std::numeric_limits<double>::lowest();
-  double gy_min = std::numeric_limits<double>::max();
-  double gy_max = std::numeric_limits<double>::lowest();
   for (std::size_t r = 0; r < rings_in.size(); r++) {
     linestr ring;
     ring.reserve(rings_in[r].size() + 1);
@@ -646,10 +736,6 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
       g.y = snapped(g.y);
       if (ring.empty() || !(ring.back() == g)) {
         ring.push_back(g);
-        gx_min = std::min(gx_min, g.x);
-        gx_max = std::max(gx_max, g.x);
-        gy_min = std::min(gy_min, g.y);
-        gy_max = std::max(gy_max, g.y);
       }
     }
     if (!ring.empty() && !(ring.front() == ring.back())) {
@@ -676,7 +762,7 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
 
   // Split each ring at every grid line crossing and bucket the resulting
   // pieces by the cell they lie in
-  std::map<CellIndex, std::vector<Piece>> cell_pieces;
+  CellMap cell_pieces;
   for (const linestr &ring : rings) {
     std::vector<linestr> pieces = splitRing(ring);
     if (pieces.empty()) {
@@ -713,17 +799,25 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
           continue;
         }
         piece.area2 = ringSignedArea2(piece.points);
-        // bucket by the side the piece's own interior is on
+        // bucket by the side the piece's own interior is on; being closed,
+        // it crosses the row-centre line an even number of times
         double side = (piece.area2 < 0) ? -1.0 : 1.0;
         CellIndex cell = pieceCell(piece.points, side);
-        cell_pieces[cell].push_back(std::move(piece));
+        cell_pieces[cell].pieces.push_back(std::move(piece));
       } else {
         // an open chain: the polygon interior is on the left
         CellIndex cell = pieceCell(piece.points, 1.0);
         CellBorder border(cell);
         piece.t_in = border.parameter(piece.points.front());
         piece.t_out = border.parameter(piece.points.back());
-        cell_pieces[cell].push_back(std::move(piece));
+        CellPieces &content = cell_pieces[cell];
+        // the chain crosses the row-centre line an odd number of times
+        // exactly when its endpoints lie on opposite sides of it
+        double level = cell.second + 0.5;
+        content.crossed =
+            content.crossed != ((piece.points.front().y < level) !=
+                                (piece.points.back().y < level));
+        content.pieces.push_back(std::move(piece));
       }
     }
   }
@@ -731,59 +825,29 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
   // Assemble the pieces covering each cell crossed by a ring
   std::vector<geometry::Polygon> results;
   for (auto &entry : cell_pieces) {
-    assembleCell(entry.first, entry.second, results);
+    assembleCell(entry.first, entry.second.pieces, results);
   }
 
-  // Cells wholly inside the polygon become full cell boxes. Sweep a
-  // scanline through each row of cell centres: the crossings of the
-  // boundary with each scanline pair up (0,1), (2,3)... into intervals
-  // interior to the polygon (the even-odd rule, correct in the presence of
-  // holes), and the half-open crossing rule guarantees an even crossing
-  // count for closed rings. All crossings are collected in a single pass
-  // over the ring edges.
-  long i_min = (long)std::floor(gx_min);
-  long i_max = (long)std::floor(gx_max);
-  long j_min = (long)std::floor(gy_min);
-  long j_max = (long)std::floor(gy_max);
-  std::vector<std::vector<double>> row_crossings(j_max - j_min + 1);
-  for (const linestr &ring : rings) {
-    for (std::size_t i = 0; i + 1 < ring.size(); i++) {
-      const Coord a = ring[i];
-      const Coord b = ring[i + 1];
-      if (a.y == b.y) {
-        continue;
-      }
-      // the scanline levels j + 0.5 crossed by this edge: those in
-      // (y_lo, y_hi], matching the half-open rule (a.y < level) != (b.y <
-      // level)
-      double y_lo = std::min(a.y, b.y);
-      double y_hi = std::max(a.y, b.y);
-      long j_first = std::max((long)std::floor(y_lo - 0.5) + 1, j_min);
-      long j_last = std::min((long)std::floor(y_hi - 0.5), j_max);
-      for (long j = j_first; j <= j_last; j++) {
-        double level = j + 0.5;
-        double t = (level - a.y) / (b.y - a.y);
-        row_crossings[j - j_min].push_back(a.x + t * (b.x - a.x));
-      }
-    }
-  }
-  for (long j = j_min; j <= j_max; j++) {
-    std::vector<double> &xs = row_crossings[j - j_min];
-    if (xs.empty()) {
-      continue;
-    }
-    std::sort(xs.begin(), xs.end());
-    for (std::size_t k = 0; k + 1 < xs.size(); k += 2) {
-      // columns whose cell centre i + 0.5 lies within the interior interval
-      long i_first = std::max((long)std::floor(xs[k] - 0.5) + 1, i_min);
-      long i_last = std::min((long)std::floor(xs[k + 1] - 0.5), i_max);
-      for (long i = i_first; i <= i_last; i++) {
-        if (cell_pieces.count(CellIndex(i, j))) {
-          // cells crossed by the boundary are assembled above
-          continue;
+  // Cells wholly inside the polygon become full cell boxes. Scan each row
+  // of boundary cells in column order, tracking whether the row of cells in
+  // between is inside the polygon: the status can only change across a cell
+  // crossed by the boundary, and it flips there exactly when the boundary
+  // pieces in the cell cross the row's centre line an odd number of times
+  // (recorded per cell during bucketing). The half-open crossing rule makes
+  // the parity along each whole row even, so every row ends outside.
+  for (auto it = cell_pieces.begin(); it != cell_pieces.end();) {
+    long j = it->first.second;
+    bool inside = false;
+    long previous_i = 0;
+    for (; it != cell_pieces.end() && it->first.second == j; ++it) {
+      long i = it->first.first;
+      if (inside) {
+        for (long k = previous_i + 1; k < i; k++) {
+          results.push_back(cellBoxPolygon(CellIndex(k, j)));
         }
-        results.push_back(cellBoxPolygon(CellIndex(i, j)));
       }
+      inside = inside != it->second.crossed;
+      previous_i = i;
     }
   }
 
