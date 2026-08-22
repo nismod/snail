@@ -106,9 +106,13 @@ bool pointInRing(const Coord p, const Coord *ring, std::size_t count) {
 /// Cell column/row index
 using CellIndex = std::pair<long, long>;
 
-/// A piece of a polygon ring lying within a single grid cell
+/// A piece of a polygon ring lying within a single grid cell, as a span of
+/// the arena its points were written to. Owning nothing keeps a piece
+/// cheap to sort and keeps the points of neighbouring pieces together in
+/// memory, which is how they are walked.
 struct Piece {
-  linestr points;
+  std::size_t begin = 0;
+  std::size_t end = 0;
   /// closed pieces are rings that never cross a grid line (or loops pinched
   /// at a single border point); open pieces are chains crossing the cell
   bool closed = false;
@@ -120,6 +124,8 @@ struct Piece {
   bool used = false;
   /// the cell this piece lies in
   CellIndex cell{0, 0};
+
+  std::size_t size() const { return end - begin; }
 };
 
 /// Order pieces by the row, then the column, of the cell they lie in, so
@@ -236,15 +242,16 @@ std::size_t longestSegment(const Coord *points, std::size_t count) {
 /// cell exactly. For pieces that run along a grid line, take the cell on
 /// the requested side of the direction of travel: side_sign +1 for the
 /// left, -1 for the right.
-CellIndex pieceCell(const linestr &points, double side_sign) {
+CellIndex pieceCell(const Coord *points, std::size_t count, double side_sign) {
   // any vertex strictly inside a cell
-  for (const Coord &point : points) {
+  for (std::size_t k = 0; k < count; k++) {
+    const Coord &point = points[k];
     if (!isInteger(point.x) && !isInteger(point.y)) {
       return CellIndex((long)std::floor(point.x), (long)std::floor(point.y));
     }
   }
   // else any segment midpoint strictly inside a cell
-  for (std::size_t i = 0; i + 1 < points.size(); i++) {
+  for (std::size_t i = 0; i + 1 < count; i++) {
     Coord mid((points[i].x + points[i + 1].x) / 2,
               (points[i].y + points[i + 1].y) / 2);
     if (!isInteger(mid.x) && !isInteger(mid.y)) {
@@ -253,8 +260,8 @@ CellIndex pieceCell(const linestr &points, double side_sign) {
   }
   // else the piece runs along a grid line: take the cell on the requested
   // side of the direction of travel
-  const Coord front = points.front();
-  const Coord back = points.back();
+  const Coord front = points[0];
+  const Coord back = points[count - 1];
   double dx = back.x - front.x;
   double dy = back.y - front.y;
   double nx = -dy * side_sign;
@@ -392,39 +399,47 @@ void forEachCrossing(const Coord a, const Coord b, Emit &&emit) {
 /// single cell. Breaking at a vertex which only touches a grid line is
 /// harmless: the two chains reconnect seamlessly when the cell is
 /// assembled.
-std::vector<linestr> splitRing(const linestr &ring) {
-  std::vector<linestr> pieces;
-  linestr piece = {ring.front()};
-  for (std::size_t i = 0; i + 1 < ring.size(); i++) {
-    const Coord a = ring[i];
-    const Coord b = ring[i + 1];
+void splitRing(const linestr &ring, std::vector<Coord> &arena,
+               std::vector<Piece> &pieces) {
+  std::size_t begin = arena.size();
+  arena.push_back(ring.front());
 
-    forEachCrossing(a, b, [&](const Coord crossing) {
-      if (!(piece.back() == crossing)) {
-        piece.push_back(crossing);
-      }
-      if (piece.size() >= 2) {
-        pieces.push_back(std::move(piece));
-      }
-      piece = {crossing};
-    });
+  // close off the piece built so far, and start the next one at the point
+  // the two share
+  auto breakAt = [&](const Coord at) {
+    if (!(arena.back() == at)) {
+      arena.push_back(at);
+    }
+    if (arena.size() - begin >= 2) {
+      Piece piece;
+      piece.begin = begin;
+      piece.end = arena.size();
+      pieces.push_back(piece);
+    }
+    begin = arena.size();
+    arena.push_back(at);
+  };
+
+  for (std::size_t i = 0; i + 1 < ring.size(); i++) {
+    const Coord b = ring[i + 1];
+    forEachCrossing(ring[i], b, breakAt);
 
     // the segment end: break here too if it lies on a grid line (unless it
     // is the ring's closing vertex, which ends the final piece anyway)
-    if (!(piece.back() == b)) {
-      piece.push_back(b);
-    }
     if (i + 2 < ring.size() && (isInteger(b.x) || isInteger(b.y))) {
-      if (piece.size() >= 2) {
-        pieces.push_back(std::move(piece));
-      }
-      piece = {b};
+      breakAt(b);
+    } else if (!(arena.back() == b)) {
+      arena.push_back(b);
     }
   }
-  if (piece.size() >= 2) {
-    pieces.push_back(std::move(piece));
+  if (arena.size() - begin >= 2) {
+    Piece piece;
+    piece.begin = begin;
+    piece.end = arena.size();
+    pieces.push_back(piece);
+  } else {
+    arena.erase(arena.begin() + begin, arena.end());
   }
-  return pieces;
 }
 
 /// Split a traced ring into simple rings at any repeated (pinch) vertices,
@@ -463,7 +478,11 @@ void splitAtRepeatedVertices(const linestr &ring, std::vector<linestr> &out) {
 struct Workspace {
   // per split
   std::vector<linestr> rings;
+  /// the points of every ring piece, laid end to end
+  std::vector<Coord> pieces;
   std::vector<Piece> bucketed;
+  /// pieces of the ring currently being split, before they are bucketed
+  std::vector<Piece> raw;
   std::vector<BoundaryCell> boundary;
   // per cell
   std::vector<Piece *> chains;
@@ -517,7 +536,8 @@ void appendSimpleRings(const Coord *points, std::size_t count,
 /// each covered region is traced by alternately following pieces and border
 /// arcs.
 void assembleCell(const CellIndex index, Piece *first, Piece *last,
-                  Workspace &work, PolygonPieces &results) {
+                  const Coord *points, Workspace &work,
+                  PolygonPieces &results) {
   CellBorder border(index);
 
   work.chains.clear();
@@ -532,7 +552,7 @@ void assembleCell(const CellIndex index, Piece *first, Piece *last,
     } else if (piece.area2 != 0) {
       // a ring that never leaves the cell stands as it is: a piece of its
       // own if counter-clockwise, an interior ring if clockwise
-      appendSimpleRings(piece.points.data(), piece.points.size(), work);
+      appendSimpleRings(points + piece.begin, piece.size(), work);
     }
     // pieces with exactly zero area are degenerate - ignored
   }
@@ -540,10 +560,9 @@ void assembleCell(const CellIndex index, Piece *first, Piece *last,
   // Chain endpoints, so border walks can be noded wherever the polygon
   // boundary touches the border
   for (Piece *chain : work.chains) {
+    work.endpoints.push_back(std::make_pair(chain->t_in, points[chain->begin]));
     work.endpoints.push_back(
-        std::make_pair(chain->t_in, chain->points.front()));
-    work.endpoints.push_back(
-        std::make_pair(chain->t_out, chain->points.back()));
+        std::make_pair(chain->t_out, points[chain->end - 1]));
   }
 
   // Weld points within floating-point noise of each other as rings are
@@ -572,8 +591,8 @@ void assembleCell(const CellIndex index, Piece *first, Piece *last,
     // each iteration consumes a chain, so this terminates
     while (true) {
       current->used = true;
-      for (const Coord &point : current->points) {
-        append_point(point);
+      for (std::size_t k = current->begin; k < current->end; k++) {
+        append_point(points[k]);
       }
 
       // Find the next chain entry, walking counter-clockwise around the
@@ -623,9 +642,10 @@ void assembleCell(const CellIndex index, Piece *first, Piece *last,
 
       if (!work.coincident.empty()) {
         // direction we arrived from, reversed
-        const linestr &arriving = current->points;
-        Coord back(arriving[arriving.size() - 2].x - arriving.back().x,
-                   arriving[arriving.size() - 2].y - arriving.back().y);
+        const Coord *arriving = points + current->begin;
+        const std::size_t arrived = current->size();
+        Coord back(arriving[arrived - 2].x - arriving[arrived - 1].x,
+                   arriving[arrived - 2].y - arriving[arrived - 1].y);
         // Carrying on along the border is the alternative to beat. A chain
         // ties with it when the chain runs along the border itself, and
         // then the chain must win: it is the same path, and leaving it
@@ -633,8 +653,9 @@ void assembleCell(const CellIndex index, Piece *first, Piece *last,
         double least_turn =
             clockwiseTurn(back, CellBorder::direction(t)) + BORDER_PARAM_TOL;
         for (Piece *candidate : work.coincident) {
-          Coord away(candidate->points[1].x - candidate->points[0].x,
-                     candidate->points[1].y - candidate->points[0].y);
+          Coord away(
+              points[candidate->begin + 1].x - points[candidate->begin].x,
+              points[candidate->begin + 1].y - points[candidate->begin].y);
           double turn = clockwiseTurn(back, away);
           if (turn < least_turn) {
             least_turn = turn;
@@ -834,54 +855,56 @@ PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
 
   // Split each ring at every grid line crossing and bucket the resulting
   // pieces by the cell they lie in
+  std::vector<Coord> &arena = work.pieces;
+  arena.clear();
+  std::vector<Piece> &raw = work.raw;
   for (std::size_t r = 0; r < used_rings; r++) {
-    const linestr &ring = rings[r];
-    std::vector<linestr> pieces = splitRing(ring);
-    if (pieces.empty()) {
+    raw.clear();
+    splitRing(rings[r], arena, raw);
+    if (raw.empty()) {
       continue;
     }
 
     // When the ring starts partway through a cell, the last and first
-    // pieces are two halves of the same chain: merge them. When the ring
-    // happens to start on a grid line, keep the break (chains must only
-    // meet the cell border at their endpoints).
-    const Coord junction = ring.front();
-    if (pieces.size() >= 2 && !isInteger(junction.x) &&
-        !isInteger(junction.y) &&
-        pieces.back().back() == pieces.front().front()) {
-      linestr merged = std::move(pieces.back());
-      merged.insert(merged.end(), pieces.front().begin() + 1,
-                    pieces.front().end());
-      pieces.front() = std::move(merged);
-      pieces.pop_back();
+    // pieces are two halves of the same chain: join them, by copying the
+    // first onto the end of the last. When the ring happens to start on a
+    // grid line, keep the break (chains must only meet the cell border at
+    // their endpoints).
+    const Coord junction = rings[r].front();
+    if (raw.size() >= 2 && !isInteger(junction.x) && !isInteger(junction.y) &&
+        arena[raw.back().end - 1] == arena[raw.front().begin]) {
+      Piece &last = raw.back();
+      const Piece first = raw.front();
+      arena.insert(arena.end(), arena.begin() + first.begin + 1,
+                   arena.begin() + first.end);
+      last.end = arena.size();
+      raw.front() = last;
+      raw.pop_back();
     }
 
-    for (linestr &points : pieces) {
-      Piece piece;
-      piece.points = std::move(points);
-      bool nearly_closed =
-          std::fabs(piece.points.front().x - piece.points.back().x) <
-              SNAP_TOL &&
-          std::fabs(piece.points.front().y - piece.points.back().y) < SNAP_TOL;
-      piece.closed = nearly_closed;
+    for (Piece piece : raw) {
+      const Coord *points = arena.data() + piece.begin;
+      const std::size_t count = piece.size();
+      piece.closed = std::fabs(points[0].x - points[count - 1].x) < SNAP_TOL &&
+                     std::fabs(points[0].y - points[count - 1].y) < SNAP_TOL;
       if (piece.closed) {
         // snap closed
-        piece.points.back() = piece.points.front();
-        if (piece.points.size() < 4) {
+        arena[piece.end - 1] = points[0];
+        if (count < 4) {
           continue;
         }
-        piece.area2 = ringSignedArea2(piece.points);
+        piece.area2 = ringSignedArea2(points, count);
         // bucket by the side the piece's own interior is on
         double side = (piece.area2 < 0) ? -1.0 : 1.0;
-        piece.cell = pieceCell(piece.points, side);
+        piece.cell = pieceCell(points, count, side);
       } else {
         // an open chain: the polygon interior is on the left
-        piece.cell = pieceCell(piece.points, 1.0);
+        piece.cell = pieceCell(points, count, 1.0);
         CellBorder border(piece.cell);
-        piece.t_in = border.parameter(piece.points.front());
-        piece.t_out = border.parameter(piece.points.back());
+        piece.t_in = border.parameter(points[0]);
+        piece.t_out = border.parameter(points[count - 1]);
       }
-      bucketed.push_back(std::move(piece));
+      bucketed.push_back(piece);
     }
   }
 
@@ -906,13 +929,13 @@ PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
     while (end < bucketed.size() && bucketed[end].cell == cell) {
       const Piece &piece = bucketed[end];
       if (!piece.closed) {
-        crossed = crossed != ((piece.points.front().y < level) !=
-                              (piece.points.back().y < level));
+        crossed = crossed != ((arena[piece.begin].y < level) !=
+                              (arena[piece.end - 1].y < level));
       }
       end++;
     }
-    assembleCell(cell, bucketed.data() + start, bucketed.data() + end, work,
-                 results);
+    assembleCell(cell, bucketed.data() + start, bucketed.data() + end,
+                 arena.data(), work, results);
     boundary.push_back(BoundaryCell{cell, crossed});
     start = end;
   }
