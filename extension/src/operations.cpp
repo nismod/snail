@@ -2,7 +2,6 @@
 #include <cmath>     /// floor, fabs, fmod, hypot, round
 #include <cstddef>
 #include <limits>
-#include <map>
 #include <utility> /// pair
 #include <vector>
 
@@ -214,31 +213,28 @@ struct Piece {
   double t_in = 0;
   double t_out = 0;
   bool used = false;
+  /// the cell this piece lies in
+  CellIndex cell{0, 0};
 };
 
-/// The ring pieces bucketed to a single cell, plus the parity of their
-/// crossings of the horizontal line through the cell's centre - tracked so
-/// the interior scan can update its inside/outside status from the cells it
-/// encounters, without testing points against the whole set of rings
-struct CellPieces {
-  std::vector<Piece> pieces;
-  /// true if the boundary within this cell crosses the row-centre line an
-  /// odd number of times
-  bool crossed = false;
-};
-
-/// Order cells by row, then column, so the interior scan can sweep along
-/// each row of cells
-struct RowMajorOrder {
-  bool operator()(const CellIndex &a, const CellIndex &b) const {
-    if (a.second != b.second) {
-      return a.second < b.second;
-    }
-    return a.first < b.first;
+/// Order pieces by the row, then the column, of the cell they lie in, so
+/// that the pieces of a cell end up adjacent and the cells themselves in
+/// the order the interior scan sweeps them
+bool rowMajorOrder(const Piece &a, const Piece &b) {
+  if (a.cell.second != b.cell.second) {
+    return a.cell.second < b.cell.second;
   }
-};
+  return a.cell.first < b.cell.first;
+}
 
-using CellMap = std::map<CellIndex, CellPieces, RowMajorOrder>;
+/// A cell the polygon boundary passes through, and whether that boundary
+/// crosses the horizontal line through the cell centre an odd number of
+/// times - which is what tells the interior scan to change its
+/// inside/outside status as it passes this cell
+struct BoundaryCell {
+  CellIndex cell;
+  bool crossed;
+};
 
 /// Border geometry of a single grid cell: integer corner coordinates and a
 /// counter-clockwise border parameterisation, in grid space
@@ -371,6 +367,30 @@ geometry::Polygon cellBoxPolygon(const CellIndex index) {
   return geometry::Polygon{ring, {}};
 }
 
+/// Append a whole cell as a polygon piece, without allocating
+void appendCellBox(const CellIndex index, PolygonPieces &pieces) {
+  CellBorder border(index);
+  for (int k = 0; k < 4; k++) {
+    pieces.coordinates.push_back(border.corner(k));
+  }
+  pieces.coordinates.push_back(border.corner(0));
+  pieces.endRing();
+  pieces.endPolygon();
+}
+
+/// Append an assembled polygon as a piece
+void appendPolygon(const geometry::Polygon &polygon, PolygonPieces &pieces) {
+  pieces.coordinates.insert(pieces.coordinates.end(), polygon.exterior.begin(),
+                            polygon.exterior.end());
+  pieces.endRing();
+  for (const linestr &interior : polygon.interiors) {
+    pieces.coordinates.insert(pieces.coordinates.end(), interior.begin(),
+                              interior.end());
+    pieces.endRing();
+  }
+  pieces.endPolygon();
+}
+
 /// A point just inside a closed ring piece: the midpoint of its longest
 /// segment, nudged towards the ring's own interior
 Coord ringInsidePoint(const linestr &points, double area2) {
@@ -492,14 +512,15 @@ void splitAtRepeatedVertices(const linestr &ring, std::vector<linestr> &out) {
 /// holes clockwise), and the cell border is walked counter-clockwise, so
 /// each covered region is traced by alternately following pieces and border
 /// arcs.
-void assembleCell(const CellIndex index, std::vector<Piece> &pieces,
-                  std::vector<geometry::Polygon> &results) {
+void assembleCell(const CellIndex index, Piece *first, Piece *last,
+                  PolygonPieces &results) {
   CellBorder border(index);
 
   std::vector<Piece *> chains;
   std::vector<linestr> holes;
   std::vector<geometry::Polygon> faces;
-  for (Piece &piece : pieces) {
+  for (Piece *it = first; it != last; ++it) {
+    Piece &piece = *it;
     if (!piece.closed) {
       chains.push_back(&piece);
     } else if (piece.area2 > 0) {
@@ -714,13 +735,15 @@ void assembleCell(const CellIndex index, std::vector<Piece> &pieces,
     faces[target].interiors.push_back(hole);
   }
 
-  results.insert(results.end(), faces.begin(), faces.end());
+  for (const geometry::Polygon &face : faces) {
+    appendPolygon(face, results);
+  }
 }
 
 } // namespace
 
-std::vector<geometry::Polygon>
-splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
+PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
+                                     const grid::Grid &grid) {
   // Transform each ring to grid coordinates - once, up front - snapping
   // vertices onto grid lines where they lie within tolerance; drop
   // consecutive duplicate points, close each ring, and orient rings so that
@@ -746,7 +769,7 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
     if (area2 == 0.0) {
       if (is_exterior) {
         // degenerate polygon
-        return {};
+        return PolygonPieces();
       }
       // degenerate hole
       continue;
@@ -757,12 +780,12 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
     rings.push_back(std::move(ring));
   }
   if (rings.empty()) {
-    return {};
+    return PolygonPieces();
   }
 
   // Split each ring at every grid line crossing and bucket the resulting
   // pieces by the cell they lie in
-  CellMap cell_pieces;
+  std::vector<Piece> bucketed;
   for (const linestr &ring : rings) {
     std::vector<linestr> pieces = splitRing(ring);
     if (pieces.empty()) {
@@ -799,56 +822,74 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
           continue;
         }
         piece.area2 = ringSignedArea2(piece.points);
-        // bucket by the side the piece's own interior is on; being closed,
-        // it crosses the row-centre line an even number of times
+        // bucket by the side the piece's own interior is on
         double side = (piece.area2 < 0) ? -1.0 : 1.0;
-        CellIndex cell = pieceCell(piece.points, side);
-        cell_pieces[cell].pieces.push_back(std::move(piece));
+        piece.cell = pieceCell(piece.points, side);
       } else {
         // an open chain: the polygon interior is on the left
-        CellIndex cell = pieceCell(piece.points, 1.0);
-        CellBorder border(cell);
+        piece.cell = pieceCell(piece.points, 1.0);
+        CellBorder border(piece.cell);
         piece.t_in = border.parameter(piece.points.front());
         piece.t_out = border.parameter(piece.points.back());
-        CellPieces &content = cell_pieces[cell];
-        // the chain crosses the row-centre line an odd number of times
-        // exactly when its endpoints lie on opposite sides of it
-        double level = cell.second + 0.5;
-        content.crossed =
-            content.crossed != ((piece.points.front().y < level) !=
-                                (piece.points.back().y < level));
-        content.pieces.push_back(std::move(piece));
       }
+      bucketed.push_back(std::move(piece));
     }
   }
 
-  // Assemble the pieces covering each cell crossed by a ring
-  std::vector<geometry::Polygon> results;
-  for (auto &entry : cell_pieces) {
-    assembleCell(entry.first, entry.second.pieces, results);
+  // Gather the pieces of each cell together, in the order the interior
+  // scan below sweeps them. Sorting once beats inserting each piece into an
+  // ordered container, and a stable sort keeps the pieces of a cell in the
+  // order the rings were traversed. The pieces of a cell are then a
+  // contiguous run.
+  std::stable_sort(bucketed.begin(), bucketed.end(), rowMajorOrder);
+
+  // Assemble the pieces covering each cell crossed by a ring, noting as we
+  // go whether the boundary in the cell crosses the horizontal line through
+  // the cell centre an odd number of times: a chain does so exactly when
+  // its endpoints lie on opposite sides of that line, and a closed piece
+  // never does.
+  PolygonPieces results;
+  std::vector<BoundaryCell> boundary;
+  for (std::size_t start = 0; start < bucketed.size();) {
+    const CellIndex cell = bucketed[start].cell;
+    const double level = cell.second + 0.5;
+    std::size_t end = start;
+    bool crossed = false;
+    while (end < bucketed.size() && bucketed[end].cell == cell) {
+      const Piece &piece = bucketed[end];
+      if (!piece.closed) {
+        crossed = crossed != ((piece.points.front().y < level) !=
+                              (piece.points.back().y < level));
+      }
+      end++;
+    }
+    assembleCell(cell, bucketed.data() + start, bucketed.data() + end, results);
+    boundary.push_back(BoundaryCell{cell, crossed});
+    start = end;
   }
 
   // Cells wholly inside the polygon become full cell boxes. Scan each row
   // of boundary cells in column order, tracking whether the row of cells in
   // between is inside the polygon: the status can only change across a cell
-  // crossed by the boundary, and it flips there exactly when the boundary
-  // pieces in the cell cross the row's centre line an odd number of times
-  // (recorded per cell during bucketing). The half-open crossing rule makes
-  // the parity along each whole row even, so every row ends outside.
-  for (auto it = cell_pieces.begin(); it != cell_pieces.end();) {
-    long j = it->first.second;
+  // the boundary passes through, and it changes there exactly when that
+  // cell's crossings are odd. The half-open crossing rule makes the parity
+  // along a whole row even, so every row ends outside.
+  for (std::size_t start = 0; start < boundary.size();) {
+    const long j = boundary[start].cell.second;
     bool inside = false;
     long previous_i = 0;
-    for (; it != cell_pieces.end() && it->first.second == j; ++it) {
-      long i = it->first.first;
+    std::size_t at = start;
+    for (; at < boundary.size() && boundary[at].cell.second == j; at++) {
+      const long i = boundary[at].cell.first;
       if (inside) {
         for (long k = previous_i + 1; k < i; k++) {
-          results.push_back(cellBoxPolygon(CellIndex(k, j)));
+          appendCellBox(CellIndex(k, j), results);
         }
       }
-      inside = inside != it->second.crossed;
+      inside = inside != boundary[at].crossed;
       previous_i = i;
     }
+    start = at;
   }
 
   // Transform results back to world coordinates. Where the grid axes mirror
@@ -857,23 +898,39 @@ splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
   // counter-clockwise in world coordinates.
   bool mirrored = (grid.grid_to_world.a * grid.grid_to_world.e -
                    grid.grid_to_world.b * grid.grid_to_world.d) < 0;
-  for (geometry::Polygon &result : results) {
-    for (Coord &point : result.exterior) {
-      point = grid.grid_to_world * point;
-    }
-    if (mirrored) {
-      std::reverse(result.exterior.begin(), result.exterior.end());
-    }
-    for (linestr &interior : result.interiors) {
-      for (Coord &point : interior) {
-        point = grid.grid_to_world * point;
-      }
-      if (mirrored) {
-        std::reverse(interior.begin(), interior.end());
-      }
+  for (Coord &point : results.coordinates) {
+    point = grid.grid_to_world * point;
+  }
+  if (mirrored) {
+    for (std::size_t r = 0; r + 1 < results.ring_offsets.size(); r++) {
+      std::reverse(results.coordinates.begin() + results.ring_offsets[r],
+                   results.coordinates.begin() + results.ring_offsets[r + 1]);
     }
   }
   return results;
+}
+
+std::vector<geometry::Polygon>
+splitPolygonGrid(const std::vector<linestr> &rings_in, const grid::Grid &grid) {
+  PolygonPieces pieces = splitPolygonGridPieces(rings_in, grid);
+  std::vector<geometry::Polygon> polygons;
+  polygons.reserve(pieces.size());
+  for (std::size_t p = 0; p + 1 < pieces.polygon_offsets.size(); p++) {
+    std::size_t first = pieces.polygon_offsets[p];
+    std::size_t last = pieces.polygon_offsets[p + 1];
+    geometry::Polygon polygon;
+    for (std::size_t r = first; r < last; r++) {
+      linestr ring(pieces.coordinates.begin() + pieces.ring_offsets[r],
+                   pieces.coordinates.begin() + pieces.ring_offsets[r + 1]);
+      if (r == first) {
+        polygon.exterior = std::move(ring);
+      } else {
+        polygon.interiors.push_back(std::move(ring));
+      }
+    }
+    polygons.push_back(std::move(polygon));
+  }
+  return polygons;
 }
 
 } // namespace operations

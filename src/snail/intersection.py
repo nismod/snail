@@ -14,7 +14,7 @@ from shapely.ops import linemerge
 from snail.core.intersections import (  # type: ignore
     get_cell_indices,
     split_linestring,
-    split_polygon,
+    split_polygons as split_polygons_core,
 )
 
 # optional progress bars
@@ -227,26 +227,23 @@ def split_polygons_experimental(
     is assumed to be valid) along the grid lines and assemble the polygon
     pieces that cover each cell.
     """
-    geometry = []
-    parent = []
-    split = []
-    for i in tqdm(range(len(polygon_features))):
-        # split area
-        geom_splits = split_polygon(
-            polygon_features.geometry[i],
-            grid.width,
-            grid.height,
-            grid.transform,
-        )
-        # add to collection
-        geometry.extend(geom_splits)
-        parent.extend([i] * len(geom_splits))
-        split.extend(range(len(geom_splits)))
+    # split every feature in one call: crossing into the extension per
+    # feature costs far more than the splitting itself
+    geometry, parent = split_polygons_core(
+        polygon_features.geometry.to_numpy(),
+        grid.width,
+        grid.height,
+        grid.transform,
+    )
     logging.info(f"  Split {len(polygon_features)} areas into {len(geometry)} pieces")
     # repeat each parent feature's attributes for each of its pieces
     splits_df = geopandas.GeoDataFrame(polygon_features.iloc[parent])
-    splits_df["split"] = split
-    splits_df.geometry = numpy.array(geometry, dtype=object)
+    # number each parent's pieces from zero
+    piece_counts = numpy.bincount(parent, minlength=len(polygon_features))
+    splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
+        numpy.cumsum(piece_counts) - piece_counts, piece_counts
+    )
+    splits_df.geometry = geometry
     splits_df.crs = grid.crs
     return splits_df
 

@@ -35,11 +35,13 @@ static linestr circle(double cx, double cy, double radius, int segments) {
 
 static void benchmark(const char *name, const std::vector<linestr> &rings,
                       const snail::grid::Grid &grid, int repetitions) {
-  // warm up and count pieces
-  std::size_t pieces = snail::operations::splitPolygonGrid(rings, grid).size();
+  // splitPolygonGridPieces is what the Python extension calls; the
+  // per-piece splitPolygonGrid is a convenience wrapper over it
+  std::size_t pieces =
+      snail::operations::splitPolygonGridPieces(rings, grid).size();
   auto start = std::chrono::steady_clock::now();
   for (int i = 0; i < repetitions; i++) {
-    snail::operations::splitPolygonGrid(rings, grid);
+    snail::operations::splitPolygonGridPieces(rings, grid);
   }
   auto end = std::chrono::steady_clock::now();
   double micros =
