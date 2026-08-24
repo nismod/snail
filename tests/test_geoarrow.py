@@ -139,6 +139,29 @@ class TestSourceKinds:
         pieces = geometry_of(core_split_linestrings(reader, NROWS, NCOLS, TRANSFORM))
         assert len(pieces) == 24
 
+    def test_three_dimensional_coordinates(self, many_linestrings):
+        """Interleaved coordinates may carry a z (or m) alongside x and y,
+        which widens the step from one vertex to the next. Splitting is
+        planar, so the pieces must match those of the 2D geometries."""
+        with_z = gpd.GeoSeries(
+            [
+                LineString([(x, y, 100.0 * i) for i, (x, y) in enumerate(line.coords)])
+                for line in many_linestrings
+            ]
+        )
+        arrow = with_z.to_arrow(geometry_encoding="geoarrow", include_z=True)
+
+        actual = geometry_of(core_split_linestrings(arrow, NROWS, NCOLS, TRANSFORM))
+        expected = geometry_of(
+            core_split_linestrings(
+                to_geoarrow(many_linestrings), NROWS, NCOLS, TRANSFORM
+            )
+        )
+
+        assert len(actual) == len(expected)
+        for piece, want in zip(actual, expected):
+            assert piece.equals_exact(want, 1e-12)
+
     def test_geoparquet_with_separated_coordinates(self, tmp_path, many_linestrings):
         """GeoParquet stores coordinates separated into x and y columns
         rather than interleaved, and must split to the same pieces"""

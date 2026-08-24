@@ -15,11 +15,16 @@
 /// accepted too, read as a stream of one batch.
 ///
 /// The coordinates-and-offsets layout GeoArrow uses is the layout
-/// operations::LinePieces and PolygonPieces already fill, so pieces are
-/// handed back by pointing Arrow at those buffers: no copy of the
-/// coordinates in either direction, and no geometry object built per
-/// feature. The Arrow C data interface is a stable C ABI, so nothing here
-/// links against an Arrow library.
+/// operations::LinePieces and PolygonPieces already fill, so the pieces are
+/// handed back by pointing Arrow at those buffers rather than copying them
+/// out, and no geometry object is built per feature on either side. Reading
+/// a source still copies each geometry's coordinates into a buffer to split
+/// it, but never the source as a whole.
+///
+/// The Arrow C data interface is a stable C ABI of a handful of structs, so
+/// nothing here links against an Arrow library: the structs are reproduced
+/// below and the conventions they carry - format strings, buffer order,
+/// release callbacks - are spelled out where they are relied on.
 ///
 /// References:
 /// - https://arrow.apache.org/docs/format/CDataInterface.html
@@ -30,6 +35,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -134,9 +140,14 @@ static const char *extensionName(GeometryType type) {
 
 // -- Arrow schema metadata ---------------------------------------------------
 
-/// Read a value out of an ArrowSchema metadata blob, which holds a count of
-/// key/value pairs followed by each pair as a length-prefixed byte string.
-/// Returns an empty string if the key is absent.
+/// Read a value out of an ArrowSchema metadata blob. GeoArrow declares a
+/// geometry type there, under "ARROW:extension:name".
+///
+/// The blob is packed, not a string: an int32 count of key/value pairs,
+/// then for each pair an int32 length and that many bytes for the key,
+/// and the same again for the value. Lengths are explicit, so neither keys
+/// nor values are null-terminated. Returns an empty string if the key is
+/// absent.
 static std::string metadataValue(const char *metadata, const std::string &key) {
   if (metadata == nullptr) {
     return "";
@@ -162,14 +173,15 @@ static std::string metadataValue(const char *metadata, const std::string &key) {
   return "";
 }
 
-/// Encode a single key/value pair as an ArrowSchema metadata blob
+/// Encode a single key/value pair as an ArrowSchema metadata blob, in the
+/// packed layout metadataValue describes
 static std::string encodeMetadata(const std::string &key,
                                   const std::string &value) {
   std::string blob;
   auto append_int32 = [&blob](int32_t v) {
     blob.append(reinterpret_cast<const char *>(&v), sizeof(int32_t));
   };
-  append_int32(1);
+  append_int32(1); // one pair follows
   append_int32(static_cast<int32_t>(key.size()));
   blob.append(key);
   append_int32(static_cast<int32_t>(value.size()));
@@ -187,9 +199,13 @@ static bool hasNulls(const ArrowArray *array) {
   if (array->null_count == 0 || array->n_buffers == 0) {
     return false;
   }
-  // null_count is unknown (-1): inspect the validity bitmap, if there is one
+  // A producer may leave null_count at -1 rather than count them, so fall
+  // back to the validity bitmap, which is always buffer 0 where an array
+  // has one at all. It holds one bit per slot, least significant bit
+  // first, set for a value that is present.
   const auto *validity = static_cast<const uint8_t *>(array->buffers[0]);
   if (validity == nullptr) {
+    // no bitmap at all: every slot is valid
     return false;
   }
   for (int64_t i = 0; i < array->length; i++) {
@@ -201,8 +217,14 @@ static bool hasNulls(const ArrowArray *array) {
   return false;
 }
 
-/// A list array's offsets, which may be 32- or 64-bit, read through the
-/// array's own slot offset
+/// The offsets of an Arrow list array: for element i, where its run of
+/// children begins and ends.
+///
+/// Offsets are buffer 1, behind the validity bitmap, and are 32-bit for a
+/// list ("+l") or 64-bit for a large list ("+L"). They index the child
+/// array's own elements, so they are read without regard to the child's
+/// offset - but a sliced array carries a slot offset of its own, which
+/// shifts where in the offsets buffer element i is described.
 class ListOffsets {
 public:
   ListOffsets() = default;
@@ -258,22 +280,25 @@ public:
       throw std::invalid_argument("Cannot split geometries with missing "
                                   "(null) coordinates");
     }
-    if (interleaved(schema)) {
-      const ArrowArray *doubles = array->children[0];
-      if (hasNulls(doubles)) {
+    stride = interleavedStride(schema);
+    if (stride > 0) {
+      const ArrowArray *values = array->children[0];
+      if (hasNulls(values)) {
         throw std::invalid_argument("Cannot split geometries with missing "
                                     "(null) coordinates");
       }
-      xy = static_cast<const double *>(doubles->buffers[1]);
-      // element v of the fixed-size list is the pair of doubles at
-      // 2 * (list slot offset + v), shifted by the child's own offset
-      x_base = doubles->offset + 2 * array->offset;
+      // A fixed-size list of width `stride` lays its elements end to end in
+      // one child buffer, so vertex v starts at stride * v - shifted by the
+      // list's own slot offset, and again by the child's.
+      xy = static_cast<const double *>(values->buffers[1]);
+      xy_base = values->offset + stride * array->offset;
       if (array->length > 0 && xy == nullptr) {
         throw std::invalid_argument(
             "Malformed Arrow array: no coordinates buffer");
       }
       return;
     }
+    // Separated: one child array per dimension, each with its own offset
     const ArrowArray *x_array = array->children[dimension(schema, "x", 0)];
     const ArrowArray *y_array = array->children[dimension(schema, "y", 1)];
     if (hasNulls(x_array) || hasNulls(y_array)) {
@@ -292,7 +317,14 @@ public:
 
   /// Validate the coordinate layout without needing any data
   static void checkSchema(const ArrowSchema *schema) {
-    if (interleaved(schema)) {
+    int64_t width = interleavedStride(schema);
+    if (width > 0) {
+      if (width < 2) {
+        throw std::invalid_argument(
+            std::string("Expected interleaved coordinates of at least two "
+                        "dimensions, got Arrow format '") +
+            schema->format + "'");
+      }
       if (schema->n_children != 1) {
         throw std::invalid_argument("Malformed Arrow fixed-size-list array: "
                                     "expected exactly one child");
@@ -314,16 +346,23 @@ public:
 
   geo::Coord at(int64_t vertex) const {
     if (xy != nullptr) {
-      int64_t i = x_base + 2 * vertex;
-      return {xy[i], xy[i + 1]};
+      int64_t at = xy_base + stride * vertex;
+      return {xy[at], xy[at + 1]};
     }
     return {x[x_base + vertex], y[y_base + vertex]};
   }
 
 private:
-  static bool interleaved(const ArrowSchema *schema) {
-    // 2, 3 or 4 dimensions interleaved: xy, xyz/xym, xyzm
-    return std::strncmp(schema->format, "+w:", 3) == 0;
+  /// Doubles per vertex in an interleaved layout, read out of Arrow's
+  /// fixed-size-list format string "+w:<width>": 2 for xy, 3 for xyz or
+  /// xym, 4 for xyzm. Returns 0 for any other layout. Only x and y are
+  /// read - splitting is planar - but every dimension counts towards the
+  /// step from one vertex to the next.
+  static int64_t interleavedStride(const ArrowSchema *schema) {
+    if (std::strncmp(schema->format, "+w:", 3) != 0) {
+      return 0;
+    }
+    return std::strtoll(schema->format + 3, nullptr, 10);
   }
 
   /// Index of a named dimension among a struct's children, by name where
@@ -344,6 +383,7 @@ private:
         "' coordinate among the separated GeoArrow coordinates");
   }
 
+  /// "g" is Arrow's format string for a double
   static void checkDouble(const ArrowSchema *schema) {
     if (std::strcmp(schema->format, "g") != 0) {
       throw std::invalid_argument(
@@ -353,8 +393,10 @@ private:
     }
   }
 
-  const double *xy = nullptr; // interleaved
-  const double *x = nullptr;  // separated
+  const double *xy = nullptr; // interleaved, stride doubles per vertex
+  int64_t stride = 0;
+  int64_t xy_base = 0;
+  const double *x = nullptr; // separated, one array per dimension
   const double *y = nullptr;
   int64_t x_base = 0;
   int64_t y_base = 0;
@@ -410,7 +452,8 @@ static void checkGeometrySchema(const ArrowSchema *schema, GeometryType type) {
   }
 }
 
-/// A geoarrow.linestring batch: list<vertices: fixed_size_list<xy: double>[2]>
+/// A geoarrow.linestring batch: a list of coordinates per linestring,
+/// list<vertices: coordinates> in either coordinate layout
 struct LineStringReader {
   ListOffsets lines;
   Coordinates coordinates;
@@ -443,8 +486,8 @@ struct LineStringReader {
   }
 };
 
-/// A geoarrow.polygon batch:
-/// list<rings: list<vertices: fixed_size_list<xy: double>[2]>>
+/// A geoarrow.polygon batch: a list of rings per polygon, each ring a list
+/// of coordinates - list<rings: list<vertices: coordinates>>
 struct PolygonReader {
   ListOffsets polygons;
   ListOffsets rings;
@@ -496,30 +539,51 @@ struct PolygonReader {
 
 // -- Reading the source ------------------------------------------------------
 
-/// An ArrowArray owned by us, released when it goes out of scope
-class OwnedArray {
+/// An Arrow C struct we own - a schema, an array or a stream.
+///
+/// Every one of them carries its own release callback, and a null callback
+/// is how the interface marks a struct that has been released or moved
+/// from. Holding them in a scope guard means a throw part-way through
+/// setting a stream up cannot strand what the producer handed over.
+template <typename T> class Owned {
 public:
-  OwnedArray() { array.release = nullptr; }
-  ~OwnedArray() { reset(); }
-  OwnedArray(const OwnedArray &) = delete;
-  OwnedArray &operator=(const OwnedArray &) = delete;
+  Owned() = default;
+  ~Owned() { reset(); }
+  Owned(const Owned &) = delete;
+  Owned &operator=(const Owned &) = delete;
 
   void reset() {
-    if (array.release != nullptr) {
-      array.release(&array);
-      array.release = nullptr;
+    if (owned.release != nullptr) {
+      owned.release(&owned);
+      owned.release = nullptr;
     }
   }
 
-  bool valid() const { return array.release != nullptr; }
-  ArrowArray *get() { return &array; }
+  bool valid() const { return owned.release != nullptr; }
+  T *get() { return &owned; }
+
+  /// Take on a struct whose previous owner has given it up
+  void adopt(const T &from) {
+    reset();
+    owned = from;
+  }
+
+  /// Give the struct up to the caller, who becomes responsible for
+  /// releasing it, and leave this empty
+  T take() {
+    T moved = owned;
+    owned.release = nullptr;
+    return moved;
+  }
 
 private:
-  ArrowArray array{};
+  T owned{};
 };
 
-/// Take ownership of the struct a PyCapsule holds, marking the capsule's
-/// copy as moved, as the Arrow PyCapsule interface prescribes
+/// Take ownership of the struct a PyCapsule holds. The PyCapsule interface
+/// passes Arrow structs by move: the consumer copies the struct out and
+/// nulls the producer's release callback, so that only one of them will
+/// ever release it.
 template <typename T>
 static T movedFromCapsule(const py::capsule &capsule, const char *name) {
   auto *source = static_cast<T *>(PyCapsule_GetPointer(capsule.ptr(), name));
@@ -547,20 +611,22 @@ public:
     if (py::hasattr(source, "__arrow_c_stream__")) {
       py::capsule capsule =
           source.attr("__arrow_c_stream__")().cast<py::capsule>();
-      stream = movedFromCapsule<ArrowArrayStream>(capsule, "arrow_array_stream");
-      has_stream = true;
-      if (stream.get_schema(&stream, &schema) != 0) {
+      stream.adopt(
+          movedFromCapsule<ArrowArrayStream>(capsule, "arrow_array_stream"));
+      // a stream states its type up front, before any batch arrives
+      if (stream.get()->get_schema(stream.get(), schema.get()) != 0) {
         throw std::runtime_error(std::string("Could not read the schema of "
                                              "the geometry stream: ") +
                                  lastError());
       }
     } else if (py::hasattr(source, "__arrow_c_array__")) {
+      // a single array comes with its schema alongside, and stands in for a
+      // stream of one batch
       py::tuple capsules = source.attr("__arrow_c_array__")();
-      schema = movedFromCapsule<ArrowSchema>(capsules[0].cast<py::capsule>(),
-                                             "arrow_schema");
-      single = movedFromCapsule<ArrowArray>(capsules[1].cast<py::capsule>(),
-                                            "arrow_array");
-      has_single = true;
+      schema.adopt(movedFromCapsule<ArrowSchema>(
+          capsules[0].cast<py::capsule>(), "arrow_schema"));
+      single.adopt(movedFromCapsule<ArrowArray>(
+          capsules[1].cast<py::capsule>(), "arrow_array"));
     } else {
       throw py::type_error(
           "Expected GeoArrow geometries: an object supporting the Arrow "
@@ -569,34 +635,21 @@ public:
           "ChunkedArray or Table, or any Arrow stream of geometries");
     }
 
-    // A stream of record batches carries the geometries in one of its
-    // columns; a stream of geometries is the geometry itself
-    if (std::strcmp(schema.format, "+s") == 0) {
-      geometry_child = findGeometryField(&schema, type);
-      checkGeometrySchema(schema.children[geometry_child], type);
+    // "+s" is Arrow's format string for a struct, which is how a stream of
+    // record batches describes itself: the geometries are one of its
+    // columns. Anything else is a stream of the geometries themselves.
+    if (std::strcmp(schema.get()->format, "+s") == 0) {
+      geometry_child = findGeometryField(schema.get(), type);
+      checkGeometrySchema(schema.get()->children[geometry_child], type);
     } else {
-      checkGeometrySchema(&schema, type);
+      checkGeometrySchema(schema.get(), type);
     }
   }
-
-  ~InputStream() {
-    if (has_stream && stream.release != nullptr) {
-      stream.release(&stream);
-    }
-    if (has_single && single.release != nullptr) {
-      single.release(&single);
-    }
-    if (schema.release != nullptr) {
-      schema.release(&schema);
-    }
-  }
-
-  InputStream(const InputStream &) = delete;
-  InputStream &operator=(const InputStream &) = delete;
 
   /// The schema of the geometries themselves, within the batches
-  const ArrowSchema *geometrySchema() const {
-    return geometry_child >= 0 ? schema.children[geometry_child] : &schema;
+  const ArrowSchema *geometrySchema() {
+    return geometry_child >= 0 ? schema.get()->children[geometry_child]
+                               : schema.get();
   }
 
   /// The geometries within a batch this stream produced
@@ -611,21 +664,18 @@ public:
   }
 
   /// Pull the next batch. Returns false once the source is exhausted.
-  bool next(OwnedArray &batch) {
+  bool next(Owned<ArrowArray> &batch) {
     batch.reset();
-    if (has_single) {
-      if (single_done) {
-        return false;
-      }
-      single_done = true;
-      *batch.get() = single;
-      single.release = nullptr;
+    if (single.valid()) {
+      // a one-batch source: hand the array over, emptying it so that the
+      // next call reports the end of the stream
+      batch.adopt(single.take());
       return true;
     }
-    if (stream.release == nullptr) {
+    if (!stream.valid()) {
       return false;
     }
-    if (stream.get_next(&stream, batch.get()) != 0) {
+    if (stream.get()->get_next(stream.get(), batch.get()) != 0) {
       throw std::runtime_error(
           std::string("Could not read the next batch of geometries: ") +
           lastError());
@@ -664,20 +714,21 @@ private:
         "GeoArrow extension type");
   }
 
+  /// A stream reports a failure by returning non-zero and leaving the
+  /// detail behind for get_last_error
   const char *lastError() {
-    if (!has_stream || stream.get_last_error == nullptr) {
+    if (!stream.valid() || stream.get()->get_last_error == nullptr) {
       return "";
     }
-    const char *message = stream.get_last_error(&stream);
+    const char *message = stream.get()->get_last_error(stream.get());
     return message == nullptr ? "" : message;
   }
 
-  ArrowArrayStream stream{};
-  ArrowArray single{};
-  ArrowSchema schema{};
-  bool has_stream = false;
-  bool has_single = false;
-  bool single_done = false;
+  Owned<ArrowArrayStream> stream;
+  Owned<ArrowArray> single;
+  Owned<ArrowSchema> schema;
+  /// which column of a record batch holds the geometries; -1 when the
+  /// batches are the geometries themselves
   int64_t geometry_child = -1;
 };
 
@@ -688,9 +739,11 @@ private:
 struct BatchData {
   GeometryType type = GeometryType::linestring;
   std::vector<geo::Coord> coordinates;
-  /// offsets into coordinates, one run per linestring or per polygon ring
+  /// where each run of coordinates begins: one run per piece for
+  /// linestrings, one per ring for polygons. Offsets are 32-bit, which is
+  /// what a plain Arrow list takes, and are relative to this batch.
   std::vector<int32_t> vertex_offsets{0};
-  /// offsets into the rings, one run per polygon; unused for linestrings
+  /// where each polygon's run of rings begins; unused for linestrings
   std::vector<int32_t> ring_offsets{0};
   /// the geometry each piece came from, indexed across the whole stream
   std::vector<int64_t> parents;
@@ -698,6 +751,10 @@ struct BatchData {
   int64_t size() const { return static_cast<int64_t>(parents.size()); }
 };
 
+/// Backing store for one exported schema. Arrow's structs hold raw
+/// pointers to their children and to the arrays listing them, so every
+/// level of the tree is kept in one allocation that outlives the export
+/// and is freed when the top level is released.
 struct ExportedSchema {
   std::string metadata;
   ArrowSchema geometry;
@@ -711,9 +768,10 @@ struct ExportedSchema {
   ArrowSchema *vertices_child[1];
 };
 
-/// Children all live in the one ExportedSchema block, freed when the top
-/// level is released; marking them released keeps the tree consistent for a
-/// consumer that walks it
+/// Releasing a struct means releasing its children and then nulling its own
+/// callback, which is how the interface marks it spent. The children here
+/// own nothing of their own - they are freed with the block - so this just
+/// walks the tree marking it, for a consumer that inspects it afterwards.
 static void releaseChildSchema(ArrowSchema *schema) {
   for (int64_t i = 0; i < schema->n_children; i++) {
     ArrowSchema *child = schema->children[i];
@@ -745,6 +803,18 @@ static void initSchema(ArrowSchema *schema, const char *format,
 
 /// Build the schema of the split stream: record batches of a GeoArrow
 /// geometry column and the index of the geometry each piece came from.
+///
+/// Arrow describes a type by a format string, and nests them by children:
+///
+///     struct                                             "+s"
+///      |- geometry  ARROW:extension:name=geoarrow.*       "+l"  list
+///      |   |- (rings, polygons only)                      "+l"  list
+///      |       |- vertices                              "+w:2"  2 per item
+///      |           |- xy                                  "g"   double
+///      |- parent                                          "l"   int64
+///
+/// Coordinates go back interleaved because that is what the split fills:
+/// a vector of Coord is already a run of x, y, x, y doubles.
 static void exportSchema(GeometryType type, ArrowSchema *out) {
   auto *owned = new ExportedSchema();
   owned->metadata = encodeMetadata("ARROW:extension:name", extensionName(type));
@@ -761,6 +831,8 @@ static void exportSchema(GeometryType type, ArrowSchema *out) {
     owned->geometry_child[0] = &owned->vertices;
   }
   initSchema(&owned->geometry, "+l", "geometry", owned->geometry_child, 1);
+  // the extension name rides on the geometry field, which is where a
+  // GeoArrow reader looks for it
   owned->geometry.metadata = owned->metadata.data();
 
   initSchema(&owned->parent, "l", "parent", nullptr, 0);
@@ -822,25 +894,36 @@ static void initArray(ArrowArray *array, int64_t length, const void **buffers,
   array->private_data = nullptr;
 }
 
-/// Build a record batch over a batch of split pieces, pointing Arrow at its
-/// buffers rather than copying them. The buffers stay alive with the shared
+/// Build a record batch over a batch of split pieces, mirroring the tree
+/// exportSchema describes and pointing Arrow at the split's own buffers
+/// rather than copying them out. The buffers stay alive with the shared
 /// data held in private_data, so the batch outlives the split that made it.
+///
+/// Buffer 0 is always the validity bitmap, left null here because nothing
+/// a split produces is null. What follows depends on the type: a list has
+/// its offsets in buffer 1, a primitive its values, and a struct or a
+/// fixed-size list has no second buffer at all - its children hold
+/// everything.
 static void exportArray(const std::shared_ptr<BatchData> &data,
                         ArrowArray *out) {
   auto *owned = new ExportedArray();
   owned->data = data;
 
+  // the coordinates as bare doubles: two per vertex, hence the length
   owned->xy_buffers[0] = nullptr;
   owned->xy_buffers[1] = data->coordinates.data();
   initArray(&owned->xy, static_cast<int64_t>(2 * data->coordinates.size()),
             owned->xy_buffers, 2, nullptr, 0);
 
+  // pairs them up into vertices; a fixed-size list needs no offsets
   owned->vertices_buffers[0] = nullptr;
   owned->vertices_child[0] = &owned->xy;
   initArray(&owned->vertices, static_cast<int64_t>(data->coordinates.size()),
             owned->vertices_buffers, 1, owned->vertices_child, 1);
 
   if (data->type == GeometryType::polygon) {
+    // a polygon is a list of rings, so the offsets nest twice: rings over
+    // vertices, then polygons over rings
     owned->rings_buffers[0] = nullptr;
     owned->rings_buffers[1] = data->vertex_offsets.data();
     owned->rings_child[0] = &owned->vertices;
@@ -850,6 +933,7 @@ static void exportArray(const std::shared_ptr<BatchData> &data,
     owned->geometry_buffers[1] = data->ring_offsets.data();
     owned->geometry_child[0] = &owned->rings;
   } else {
+    // a linestring is a run of vertices, so one level of offsets does
     owned->geometry_buffers[1] = data->vertex_offsets.data();
     owned->geometry_child[0] = &owned->vertices;
   }
@@ -861,6 +945,8 @@ static void exportArray(const std::shared_ptr<BatchData> &data,
   owned->parent_buffers[1] = data->parents.data();
   initArray(&owned->parent, data->size(), owned->parent_buffers, 2, nullptr, 0);
 
+  // the record batch itself: a struct of the two columns, whose own length
+  // is the number of pieces
   owned->top_buffers[0] = nullptr;
   owned->top_children[0] = &owned->geometry;
   owned->top_children[1] = &owned->parent;
@@ -935,12 +1021,16 @@ static void splitPolygonBatch(const PolygonReader &reader,
   }
 }
 
-/// Read one batch from the source and split it. Returns nothing once the
-/// source is exhausted; batches that split to no pieces are skipped rather
-/// than emitted empty.
+/// Read one batch from the source and split it, returning nothing once the
+/// source is exhausted.
+///
+/// A batch can split to no pieces at all - every geometry outside the grid
+/// with bounded splitting, say - and the loop reads on rather than emitting
+/// it, both to spare consumers a batch with nothing in it and because
+/// geopandas cannot read a zero-length GeoArrow array.
 static std::shared_ptr<BatchData> nextSplitBatch(SplitState *state) {
   while (true) {
-    OwnedArray batch;
+    Owned<ArrowArray> batch;
     if (!state->input.next(batch)) {
       return nullptr;
     }
@@ -987,9 +1077,15 @@ static SplitState *stateOf(ArrowArrayStream *stream) {
   return static_cast<StreamPrivate *>(stream->private_data)->state.get();
 }
 
-/// Record a failure against the stream, and pick the errno the consumer
-/// will turn back into an exception: a bad argument reaches Python as
-/// ValueError, as it would had it been caught before the stream started.
+/// Record a failure against the stream and return the code its callback
+/// should report.
+///
+/// Stream callbacks are plain C, so a C++ exception must not escape them:
+/// they signal failure by returning a non-zero errno and leaving the
+/// detail for get_last_error. The consumer turns that code back into an
+/// exception, and picking it deliberately keeps the type a caller sees the
+/// same either side of the stream starting - EINVAL surfaces as a
+/// ValueError, as a bad argument caught up front would have.
 static int streamFailed(SplitState *state, const std::exception &error,
                         int code) {
   state->error = error.what();
@@ -1015,7 +1111,8 @@ static int streamGetNext(ArrowArrayStream *stream, ArrowArray *out) {
   try {
     std::shared_ptr<BatchData> batch = nextSplitBatch(state);
     if (batch == nullptr) {
-      // no more pieces: mark the end of the stream
+      // the end of a stream is a success returning a released array, not
+      // an error - the same convention the source uses with us
       out->release = nullptr;
       return 0;
     }
@@ -1037,12 +1134,18 @@ static const char *streamGetLastError(ArrowArrayStream *stream) {
 }
 
 static void streamRelease(ArrowArrayStream *stream) {
-  // the state holds Python references through its source
+  // dropping the state releases the source stream, and with it Python
+  // references the consumer may be holding no lock for
   py::gil_scoped_acquire locked;
   delete static_cast<StreamPrivate *>(stream->private_data);
   stream->release = nullptr;
 }
 
+/// Called when the consumer drops the capsule. A capsule that was handed on
+/// to a reader arrives here already released - the reader moved the struct
+/// out and nulled this copy's callback - so only the struct itself is left
+/// to free; one abandoned unread still owns the stream, and is released
+/// here.
 static void releaseStreamCapsule(PyObject *capsule) {
   auto *stream = static_cast<ArrowArrayStream *>(
       PyCapsule_GetPointer(capsule, "arrow_array_stream"));
@@ -1092,6 +1195,8 @@ public:
 
 private:
   std::unique_ptr<SplitState> state;
+  /// kept alongside the state, which the first export takes away, so that
+  /// the geometry type can still be reported afterwards
   GeometryType type;
 };
 
@@ -1138,8 +1243,8 @@ void register_module(py::module_ &m) {
         py::arg("bounded") = false,
         R"(Split LineStrings along a grid.
 
-Takes geoarrow.linestring geometries with interleaved coordinates, from
-any object supporting the Arrow PyCapsule interface: a pyarrow
+Takes geoarrow.linestring geometries, with coordinates interleaved or
+separated, from any object supporting the Arrow PyCapsule interface: a pyarrow
 ChunkedArray, Table or RecordBatchReader, a GeoParquet or Dataset
 reader, the result of GeoSeries.to_arrow(geometry_encoding="geoarrow"),
 or a record batch stream with a GeoArrow geometry column.
@@ -1151,8 +1256,9 @@ the stream is read.)");
         py::arg("nrows"), py::arg("ncols"), py::arg("transform"),
         R"(Split Polygons along a grid.
 
-Takes geoarrow.polygon geometries with interleaved coordinates, from any
-object supporting the Arrow PyCapsule interface: a pyarrow ChunkedArray,
+Takes geoarrow.polygon geometries, with coordinates interleaved or
+separated, from any object supporting the Arrow PyCapsule interface: a
+pyarrow ChunkedArray,
 Table or RecordBatchReader, a GeoParquet or Dataset reader, the result
 of GeoSeries.to_arrow(geometry_encoding="geoarrow"), or a record batch
 stream with a GeoArrow geometry column.

@@ -59,6 +59,11 @@ def to_geoarrow(geometries: geopandas.GeoSeries, batch_size: int = SPLIT_BATCH_S
     feature on either side of the interface. Batches are zero-copy slices
     of the one Arrow array, and the geometry type travels with them.
     """
+    # Import the geometry column through its capsules rather than with
+    # pyarrow.array, which would keep the values but drop the GeoArrow
+    # extension name: that lives on the Arrow *field*, not on its type, and
+    # is what tells the extension - and any later reader - which geometry
+    # type these are.
     schema_capsule, array_capsule = geometries.to_arrow(
         geometry_encoding="geoarrow", interleaved=True
     ).__arrow_c_array__()
@@ -66,6 +71,8 @@ def to_geoarrow(geometries: geopandas.GeoSeries, batch_size: int = SPLIT_BATCH_S
     array = pyarrow.Array._import_from_c_capsule(
         field.__arrow_c_schema__(), array_capsule
     )
+    # A table of one column, chunked: only a table carries the field, and so
+    # the extension name, through __arrow_c_stream__ to the extension.
     batches = [array.slice(at, batch_size) for at in range(0, len(array), batch_size)]
     return pyarrow.Table.from_arrays(
         [pyarrow.chunked_array(batches, type=array.type)],
@@ -85,6 +92,9 @@ def read_split_stream(stream) -> tuple[numpy.ndarray, numpy.ndarray]:
     geometry = []
     parent = []
     for batch in tqdm(reader):
+        # read the batch as a frame rather than picking the geometry column
+        # out first: the GeoArrow extension name is on the schema field, and
+        # a column taken off a batch no longer carries it
         geometry.append(geopandas.GeoDataFrame.from_arrow(batch).geometry.to_numpy())
         parent.append(batch.column("parent").to_numpy())
     if not geometry:
