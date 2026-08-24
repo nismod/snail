@@ -41,7 +41,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["affine", "ruff", "hilbertcurve", "nbstripout", "pytest-cov", "pytest"]
+dev = [
+    "affine",
+    "ruff",
+    "hilbertcurve",
+    "nbstripout",
+    "pytest-cov",
+    "pytest",
+]
 docs = ["sphinx", "nbsphinx", "sphinx_gallery", "numpydoc"]
 tutorials = [
     "contextily",
