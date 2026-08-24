@@ -252,11 +252,6 @@ def process(args):
     # fix up path relative to dirname
     rasters.path = rasters.path.apply(_join_dirname, args=(dirname,))
 
-    # generate "key" from metadata columns
-    if "key" not in rasters.columns:
-        colnames = sorted(set(rasters.columns) - {"path", "bands"})
-        rasters["key"] = rasters.apply(_format_key, args=(colnames,), axis=1)
-
     # parse "1,2,3" band indices to tuple if present
     if "bands" in rasters.columns:
         rasters.bands = rasters.bands.apply(parse_bands)
@@ -372,16 +367,3 @@ def _join_dirname(path, dirname=False):
     if dirname:
         return os.path.join(dirname, path)
     return path
-
-
-def _format_key(row, colnames):
-    if colnames:
-        # stitch together from metadata columns
-        parts = []
-        for c in colnames:
-            parts.append(f"{c}:{row.loc[c]}")
-        key = "|".join(parts)
-    else:
-        # fall back to path as key
-        key = row.loc["path"]
-    return key
