@@ -224,7 +224,7 @@ def split_features_for_rasters(
                 )
                 source_crs = grid.crs
                 crs_features = features.set_crs(grid.crs)
-            else: # grid.crs is None
+            else:  # grid.crs is None
                 logger.warning(
                     "CRS undefined for grid (%s): assuming grid shares the features CRS (%s)",
                     grid.crs,

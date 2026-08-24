@@ -238,6 +238,7 @@ def _raster_key(raster) -> str:
     stem = Path(str(name)).stem
     return stem if stem else "raster"
 
+
 def _format_key(row, colnames):
     if colnames:
         # stitch together from metadata columns
@@ -249,6 +250,7 @@ def _format_key(row, colnames):
         # fall back to path as key
         key = row.loc["path"]
     return key
+
 
 def _describe_raster(raster) -> str:
     return str(getattr(raster, "name", raster))
