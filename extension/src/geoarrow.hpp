@@ -8,10 +8,10 @@ namespace geoarrow {
 
 /// Register the GeoArrow data exchange functions and types on a pybind11
 /// module:
-/// - split_linestrings / split_polygons: split a whole GeoArrow array of
-///   geometries along a grid, returning GeoArrow pieces
-/// - GeoArrowArray: the returned array, exposing the Arrow PyCapsule
-///   interface (__arrow_c_array__)
+/// - split_linestrings / split_polygons: split a stream of geometries along
+///   a grid, returning a stream of the pieces
+/// - SplitStream: that result, exposing the Arrow PyCapsule stream
+///   interface (__arrow_c_stream__)
 void register_module(pybind11::module_ &m);
 
 } // namespace geoarrow

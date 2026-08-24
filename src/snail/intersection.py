@@ -9,6 +9,7 @@ import dask.array
 import geopandas
 import numpy
 import pandas
+import pyarrow
 import rasterio
 import xarray
 from shapely import box
@@ -37,64 +38,77 @@ else:
     from snail.tqdm_standin import tqdm_standin as tqdm
 
 
-# Features are split in chunks rather than all at once: a single call would
-# give no sign of progress on a long job, and would hold every piece of
-# every feature in memory at once.
-SPLIT_CHUNK_SIZE = 1000
+# The extension splits one Arrow batch at a time, so an in-memory geometry
+# column is presented to it in batches of this many features: splitting a
+# whole table at once would give no sign of progress on a long job, and
+# would hold every piece of every feature in memory at once. A source that
+# brings its own batching - a GeoParquet reader, a Dataset scan - can be
+# split directly, and keeps whatever batch size it was read with.
+#
+# Each batch costs something fixed to set up and read back, so batches much
+# smaller than this measurably slow a large split down; much larger ones buy
+# no more speed and only raise the peak memory.
+SPLIT_BATCH_SIZE = 5000
 
 
-def to_geoarrow(geometries: geopandas.GeoSeries):
-    """Geometry column as a GeoArrow array, for the extension to read
+def to_geoarrow(geometries: geopandas.GeoSeries, batch_size: int = SPLIT_BATCH_SIZE):
+    """Geometry column as a stream of GeoArrow batches, for the extension
 
     GeoArrow holds the geometries as flat coordinate and offset buffers,
     which the extension reads directly - no geometry object is built per
-    feature on either side of the interface.
+    feature on either side of the interface. Batches are zero-copy slices
+    of the one Arrow array, and the geometry type travels with them.
     """
-    return geometries.to_arrow(geometry_encoding="geoarrow", interleaved=True)
+    schema_capsule, array_capsule = geometries.to_arrow(
+        geometry_encoding="geoarrow", interleaved=True
+    ).__arrow_c_array__()
+    field = pyarrow.Field._import_from_c_capsule(schema_capsule).with_name("geometry")
+    array = pyarrow.Array._import_from_c_capsule(
+        field.__arrow_c_schema__(), array_capsule
+    )
+    batches = [array.slice(at, batch_size) for at in range(0, len(array), batch_size)]
+    return pyarrow.Table.from_arrays(
+        [pyarrow.chunked_array(batches, type=array.type)],
+        schema=pyarrow.schema([field]),
+    )
 
 
-def from_geoarrow(pieces) -> numpy.ndarray:
-    """Geometries of a GeoArrow array returned by the extension"""
-    if len(pieces) == 0:
-        # geopandas cannot read a zero-length GeoArrow array
-        return numpy.empty(0, dtype=object)
-    return geopandas.GeoSeries.from_arrow(pieces).to_numpy()
+def read_split_stream(stream) -> tuple[numpy.ndarray, numpy.ndarray]:
+    """Read a stream of split pieces from the extension
 
-
-def _split_in_chunks(split_core, geometries, grid, **split_kwargs):
-    """Split geometries with a batch splitter, a chunk at a time
-
-    Geometries are handed to the splitter as a GeoArrow array and come back
-    the same way. Returns the pieces, and for each piece the index of the
-    geometry it came from.
+    The split runs as the stream is read, a batch at a time. Returns the
+    pieces, and for each piece the index of the geometry it came from.
     """
+    reader = pyarrow.RecordBatchReader._import_from_c_capsule(
+        stream.__arrow_c_stream__()
+    )
+    geometry = []
+    parent = []
+    for batch in tqdm(reader):
+        geometry.append(geopandas.GeoDataFrame.from_arrow(batch).geometry.to_numpy())
+        parent.append(batch.column("parent").to_numpy())
+    if not geometry:
+        return numpy.empty(0, dtype=object), numpy.empty(0, dtype=numpy.int64)
+    return numpy.concatenate(geometry), numpy.concatenate(parent)
+
+
+def _split(split_core, geometries, grid, **split_kwargs):
+    """Split a geometry column, streaming batches through the extension"""
     if len(geometries) == 0:
         return numpy.empty(0, dtype=object), numpy.empty(0, dtype=numpy.int64)
-
-    def split(chunk):
-        # The extension counts rows and columns: nrows spans the grid in y
-        # and ncols in x, so they are the grid's height and width
-        # respectively. Passed by name - transposing them silently moves
-        # the grid bounds, which only shows up on a grid that is not square.
-        geometry, parent = split_core(
-            to_geoarrow(chunk),
+    # The extension counts rows and columns: nrows spans the grid in y and
+    # ncols in x, so they are the grid's height and width respectively.
+    # Passed by name - transposing them silently moves the grid bounds,
+    # which only shows up on a grid that is not square.
+    return read_split_stream(
+        split_core(
+            to_geoarrow(geometries),
             nrows=grid.height,
             ncols=grid.width,
             transform=grid.transform,
             **split_kwargs,
         )
-        return from_geoarrow(geometry), parent
-
-    if len(geometries) <= SPLIT_CHUNK_SIZE:
-        return split(geometries)
-
-    pieces = []
-    parents = []
-    for start in tqdm(range(0, len(geometries), SPLIT_CHUNK_SIZE)):
-        geometry, parent = split(geometries.iloc[start : start + SPLIT_CHUNK_SIZE])
-        pieces.append(geometry)
-        parents.append(parent + start)
-    return numpy.concatenate(pieces), numpy.concatenate(parents)
+    )
 
 
 # Module-level logger
@@ -324,7 +338,7 @@ def split_linestrings(
         )
         linestring_features = prepare_linestrings(linestring_features.copy())
     # split every feature in one call
-    geometry, parent = _split_in_chunks(
+    geometry, parent = _split(
         split_linestrings_core,
         linestring_features.geometry,
         grid,
@@ -387,9 +401,7 @@ def split_polygons_experimental(
     """
     # split every feature in one call: crossing into the extension per
     # feature costs far more than the splitting itself
-    geometry, parent = _split_in_chunks(
-        split_polygons_core, polygon_features.geometry, grid
-    )
+    geometry, parent = _split(split_polygons_core, polygon_features.geometry, grid)
     logger.info(f"  Split {len(polygon_features)} areas into {len(geometry)} pieces")
     # repeat each parent feature's attributes for each of its pieces
     splits_df = geopandas.GeoDataFrame(polygon_features.iloc[parent])

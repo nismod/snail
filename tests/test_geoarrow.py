@@ -1,13 +1,16 @@
 """Tests for GeoArrow data exchange with the C++ extension (issue #14)
 
-Geometry columns cross into the extension as GeoArrow arrays and the split
-pieces come back the same way. These tests cover that interface itself: the
-equivalence of the splits with the single-geometry functions is covered in
+Geometries cross into the extension as a stream of GeoArrow batches and the
+split pieces come back as a stream of record batches. These tests cover that
+interface: which sources can be split, how the stream behaves, and how the
+pieces come back. That the splits themselves are right is covered in
 test_intersection.py.
 """
 
 import geopandas as gpd
+import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from numpy.testing import assert_array_equal
 from shapely.geometry import LineString, Polygon
@@ -16,41 +19,21 @@ from snail.core.intersections import split_linestrings as core_split_linestrings
 from snail.core.intersections import split_polygon as core_split_polygon
 from snail.core.intersections import split_polygons as core_split_polygons
 
-from snail.intersection import GridDefinition, from_geoarrow, to_geoarrow
+from snail.intersection import read_split_stream, to_geoarrow
 
 NROWS = NCOLS = 4
 TRANSFORM = (1, 0, 0, 0, 1, 0)
 
 
-def linestring_type():
-    """list<vertices: fixed_size_list<xy: double>[2]>"""
-    return pa.list_(pa.field("vertices", vertices_type(), nullable=False))
+def batches_of(stream):
+    """Every record batch of a split stream"""
+    reader = pa.RecordBatchReader._import_from_c_capsule(stream.__arrow_c_stream__())
+    return list(reader)
 
 
-def polygon_type():
-    """list<rings: list<vertices: fixed_size_list<xy: double>[2]>>"""
-    return pa.list_(
-        pa.field(
-            "rings",
-            pa.list_(pa.field("vertices", vertices_type(), nullable=False)),
-            nullable=False,
-        )
-    )
-
-
-def vertices_type():
-    return pa.list_(pa.field("xy", pa.float64(), nullable=False), 2)
-
-
-def field_of(array):
-    """The Arrow field an array exports, carrying its GeoArrow metadata"""
-    schema_capsule, _ = array.__arrow_c_array__()
-    return pa.Field._import_from_c_capsule(schema_capsule)
-
-
-@pytest.fixture
-def grid():
-    return GridDefinition(crs=None, width=NCOLS, height=NROWS, transform=TRANSFORM)
+def geometry_of(stream):
+    """The split pieces of a stream, as shapely geometries"""
+    return read_split_stream(stream)[0]
 
 
 @pytest.fixture
@@ -77,156 +60,317 @@ def polygons():
     )
 
 
-class TestSplitLineStrings:
-    def test_matches_single_geometry_split(self, linestrings):
-        """Splitting a whole GeoArrow array gives what splitting each
-        linestring in turn gives"""
-        pieces, parent = core_split_linestrings(
+@pytest.fixture
+def many_linestrings():
+    return gpd.GeoSeries(
+        [LineString([(i + 0.5, 0.5), (i + 0.5, 3.5)]) for i in range(6)]
+    )
+
+
+class TestSourceKinds:
+    """Any Arrow source of geometries can be split, however it is batched"""
+
+    def sources(self, geometries):
+        array = pa.array(geometries.to_arrow(geometry_encoding="geoarrow"))
+        frame = gpd.GeoDataFrame({"a": range(len(geometries))}, geometry=geometries)
+        return {
+            # a single array: exposes only __arrow_c_array__
+            "GeoSeries.to_arrow": geometries.to_arrow(geometry_encoding="geoarrow"),
+            "pyarrow.Array": array,
+            # batched sources: expose only __arrow_c_stream__
+            "pyarrow.ChunkedArray": pa.chunked_array(
+                [array.slice(i, 1) for i in range(len(array))]
+            ),
+            "pyarrow.Table": pa.table({"geometry": array}),
+            "GeoDataFrame.to_arrow": frame.to_arrow(geometry_encoding="geoarrow"),
+            "snail to_geoarrow": to_geoarrow(geometries),
+        }
+
+    def test_batched_sources_offer_no_array_interface(self, linestrings):
+        """The reason for consuming a stream: the batched sources cannot be
+        read through __arrow_c_array__ at all"""
+        sources = self.sources(linestrings)
+
+        for name in ("pyarrow.ChunkedArray", "pyarrow.Table", "GeoDataFrame.to_arrow"):
+            assert not hasattr(sources[name], "__arrow_c_array__"), name
+            assert hasattr(sources[name], "__arrow_c_stream__"), name
+        for name in ("GeoSeries.to_arrow", "pyarrow.Array"):
+            assert hasattr(sources[name], "__arrow_c_array__"), name
+
+    def test_linestring_sources_agree(self, linestrings):
+        expected = None
+        for name, source in self.sources(linestrings).items():
+            actual = geometry_of(
+                core_split_linestrings(source, NROWS, NCOLS, TRANSFORM)
+            )
+            if expected is None:
+                expected = actual
+                assert len(expected) == 6
+            assert len(actual) == len(expected), name
+            for piece, want in zip(actual, expected):
+                assert piece.equals_exact(want, 1e-12), name
+
+    def test_polygon_sources_agree(self, polygons):
+        expected = None
+        for name, source in self.sources(polygons).items():
+            actual = geometry_of(core_split_polygons(source, NROWS, NCOLS, TRANSFORM))
+            if expected is None:
+                expected = actual
+                assert len(expected) == 25
+            assert len(actual) == len(expected), name
+            assert sorted(round(p.area, 9) for p in actual) == sorted(
+                round(p.area, 9) for p in expected
+            ), name
+
+    def test_record_batch_reader(self, many_linestrings):
+        """A reader that only yields batches once, as an external source
+        would - it has no array interface and cannot be rewound"""
+        array = pa.array(many_linestrings.to_arrow(geometry_encoding="geoarrow"))
+        schema = pa.schema([pa.field("geometry", array.type)])
+        reader = pa.RecordBatchReader.from_batches(
+            schema,
+            (
+                pa.RecordBatch.from_arrays([array.slice(i, 2)], schema=schema)
+                for i in range(0, len(array), 2)
+            ),
+        )
+        assert not hasattr(reader, "__arrow_c_array__")
+
+        pieces = geometry_of(core_split_linestrings(reader, NROWS, NCOLS, TRANSFORM))
+        assert len(pieces) == 24
+
+    def test_geoparquet_with_separated_coordinates(self, tmp_path, many_linestrings):
+        """GeoParquet stores coordinates separated into x and y columns
+        rather than interleaved, and must split to the same pieces"""
+        frame = gpd.GeoDataFrame(
+            {"a": range(len(many_linestrings))},
+            geometry=many_linestrings,
+            crs="EPSG:4326",
+        )
+        path = tmp_path / "lines.parquet"
+        frame.to_parquet(path, geometry_encoding="geoarrow")
+        parquet = pq.ParquetFile(path)
+        assert pa.types.is_struct(
+            parquet.schema_arrow.field("geometry").type.value_type
+        )
+
+        reader = pa.RecordBatchReader.from_batches(
+            parquet.schema_arrow, parquet.iter_batches(batch_size=2)
+        )
+        actual = geometry_of(core_split_linestrings(reader, NROWS, NCOLS, TRANSFORM))
+        expected = geometry_of(
+            core_split_linestrings(
+                to_geoarrow(many_linestrings), NROWS, NCOLS, TRANSFORM
+            )
+        )
+
+        assert len(actual) == len(expected)
+        for piece, want in zip(actual, expected):
+            assert piece.equals_exact(want, 1e-12)
+
+
+class TestStream:
+    def test_nothing_is_split_until_the_stream_is_read(self, many_linestrings):
+        """The split runs as the pieces are read, pulling one source batch
+        at a time"""
+        array = pa.array(many_linestrings.to_arrow(geometry_encoding="geoarrow"))
+        schema = pa.schema([pa.field("geometry", array.type)])
+        pulled = []
+
+        def source_batches():
+            for i in range(len(array)):
+                pulled.append(i)
+                yield pa.RecordBatch.from_arrays([array.slice(i, 1)], schema=schema)
+
+        stream = core_split_linestrings(
+            pa.RecordBatchReader.from_batches(schema, source_batches()),
+            NROWS,
+            NCOLS,
+            TRANSFORM,
+        )
+        assert pulled == []
+
+        reader = pa.RecordBatchReader._import_from_c_capsule(
+            stream.__arrow_c_stream__()
+        )
+        assert pulled == []
+
+        pieces = iter(reader)
+        next(pieces)
+        assert pulled == [0]
+        next(pieces)
+        assert pulled == [0, 1]
+        list(pieces)
+        assert pulled == [0, 1, 2, 3, 4, 5]
+
+    def test_one_result_batch_per_source_batch(self, many_linestrings):
+        array = pa.array(many_linestrings.to_arrow(geometry_encoding="geoarrow"))
+        source = pa.chunked_array([array.slice(i, 2) for i in range(0, len(array), 2)])
+
+        batches = batches_of(core_split_linestrings(source, NROWS, NCOLS, TRANSFORM))
+
+        assert source.num_chunks == 3
+        assert len(batches) == 3
+
+    def test_parents_index_the_whole_source(self, many_linestrings):
+        """A piece's parent indexes the source, not the batch it was in"""
+        array = pa.array(many_linestrings.to_arrow(geometry_encoding="geoarrow"))
+        source = pa.chunked_array([array.slice(i, 2) for i in range(0, len(array), 2)])
+
+        _, parent = read_split_stream(
+            core_split_linestrings(source, NROWS, NCOLS, TRANSFORM)
+        )
+
+        assert_array_equal(np.unique(parent), [0, 1, 2, 3, 4, 5])
+        assert_array_equal(np.bincount(parent), [4, 4, 4, 4, 4, 4])
+
+    def test_batching_does_not_change_the_pieces(self, many_linestrings):
+        """Where the source batch boundaries fall makes no difference"""
+        array = pa.array(many_linestrings.to_arrow(geometry_encoding="geoarrow"))
+        results = []
+        for size in (1, 2, 4, len(array)):
+            source = pa.chunked_array(
+                [array.slice(i, size) for i in range(0, len(array), size)]
+            )
+            results.append(
+                read_split_stream(
+                    core_split_linestrings(source, NROWS, NCOLS, TRANSFORM)
+                )
+            )
+
+        first_geometry, first_parent = results[0]
+        for geometry, parent in results[1:]:
+            assert len(geometry) == len(first_geometry)
+            for piece, want in zip(geometry, first_geometry):
+                assert piece.equals_exact(want, 1e-12)
+            assert_array_equal(parent, first_parent)
+
+    def test_stream_is_consumed_once(self, linestrings):
+        """Arrow streams are one-shot: reading the pieces takes them"""
+        stream = core_split_linestrings(
             to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM
         )
-        actual = gpd.GeoSeries.from_arrow(pieces)
+        assert len(batches_of(stream)) == 1
 
-        assert_array_equal(parent, [0, 0, 0, 1, 1, 1])
+        with pytest.raises(ValueError, match="already been read"):
+            stream.__arrow_c_stream__()
+
+    def test_result_schema(self, linestrings, polygons):
+        """Each batch carries the GeoArrow geometry and the parent index"""
+        for geometries, split, extension in (
+            (linestrings, core_split_linestrings, b"geoarrow.linestring"),
+            (polygons, core_split_polygons, b"geoarrow.polygon"),
+        ):
+            stream = split(to_geoarrow(geometries), NROWS, NCOLS, TRANSFORM)
+            assert stream.geometry_type == extension.decode()
+
+            reader = pa.RecordBatchReader._import_from_c_capsule(
+                stream.__arrow_c_stream__()
+            )
+            schema = reader.schema
+            assert schema.names == ["geometry", "parent"]
+            assert (
+                schema.field("geometry").metadata[b"ARROW:extension:name"] == extension
+            )
+            assert schema.field("parent").type == pa.int64()
+            list(reader)
+
+    def test_pieces_outlive_the_stream(self, linestrings):
+        """A batch owns its buffers, so it survives the stream closing"""
+        batches = batches_of(
+            core_split_linestrings(to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM)
+        )
+        table = pa.Table.from_batches(batches)
+        expected = table.to_pylist()
+        del batches
+
+        assert table.to_pylist() == expected
+
+    def test_empty_source(self):
+        empty = pa.chunked_array(
+            [],
+            type=pa.list_(
+                pa.field(
+                    "vertices",
+                    pa.list_(pa.field("xy", pa.float64(), nullable=False), 2),
+                    nullable=False,
+                )
+            ),
+        )
+        geometry, parent = read_split_stream(
+            core_split_linestrings(empty, NROWS, NCOLS, TRANSFORM)
+        )
+
+        assert len(geometry) == 0
+        assert len(parent) == 0
+
+
+class TestSplits:
+    def test_linestrings_match_single_geometry_split(self, linestrings):
+        actual = geometry_of(
+            core_split_linestrings(to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM)
+        )
+
         expected = []
         for geometry in linestrings:
             expected.extend(core_split_linestring(geometry, NROWS, NCOLS, TRANSFORM))
         assert len(actual) == len(expected)
-        for actual_piece, expected_piece in zip(actual, expected):
-            assert actual_piece.equals_exact(expected_piece, 1e-12)
+        for piece, want in zip(actual, expected):
+            assert piece.equals_exact(want, 1e-12)
 
-    def test_returns_geoarrow_linestrings(self, linestrings):
-        """The pieces come back as a geoarrow.linestring array, so any
-        Arrow-aware reader can interpret them"""
-        pieces, _ = core_split_linestrings(
-            to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM
+    def test_polygons_match_single_geometry_split(self, polygons):
+        actual = geometry_of(
+            core_split_polygons(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
         )
-        field = field_of(pieces)
-
-        assert pieces.geometry_type == "geoarrow.linestring"
-        assert field.metadata[b"ARROW:extension:name"] == b"geoarrow.linestring"
-        assert field.type == linestring_type()
-
-    def test_accepts_plain_arrow_array(self):
-        """An array of the right shape is read even without GeoArrow
-        extension metadata, as produced by pyarrow directly"""
-        arrow = pa.array([[[0.5, 0.5], [1.5, 1.5]]], type=linestring_type())
-        pieces, parent = core_split_linestrings(arrow, NROWS, NCOLS, TRANSFORM)
-
-        assert len(pieces) == 2
-        assert_array_equal(parent, [0, 0])
-
-    def test_reads_sliced_array(self, linestrings):
-        """Slices carry a non-zero Arrow offset, which must be honoured"""
-        arrow = pa.array(to_geoarrow(linestrings))
-        pieces, parent = core_split_linestrings(
-            arrow.slice(1, 1), NROWS, NCOLS, TRANSFORM
-        )
-        actual = gpd.GeoSeries.from_arrow(pieces)
-        expected = core_split_linestring(linestrings[1], NROWS, NCOLS, TRANSFORM)
-
-        assert_array_equal(parent, [0, 0, 0])
-        for actual_piece, expected_piece in zip(actual, expected):
-            assert actual_piece.equals_exact(expected_piece, 1e-12)
-
-    def test_empty_array(self):
-        pieces, parent = core_split_linestrings(
-            pa.array([], type=linestring_type()), NROWS, NCOLS, TRANSFORM
-        )
-        assert len(pieces) == 0
-        assert len(parent) == 0
-        assert len(from_geoarrow(pieces)) == 0
-
-    def test_bounded_passed_through(self):
-        """bounded=True leaves the parts outside the grid unsplit"""
-        outside = gpd.GeoSeries([LineString([(5.0, 0.5), (16.0, 1.5)])])
-
-        bounded, _ = core_split_linestrings(
-            to_geoarrow(outside), NROWS, NCOLS, TRANSFORM, True
-        )
-        unbounded, _ = core_split_linestrings(
-            to_geoarrow(outside), NROWS, NCOLS, TRANSFORM, False
-        )
-        assert len(bounded) == 1
-        assert len(unbounded) > 1
-
-
-class TestSplitPolygons:
-    def test_matches_single_geometry_split(self, polygons):
-        pieces, parent = core_split_polygons(
-            to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM
-        )
-        actual = gpd.GeoSeries.from_arrow(pieces)
 
         expected = []
         for geometry in polygons:
             expected.extend(core_split_polygon(geometry, NROWS, NCOLS, TRANSFORM))
         assert len(actual) == len(expected)
-        assert sorted(round(piece.area, 9) for piece in actual) == sorted(
-            round(piece.area, 9) for piece in expected
+        assert sorted(round(p.area, 9) for p in actual) == sorted(
+            round(p.area, 9) for p in expected
         )
-        assert_array_equal(parent[:1], [0])
-        assert parent.max() == 1
 
-    def test_returns_geoarrow_polygons(self, polygons):
-        pieces, _ = core_split_polygons(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
-        field = field_of(pieces)
-
-        assert pieces.geometry_type == "geoarrow.polygon"
-        assert field.metadata[b"ARROW:extension:name"] == b"geoarrow.polygon"
-        assert field.type == polygon_type()
-
-    def test_pieces_are_valid_and_conserve_area(self, polygons):
+    def test_polygon_pieces_are_valid_and_conserve_area(self, polygons):
         """Splitting cuts a polygon up without losing or duplicating area,
         holes included"""
-        pieces, _ = core_split_polygons(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
-        actual = gpd.GeoSeries.from_arrow(pieces)
-
-        assert actual.is_valid.all()
-        assert actual.area.sum() == pytest.approx(polygons.area.sum())
-
-    def test_empty_array(self):
-        pieces, parent = core_split_polygons(
-            pa.array([], type=polygon_type()), NROWS, NCOLS, TRANSFORM
+        pieces = gpd.GeoSeries(
+            geometry_of(
+                core_split_polygons(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
+            )
         )
-        assert len(pieces) == 0
-        assert len(parent) == 0
-        assert len(from_geoarrow(pieces)) == 0
 
+        assert pieces.is_valid.all()
+        assert pieces.area.sum() == pytest.approx(polygons.area.sum())
 
-class TestArrowInterface:
-    def test_export_is_repeatable(self, linestrings):
-        """Exporting shares the buffers rather than handing them over, so an
-        array can be read any number of times"""
-        pieces, _ = core_split_linestrings(
-            to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM
+    def test_bounded_passed_through(self):
+        outside = gpd.GeoSeries([LineString([(5.0, 0.5), (16.0, 1.5)])])
+
+        bounded = geometry_of(
+            core_split_linestrings(to_geoarrow(outside), NROWS, NCOLS, TRANSFORM, True)
         )
-        first = pa.array(pieces)
-        second = pa.array(pieces)
-
-        assert first.equals(second)
-        assert len(first) == len(pieces)
-
-    def test_pieces_outlive_reader(self, linestrings):
-        """The exported buffers stay alive with the Arrow array, not with
-        the object it came from"""
-        pieces, _ = core_split_linestrings(
-            to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM
+        unbounded = geometry_of(
+            core_split_linestrings(to_geoarrow(outside), NROWS, NCOLS, TRANSFORM, False)
         )
-        arrow = pa.array(pieces)
-        expected = arrow.to_pylist()
-        del pieces
 
-        assert arrow.to_pylist() == expected
+        assert len(bounded) == 1
+        assert len(unbounded) > 1
 
+
+class TestErrors:
     def test_rejects_wrong_geometry_type(self, polygons, linestrings):
         with pytest.raises(ValueError, match="geoarrow.polygon"):
-            core_split_linestrings(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
+            batches_of(
+                core_split_linestrings(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
+            )
         with pytest.raises(ValueError, match="geoarrow.linestring"):
-            core_split_polygons(to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM)
+            batches_of(
+                core_split_polygons(to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM)
+            )
 
     def test_rejects_multi_geometries(self):
-        """MultiLineStrings must be merged or exploded first - the error
-        should say so rather than complain about Arrow types"""
+        """Multi-part geometries must be merged or exploded first - the
+        error should say so rather than complain about Arrow types"""
         multi = gpd.GeoSeries.from_wkt(
             ["MULTILINESTRING ((0.5 0.5, 1.5 1.5), (2.5 2.5, 3.5 3.5))"]
         )
@@ -238,16 +382,18 @@ class TestArrowInterface:
         with pytest.raises(ValueError, match="geoarrow.wkb"):
             core_split_linestrings(arrow, NROWS, NCOLS, TRANSFORM)
 
-    def test_rejects_separated_coordinates(self, linestrings):
-        arrow = linestrings.to_arrow(geometry_encoding="geoarrow", interleaved=False)
-        with pytest.raises(ValueError, match="separated"):
-            core_split_linestrings(arrow, NROWS, NCOLS, TRANSFORM)
-
     def test_rejects_null_geometries(self, linestrings):
         with_null = gpd.GeoSeries([linestrings[0], None])
         with pytest.raises(ValueError, match="null"):
-            core_split_linestrings(to_geoarrow(with_null), NROWS, NCOLS, TRANSFORM)
+            batches_of(
+                core_split_linestrings(to_geoarrow(with_null), NROWS, NCOLS, TRANSFORM)
+            )
 
-    def test_rejects_non_arrow_input(self, linestrings):
-        with pytest.raises(TypeError, match="GeoArrow"):
+    def test_rejects_non_arrow_source(self, linestrings):
+        with pytest.raises(TypeError, match="Arrow"):
             core_split_linestrings(linestrings.to_numpy(), NROWS, NCOLS, TRANSFORM)
+
+    def test_rejects_stream_without_a_geometry_column(self):
+        table = pa.table({"a": [1, 2], "b": [3, 4]})
+        with pytest.raises(ValueError, match="GeoArrow"):
+            core_split_linestrings(table, NROWS, NCOLS, TRANSFORM)

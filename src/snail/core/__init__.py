@@ -1,5 +1,5 @@
 from .intersections import (
-    GeoArrowArray,
+    SplitStream,
     get_cell_indices,
     split_linestring,
     split_linestrings,
@@ -8,7 +8,7 @@ from .intersections import (
 )
 
 __all__ = [
-    "GeoArrowArray",
+    "SplitStream",
     "get_cell_indices",
     "split_linestring",
     "split_linestrings",
