@@ -240,10 +240,13 @@ def write_features(features: geopandas.GeoDataFrame, path, layer=None):
             raise ValueError(
                 f"Cannot write layer {layer!r} to {path}: Parquet output does not support layers"
             )
+        logger.info("Writing %s", path)
         features.to_parquet(path)
     elif layer is not None:
+        logger.info("Writing %s:%s", path, layer)
         features.to_file(path, layer=layer)
     else:
+        logger.info("Writing %s", path)
         features.to_file(path)
 
 
