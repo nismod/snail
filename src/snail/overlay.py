@@ -8,7 +8,6 @@ implicitly reproject features to the raster CRS (and back) if they differ.
 
 import logging
 from pathlib import Path
-from typing import Optional, Union
 
 import geopandas
 import pandas
@@ -41,8 +40,8 @@ logger = logging.getLogger(__name__)
 def overlay_raster(
     features: geopandas.GeoDataFrame,
     raster,
-    bands: Optional[list[int]] = None,
-    column: Optional[str] = None,
+    bands: list[int] | None = None,
+    column: str | None = None,
     experimental: bool = False,
     lazy: bool = False,
 ) -> geopandas.GeoDataFrame:
@@ -98,7 +97,7 @@ def overlay_raster(
 
 def overlay_rasters(
     features: geopandas.GeoDataFrame,
-    rasters: Union[list, pandas.DataFrame],
+    rasters: list | pandas.DataFrame,
     experimental: bool = False,
     lazy: bool = False,
 ) -> geopandas.GeoDataFrame:
@@ -175,7 +174,7 @@ def split_features(
 
     if source_crs is None or grid.crs is None:
         if (source_crs is None) != (grid.crs is None):
-            logging.warning(
+            logger.warning(
                 "CRS undefined for features (%s) or grid (%s): assuming they share a CRS",
                 source_crs,
                 grid.crs,
@@ -184,7 +183,7 @@ def split_features(
     elif _crs_equal(source_crs, grid.crs):
         reprojected = False
     else:
-        logging.info(
+        logger.info(
             "Reprojecting features from %s to grid CRS %s for splitting",
             source_crs,
             grid.crs,
@@ -263,7 +262,7 @@ def _normalise_rasters(rasters) -> pandas.DataFrame:
     return df
 
 
-def parse_bands(value) -> Optional[tuple]:
+def parse_bands(value) -> tuple | None:
     """Parse a band numbers value to a tuple of ints
 
     Accepts an int, a comma-separated string ("1,2,3"), or a list/tuple of
