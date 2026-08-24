@@ -1974,7 +1974,7 @@ requires-dist = [
     { name = "numpydoc", marker = "extra == 'docs'" },
     { name = "openpyxl" },
     { name = "pandera" },
-    { name = "pyarrow" },
+    { name = "pyarrow", specifier = ">=14" },
     { name = "pyogrio" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },

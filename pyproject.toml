@@ -31,7 +31,8 @@ dependencies = [
     "numpy",
     "openpyxl",
     "pandera",
-    "pyarrow",
+    # GeoSeries.to_arrow / from_arrow require pyarrow >= 14
+    "pyarrow>=14",
     "pyogrio",
     "rasterio",
     "rioxarray",
