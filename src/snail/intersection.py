@@ -61,7 +61,7 @@ def from_geoarrow(pieces) -> numpy.ndarray:
     return geopandas.GeoSeries.from_arrow(pieces).to_numpy()
 
 
-def _split_in_chunks(split_core, geometries, grid, *split_args):
+def _split_in_chunks(split_core, geometries, grid, **split_kwargs):
     """Split geometries with a batch splitter, a chunk at a time
 
     Geometries are handed to the splitter as a GeoArrow array and come back
@@ -70,27 +70,29 @@ def _split_in_chunks(split_core, geometries, grid, *split_args):
     """
     if len(geometries) == 0:
         return numpy.empty(0, dtype=object), numpy.empty(0, dtype=numpy.int64)
-    if len(geometries) <= SPLIT_CHUNK_SIZE:
+
+    def split(chunk):
+        # The extension counts rows and columns: nrows spans the grid in y
+        # and ncols in x, so they are the grid's height and width
+        # respectively. Passed by name - transposing them silently moves
+        # the grid bounds, which only shows up on a grid that is not square.
         geometry, parent = split_core(
-            to_geoarrow(geometries),
-            grid.width,
-            grid.height,
-            grid.transform,
-            *split_args,
+            to_geoarrow(chunk),
+            nrows=grid.height,
+            ncols=grid.width,
+            transform=grid.transform,
+            **split_kwargs,
         )
         return from_geoarrow(geometry), parent
+
+    if len(geometries) <= SPLIT_CHUNK_SIZE:
+        return split(geometries)
 
     pieces = []
     parents = []
     for start in tqdm(range(0, len(geometries), SPLIT_CHUNK_SIZE)):
-        geometry, parent = split_core(
-            to_geoarrow(geometries.iloc[start : start + SPLIT_CHUNK_SIZE]),
-            grid.width,
-            grid.height,
-            grid.transform,
-            *split_args,
-        )
-        pieces.append(from_geoarrow(geometry))
+        geometry, parent = split(geometries.iloc[start : start + SPLIT_CHUNK_SIZE])
+        pieces.append(geometry)
         parents.append(parent + start)
     return numpy.concatenate(pieces), numpy.concatenate(parents)
 
@@ -326,7 +328,7 @@ def split_linestrings(
         split_linestrings_core,
         linestring_features.geometry,
         grid,
-        bounded,
+        bounded=bounded,
     )
     logger.info(f"Split {len(linestring_features)} edges into {len(geometry)} pieces")
     # repeat each parent feature's attributes for each of its pieces
@@ -523,7 +525,9 @@ def get_indices(
 
     N.B. There is no checking whether a geometry spans more than one cell.
     """
-    i, j = get_cell_indices(geom, grid.height, grid.width, grid.transform)
+    i, j = get_cell_indices(
+        geom, nrows=grid.height, ncols=grid.width, transform=grid.transform
+    )
 
     # Raise error if cell index would be out of bounds
     # assert 0 <= i < t.width

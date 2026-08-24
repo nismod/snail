@@ -173,8 +173,12 @@ PYBIND11_MODULE(intersections, m) {
         pybind11::arg("bounded") = false,
         "Split LineString along a grid, returning LineString pieces");
   m.def("get_cell_indices", &snail::get_cell_indices,
+        pybind11::arg("linestring"), pybind11::arg("nrows"),
+        pybind11::arg("ncols"), pybind11::arg("transform"),
         "Get LineString cell indices in a grid");
-  m.def("split_polygon", &snail::splitPolygon,
+  m.def("split_polygon", &snail::splitPolygon, pybind11::arg("polygon"),
+        pybind11::arg("nrows"), pybind11::arg("ncols"),
+        pybind11::arg("transform"),
         "Split Polygon along a grid, returning Polygon pieces");
 
   // Whole geometry columns are exchanged as GeoArrow arrays: this

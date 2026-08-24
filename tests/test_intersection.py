@@ -399,6 +399,45 @@ def test_split_linestrings_collinear_with_grid_edge(grid):
     assert coords == expected_coords
 
 
+def test_split_linestrings_bounded_on_non_square_grid():
+    # regression test: the extension counts rows (y) and columns (x), so a
+    # grid's height and width must reach it that way round. Transposing them
+    # moves the bounds used by bounded=True, which a square grid cannot show.
+    # This grid is 8 cells wide and 2 high, so x runs 0..8 and y runs 0..2.
+    grid = GridDefinition(crs=None, width=8, height=2, transform=(1, 0, 0, 0, 1, 0))
+
+    # runs the width of the grid, overhanging its western edge: splits at
+    # every gridline up to x = 8, not merely up to x = 2
+    along_x = gpd.GeoDataFrame(
+        {"id": [1]}, geometry=[LineString([(-2.0, 0.5), (7.5, 0.5)])]
+    )
+    splits = split_linestrings(along_x, grid, bounded=True)
+    assert [list(geom.coords) for geom in splits.geometry] == [
+        [(-2.0, 0.5), (0.0, 0.5)],
+        [(0.0, 0.5), (1.0, 0.5)],
+        [(1.0, 0.5), (2.0, 0.5)],
+        [(2.0, 0.5), (3.0, 0.5)],
+        [(3.0, 0.5), (4.0, 0.5)],
+        [(4.0, 0.5), (5.0, 0.5)],
+        [(5.0, 0.5), (6.0, 0.5)],
+        [(6.0, 0.5), (7.0, 0.5)],
+        [(7.0, 0.5), (7.5, 0.5)],
+    ]
+
+    # the same the other way about: the grid is only 2 cells high, so the
+    # part of the line above y = 2 is outside it and stays unsplit
+    along_y = gpd.GeoDataFrame(
+        {"id": [1]}, geometry=[LineString([(0.5, -2.0), (0.5, 7.5)])]
+    )
+    splits = split_linestrings(along_y, grid, bounded=True)
+    assert [list(geom.coords) for geom in splits.geometry] == [
+        [(0.5, -2.0), (0.5, 0.0)],
+        [(0.5, 0.0), (0.5, 1.0)],
+        [(0.5, 1.0), (0.5, 2.0)],
+        [(0.5, 2.0), (0.5, 7.5)],
+    ]
+
+
 def test_box_geom_bounds():
     """Values take from tests/integration/range.tif"""
     grid = GridDefinition(
