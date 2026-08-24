@@ -177,6 +177,39 @@ Serve the HTML docs locally:
     cd docs/build/html
     python -m http.server
 
+### Benchmarks
+
+The repository includes benchmarks for the polygon and linestring splitting
+implementations. Run these commands from the repository root after installing
+the development environment and building the C++ targets:
+
+```bash
+cmake -Bbuild ./extension
+cmake --build build
+./build/run_benchmarks
+```
+
+This measures the C++ splitting core without Python conversion overhead. For a
+Python-level comparison, run:
+
+```bash
+python scripts/benchmark_split.py
+```
+
+The Python benchmark still compares `split_polygons` (the Shapely/GEOS overlay
+implementation) with `split_polygons_experimental` (the C++ per-cell
+implementation). It reports timings and piece counts, and checks that both
+implementations conserve polygon area. Results are machine-dependent; use the
+same environment and workload when comparing changes.
+
+Recent run in the `snail-dev` environment:
+
+| Workload | Overlay | Experimental | Speedup | Pieces |
+| --- | ---: | ---: | ---: | ---: |
+| 500 small buildings | 119.7 ms | 2.8 ms | 42.7× | 725 |
+| 50 medium circles | 458.5 ms | 11.9 ms | 38.4× | 18,051 |
+| 1 large circle | 215.8 ms | 4.5 ms | 47.5× | 6,528 |
+
 ### C++ library
 
 The C++ library in `extension/src` contains the core routines to find intersections of
@@ -216,6 +249,7 @@ Or with C++ headers installed on a Linux machine:
         -I/usr/include/c++/11 \
         -I{$PWD}/extension/extern/pybind11/include \
         -I/usr/include/python3.12
+
 
 ### Integration of C++ and Python using pybind11
 

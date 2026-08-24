@@ -27,6 +27,7 @@ tests/integration/tmp.geojson
 *.o
 *.so
 build/*
+extension/build
 _skbuild
 CMakeCache.txt
 CMakeFiles/*

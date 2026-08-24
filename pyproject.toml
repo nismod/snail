@@ -35,13 +35,20 @@ dependencies = [
     "rasterio",
     "rioxarray",
     "scipy",
-    "shapely",
+    "shapely>=2.1",
     "xarray",
     "zarr>=3.0.8",
 ]
 
 [project.optional-dependencies]
-dev = ["affine", "ruff", "hilbertcurve", "nbstripout", "pytest-cov", "pytest"]
+dev = [
+    "affine",
+    "ruff",
+    "hilbertcurve",
+    "nbstripout",
+    "pytest-cov",
+    "pytest",
+]
 docs = ["sphinx", "nbsphinx", "sphinx_gallery", "numpydoc"]
 tutorials = [
     "contextily",

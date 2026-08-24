@@ -1,13 +1,17 @@
+import math
 import os
+import random
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
+import shapely
 from hilbertcurve.hilbertcurve import HilbertCurve
 from numpy.testing import assert_array_equal
 from pandas.testing import assert_series_equal
 from rasterio.crs import CRS
+from shapely import box
 from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.polygon import LinearRing, orient
 from snail.core.intersections import split_linestring as core_split_linestring
@@ -20,6 +24,7 @@ from snail.intersection import (
     get_raster_values_for_splits,
     split_linestrings,
     split_polygons,
+    split_polygons_experimental,
 )
 
 
@@ -219,6 +224,32 @@ class TestSnailIntersections:
             expected_geom = expected.iloc[i, 1]
             assert actual_geom.equals(expected_geom)
         assert_array_equal(actual["col1"].values, expected["col1"].values)
+
+    def test_split_polygons_experimental(self, grid, polygon, polygon_split):
+        actual = sort_polygons(split_polygons_experimental(polygon, grid))
+        expected = sort_polygons(polygon_split)
+
+        assert len(actual) == len(expected)
+        for i in range(len(actual)):
+            actual_geom = actual.iloc[i, 1]
+            expected_geom = expected.iloc[i, 1]
+            assert actual_geom.equals(expected_geom)
+        assert_array_equal(actual["col1"].values, expected["col1"].values)
+
+    def test_split_polygons_experimental_with_hole(self, grid):
+        polygon_with_hole = Polygon(
+            [(0.5, 0.5), (2.5, 0.5), (2.5, 2.5), (0.5, 2.5)],
+            [[(1.25, 1.25), (1.75, 1.25), (1.75, 1.75), (1.25, 1.75)]],
+        )
+        gdf = gpd.GeoDataFrame({"col1": ["name1"], "geometry": [polygon_with_hole]})
+        expected = sort_polygons(split_polygons(gdf.copy(), grid))
+        actual = sort_polygons(split_polygons_experimental(gdf.copy(), grid))
+
+        assert len(actual) == 9
+        assert actual.geometry.area.sum() == pytest.approx(polygon_with_hole.area)
+        assert len(actual) == len(expected)
+        for i in range(len(actual)):
+            assert actual.iloc[i, 1].equals(expected.iloc[i, 1])
 
 
 def _make_sample_splits():
@@ -453,3 +484,127 @@ def test_core_split_linestring_zero_length_on_corner():
     )
     lengths = [geom.length for geom in parts]
     assert all(length > 0 for length in lengths)
+
+
+def _random_test_polygons(seed, count):
+    """Polygons chosen to stress grid splitting: some with holes, and some
+    with coordinates rounded onto grid lines to provoke degenerate cases
+    (vertices and edges exactly on a cell border)"""
+    rng = random.Random(seed)
+    polygons = []
+    while len(polygons) < count:
+        centre = Point(rng.uniform(1, 9), rng.uniform(1, 9))
+        radius = rng.uniform(0.05, 3.0)
+        resolution = rng.choice([1, 2, 4, 8])
+        geom = centre.buffer(radius, resolution=resolution)
+        if rng.random() < 0.4:
+            geom = geom.difference(centre.buffer(radius * 0.4, resolution=resolution))
+        if rng.random() < 0.5:
+            # snap coordinates onto a coarse grid, to land vertices and
+            # edges exactly on cell borders, then drop the precision model
+            # it leaves behind: GEOS applies that model to later overlay
+            # operations, which would make the comparisons below disagree
+            # with themselves - intersecting such a geometry with each of
+            # its cells loses the slivers thinner than the precision
+            geom = shapely.set_precision(shapely.set_precision(geom, 0.1), 0)
+        if geom.geom_type == "Polygon" and geom.is_valid and not geom.is_empty:
+            polygons.append(geom)
+    return polygons
+
+
+@pytest.mark.parametrize(
+    "transform",
+    [
+        (1, 0, 0, 0, 1, 0),  # y increasing north
+        (1, 0, 0, 0, -1, 10),  # y increasing south, as for a north-up raster
+        (0.5, 0, -1, 0, -0.5, 11),  # offset, fractional cell size
+    ],
+)
+def test_split_polygons_experimental_random(transform):
+    """Splitting must conserve area and yield valid pieces, each within a
+    single cell, however the polygon falls on the grid"""
+    grid = GridDefinition(crs=None, width=40, height=40, transform=transform)
+    cell_width, cell_height = abs(transform[0]), abs(transform[4])
+
+    polygons = _random_test_polygons(seed=20220309, count=200)
+    features = gpd.GeoDataFrame({"col1": range(len(polygons)), "geometry": polygons})
+    splits = split_polygons_experimental(features, grid)
+
+    assert splits.geometry.is_valid.all()
+    assert (splits.geometry.geom_type == "Polygon").all()
+
+    # each polygon's pieces account for exactly its area
+    areas = splits.geometry.area.groupby(splits["col1"]).sum()
+    for i, polygon in enumerate(polygons):
+        assert areas[i] == pytest.approx(polygon.area, rel=1e-9), (
+            f"polygon {i} not conserved: {polygon.wkt}"
+        )
+
+    # every piece lies within one cell, so is no larger than one
+    bounds = splits.geometry.bounds
+    assert ((bounds.maxx - bounds.minx) <= cell_width + 1e-9).all()
+    assert ((bounds.maxy - bounds.miny) <= cell_height + 1e-9).all()
+
+
+def test_split_polygons_experimental_matches_cells():
+    """Each piece must be exactly what the polygon has in its own cell.
+
+    Comparing cell by cell against a direct intersection with that cell's
+    box, rather than comparing totals, catches a gap in one cell paid for
+    by an overlap in another.
+    """
+    grid = GridDefinition(crs=None, width=30, height=30, transform=(1, 0, 0, 0, 1, 0))
+
+    for polygon in _random_test_polygons(seed=99, count=40):
+        features = gpd.GeoDataFrame({"col1": ["name1"], "geometry": [polygon]})
+        splits = split_polygons_experimental(features, grid)
+
+        # a piece lies within one cell, but its vertices may sit on that
+        # cell's border, so the middle of its extent identifies the cell
+        bounds = splits.geometry.bounds
+        i = np.floor((bounds.minx.to_numpy() + bounds.maxx.to_numpy()) / 2).astype(int)
+        j = np.floor((bounds.miny.to_numpy() + bounds.maxy.to_numpy()) / 2).astype(int)
+
+        by_cell = {}
+        for cell, area in zip(zip(i.tolist(), j.tolist()), splits.geometry.area):
+            by_cell[cell] = by_cell.get(cell, 0.0) + area
+
+        minx, miny, maxx, maxy = polygon.bounds
+        for ci in range(math.floor(minx), math.ceil(maxx)):
+            for cj in range(math.floor(miny), math.ceil(maxy)):
+                expected = polygon.intersection(box(ci, cj, ci + 1, cj + 1)).area
+                actual = by_cell.pop((ci, cj), 0.0)
+                assert actual == pytest.approx(expected, abs=1e-9), (
+                    f"cell ({ci}, {cj}) has {actual}, expected {expected}, "
+                    f"for {polygon.wkt}"
+                )
+        assert not by_cell, f"pieces outside the polygon's cells: {sorted(by_cell)}"
+
+
+def test_split_linestrings_random():
+    """Splitting a linestring must conserve its length, and every piece must
+    lie within one cell"""
+    grid = GridDefinition(crs=None, width=40, height=40, transform=(1, 0, 0, 0, 1, 0))
+    rng = random.Random(4242)
+
+    lines = []
+    for _ in range(200):
+        x, y = rng.uniform(2, 35), rng.uniform(2, 35)
+        points = [(x, y)]
+        for _ in range(rng.randint(1, 8)):
+            x += rng.uniform(-4, 4)
+            y += rng.uniform(-4, 4)
+            points.append((x, y))
+        lines.append(LineString(points))
+
+    features = gpd.GeoDataFrame({"col1": range(len(lines)), "geometry": lines})
+    splits = split_linestrings(features, grid)
+
+    assert (splits.geometry.length > 0).all()
+    lengths = splits.geometry.length.groupby(splits["col1"]).sum()
+    for i, line in enumerate(lines):
+        assert lengths[i] == pytest.approx(line.length, rel=1e-9)
+
+    bounds = splits.geometry.bounds
+    assert ((bounds.maxx - bounds.minx) <= 1 + 1e-9).all()
+    assert ((bounds.maxy - bounds.miny) <= 1 + 1e-9).all()

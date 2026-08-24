@@ -25,99 +25,71 @@ struct Coord {
   // Divide a Coord by a constant
   Coord operator/(const double a) const { return Coord(x / a, y / a); }
 
-  // Default constructor: zero Coord
-  Coord() : x(0.0), y(0.0) {}
+  // Default construct at the origin, so a Coord can fill a container
+  Coord() : x(0), y(0) {}
   // Construct a Coord from doubles
   Coord(const double x, const double y) : x(x), y(y) {}
   // Construct a Coord from tuple of two ints
-  Coord(const std::tuple<int, int> xy)
-      : x(std::get<0>(xy)), y(std::get<1>(xy)) {}
+  Coord(const std::tuple<int, int> xy) : x(std::get<0>(xy)), y(std::get<1>(xy)) {}
   // Construct a Coord from tuple of two doubles
-  Coord(const std::tuple<double, double> xy)
-      : x(std::get<0>(xy)), y(std::get<1>(xy)) {}
+  Coord(const std::tuple<double, double> xy) : x(std::get<0>(xy)), y(std::get<1>(xy)) {}
 
   // Helper function to calculate the length of a Coord
   inline double length(void) const { return std::hypot(x, y); }
 };
 
-/// A templated 2D line representation
+/// A 2D line segment with start and end points
 struct Line {
   // Start point of the line, in 2D space
   Coord start;
   // End point of the line, in 2D space
   Coord end;
   // Calculate the midpoint of a line
-  inline Coord midPoint(void) const {
-    return Coord((end.x + start.x) / 2, (end.y + start.y) / 2);
-  }
-  // Calculate the GEOMETRIC length of a line (NOTE: for lines in
-  // spherical projection, use haversine formula to find great-circle length)
+  inline Coord midPoint(void) const { return Coord((end.x + start.x) / 2, (end.y + start.y) / 2); }
+  // Calculate the GEOMETRIC length of a line, assuming planar
   inline double length(void) const {
     double dx = end.x - start.x;
     double dy = end.y - start.y;
     return std::hypot(dx, dy);
   }
   /// Calculate the bearing of a line.
-  inline double bearing(void) const {
-    return atan2(end.x - start.x, end.y - start.y);
-  }
+  inline double bearing(void) const { return atan2(end.x - start.x, end.y - start.y); }
 
   /// Construct a line from two points
   Line(const Coord start, const Coord end) : start(start), end(end) {}
-
-  /// Calculate whether two Line objects cross in space (assumed to
-  /// be in the sample plane).
-  bool linesCross(const Line l) const {
-    double dx = end.x - start.x;
-    double dy = end.y - start.y;
-    double _dx = l.end.x - l.start.x;
-    double _dy = l.end.y - l.start.y;
-    double denom = -_dx * dy + dx * _dy;
-    double s =
-        (-dy * (start.x - l.start.x) + dx * (start.y - l.start.y)) / denom;
-    double t =
-        (_dx * (start.y - l.start.y) - _dy * (start.x - l.start.x)) / denom;
-
-    // NOTE: If needed, lines cross at this point Coord
-    // intersection(p0_x + (t * s1_x), p0_y + (t * s1_y));
-    if (s >= 0 && s <= 1 && t >= 0 && t <= 1)
-      return true;
-
-    return false;
-  }
-  /// Calculate whether a Line crosses a line comprising a pair of
-  /// Coord points.
-  bool linesCross(const Coord start, Coord end) {
-    return linesCross(Line(start, end));
-  }
 };
 
-/// A templated LineString representation. The list of points in coordinates
+// A sequence of 2D points
+using Ring = std::vector<Coord>;
+
+/// Twice the signed area of a closed ring (positive if counter-clockwise).
+double ringTwiceSignedArea(const Ring &ring);
+
+/// A LineString. The list of points in coordinates
 /// defines a series of connected straight-line segments.
 struct LineString {
-  std::vector<geometry::Coord> coordinates;
+  std::vector<Coord> coordinates;
 
-  LineString(const std::vector<geometry::Coord> coordinates)
-      : coordinates(coordinates) {}
+  LineString() : coordinates{} {}
+  LineString(const std::vector<Coord> coordinates) : coordinates(coordinates) {}
 };
 
-/// Haversine formula - calculate the distance between two points on the surface
-/// of the earth, using great-circles (NOTE: Only use with data in
-/// latitude/longitude coordinates).
-inline double haversine(Line line) {
-  // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
-  double dLat_2 = ((line.end.y - line.start.y) * utils::toRad) * 0.5;
-  // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
-  double dLon_2 = ((line.end.x - line.start.x) * utils::toRad) * 0.5;
+/// A polygon: one exterior ring and zero or more interior rings (holes).
+/// Rings are stored closed (first point equal to last point).
+struct Polygon {
+  Ring exterior;
+  std::vector<Ring> interiors;
 
-  double a = sin(dLat_2) * sin(dLat_2) + cos(line.start.y * utils::toRad) *
-                                             cos(line.end.y * utils::toRad) *
-                                             sin(dLon_2) * sin(dLon_2);
-  // NOLINTNEXTLINE(cppcoreguidelines-avoid-magic-numbers)
-  double c = 2.0 * atan2(sqrt(a), sqrt(1 - a));
+  double area() const {
+    // holes are wound clockwise, so their signed area is negative
+    double area2 = ringTwiceSignedArea(exterior);
+    for (const Ring &interior : interiors) {
+      area2 += ringTwiceSignedArea(interior);
+    }
+    return area2 * 0.5;
+  }
+};
 
-  return utils::R * c;
-}
 } // namespace geometry
 } // namespace snail
 
