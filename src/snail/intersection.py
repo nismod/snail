@@ -49,7 +49,7 @@ def _split_in_chunks(split_core, geometries, grid, *split_args):
     Returns the pieces, and for each piece the index of the geometry it came
     from.
     """
-if len(geometries) == 0:
+    if len(geometries) == 0:
         return numpy.empty(0, dtype=object), numpy.empty(0, dtype=numpy.int64)
     if len(geometries) <= SPLIT_CHUNK_SIZE:
         return split_core(
