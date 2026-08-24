@@ -38,16 +38,19 @@ else:
     from snail.tqdm_standin import tqdm_standin as tqdm
 
 
-# The extension splits one Arrow batch at a time, so an in-memory geometry
-# column is presented to it in batches of this many features: splitting a
-# whole table at once would give no sign of progress on a long job, and
-# would hold every piece of every feature in memory at once. A source that
-# brings its own batching - a GeoParquet reader, a Dataset scan - can be
-# split directly, and keeps whatever batch size it was read with.
-#
-# Each batch costs something fixed to set up and read back, so batches much
-# smaller than this measurably slow a large split down; much larger ones buy
-# no more speed and only raise the peak memory.
+#: Batch size for splitting an in-memory geometry column.
+#:
+#: The extension splits one Arrow batch at a time, so an in-memory geometry
+#: column is presented to it in batches of this many features: splitting a
+#: whole table at once would give no sign of progress on a long job, and
+#: would hold every piece of every feature in memory at once. A source that
+#: brings its own batching - a GeoParquet reader, a Dataset scan - can be
+#: split directly, and keeps whatever batch size it was read with; this only
+#: governs the batches :func:`to_geoarrow` slices an in-memory column into.
+#:
+#: Each batch costs something fixed to set up and read back, so batches much
+#: smaller than this measurably slow a large split down; much larger ones buy
+#: no more speed and only raise the peak memory.
 SPLIT_BATCH_SIZE = 5000
 
 
@@ -58,6 +61,26 @@ def to_geoarrow(geometries: geopandas.GeoSeries, batch_size: int = SPLIT_BATCH_S
     which the extension reads directly - no geometry object is built per
     feature on either side of the interface. Batches are zero-copy slices
     of the one Arrow array, and the geometry type travels with them.
+
+    This is what :func:`split_linestrings` and :func:`split_polygons_experimental`
+    use to feed a geometry column to :func:`snail.core.intersections.split_linestrings`
+    or :func:`snail.core.intersections.split_polygons`; call it directly
+    only if you are working with those lower-level, Arrow-native functions
+    yourself.
+
+    Parameters
+    ----------
+    geometries: geopandas.GeoSeries
+        Column of LineString or Polygon geometries to split.
+    batch_size: int
+        Number of features per batch. See :data:`SPLIT_BATCH_SIZE`.
+
+    Returns
+    -------
+    pyarrow.Table
+        A single-column ``"geometry"`` table, chunked into batches of
+        ``batch_size`` features, implementing the Arrow PyCapsule stream
+        interface (``__arrow_c_stream__``) that the extension consumes.
     """
     # Import the geometry column through its capsules rather than with
     # pyarrow.array, which would keep the values but drop the GeoArrow
@@ -81,10 +104,34 @@ def to_geoarrow(geometries: geopandas.GeoSeries, batch_size: int = SPLIT_BATCH_S
 
 
 def read_split_stream(stream) -> tuple[numpy.ndarray, numpy.ndarray]:
-    """Read a stream of split pieces from the extension
+    """Read a stream of split pieces from the extension into memory
 
-    The split runs as the stream is read, a batch at a time. Returns the
-    pieces, and for each piece the index of the geometry it came from.
+    The split runs as the stream is read, a batch at a time, but this
+    drains the stream fully and concatenates every batch: use it when you
+    want the pieces as shapely geometries and are content to hold them all
+    at once, which is what :func:`split_linestrings` and
+    :func:`split_polygons_experimental` do. To keep the streaming memory
+    benefit - splitting a source larger than memory, for example - iterate
+    the stream yourself instead, e.g. with
+    ``pyarrow.RecordBatchReader._import_from_c_capsule(stream.__arrow_c_stream__())``,
+    and consume each record batch as it arrives.
+
+    Parameters
+    ----------
+    stream
+        A :class:`snail.core.intersections.SplitStream`, or any object
+        implementing the Arrow PyCapsule stream interface
+        (``__arrow_c_stream__``) with a ``"geometry"`` and a ``"parent"``
+        column, such as the result of
+        :func:`snail.core.intersections.split_linestrings` or
+        :func:`snail.core.intersections.split_polygons`.
+
+    Returns
+    -------
+    geometry: numpy.ndarray
+        The split pieces, as shapely geometries.
+    parent: numpy.ndarray
+        For each piece, the index of the geometry it was split from.
     """
     reader = pyarrow.RecordBatchReader._import_from_c_capsule(
         stream.__arrow_c_stream__()
@@ -340,6 +387,18 @@ def split_linestrings(
     contiguous, then exploded to one row per part, resetting the index) with
     a warning. Call :func:`prepare_linestrings` beforehand to opt in to this
     explicitly and keep control of the row index.
+
+    Parameters
+    ----------
+    linestring_features: geopandas.GeoDataFrame
+        Features to split; other columns are carried over onto each piece.
+    grid: GridDefinition
+        Grid to split along.
+    bounded: bool
+        If False (the default), a feature is split for its whole length,
+        including any part that falls outside the grid. If True, splitting
+        stops at the grid's edge: pieces outside the grid are left whole
+        rather than cut at every gridline they would otherwise cross.
     """
     if (linestring_features.geometry.geom_type == "MultiLineString").any():
         logger.warning(
