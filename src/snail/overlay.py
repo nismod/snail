@@ -238,6 +238,17 @@ def _raster_key(raster) -> str:
     stem = Path(str(name)).stem
     return stem if stem else "raster"
 
+def _format_key(row, colnames):
+    if colnames:
+        # stitch together from metadata columns
+        parts = []
+        for c in colnames:
+            parts.append(f"{c}:{row.loc[c]}")
+        key = "|".join(parts)
+    else:
+        # fall back to path as key
+        key = row.loc["path"]
+    return key
 
 def _describe_raster(raster) -> str:
     return str(getattr(raster, "name", raster))
@@ -256,7 +267,9 @@ def _normalise_rasters(rasters) -> pandas.DataFrame:
         df = pandas.DataFrame({"path": list(rasters)})
 
     if "key" not in df.columns:
-        keys = [_raster_key(p) for p in df.path]
+        colnames = sorted(set(df.columns) - {"path", "bands"})
+        keys = [_format_key(row, colnames) for _, row in df.iterrows()]
+
         if len(set(keys)) != len(keys):
             # duplicate filename stems - fall back to full paths as keys
             keys = [_describe_raster(p) for p in df.path]
