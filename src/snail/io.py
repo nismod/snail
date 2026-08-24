@@ -14,7 +14,6 @@ import rioxarray
 from snail.intersection import (
     GridDefinition,
     _is_xarray_dataarray,
-    get_raster_values_for_splits,
 )
 
 if TYPE_CHECKING:
