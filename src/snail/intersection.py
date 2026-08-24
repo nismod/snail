@@ -43,30 +43,54 @@ else:
 SPLIT_CHUNK_SIZE = 1000
 
 
+def to_geoarrow(geometries: geopandas.GeoSeries):
+    """Geometry column as a GeoArrow array, for the extension to read
+
+    GeoArrow holds the geometries as flat coordinate and offset buffers,
+    which the extension reads directly - no geometry object is built per
+    feature on either side of the interface.
+    """
+    return geometries.to_arrow(geometry_encoding="geoarrow", interleaved=True)
+
+
+def from_geoarrow(pieces) -> numpy.ndarray:
+    """Geometries of a GeoArrow array returned by the extension"""
+    if len(pieces) == 0:
+        # geopandas cannot read a zero-length GeoArrow array
+        return numpy.empty(0, dtype=object)
+    return geopandas.GeoSeries.from_arrow(pieces).to_numpy()
+
+
 def _split_in_chunks(split_core, geometries, grid, *split_args):
     """Split geometries with a batch splitter, a chunk at a time
 
-    Returns the pieces, and for each piece the index of the geometry it came
-    from.
+    Geometries are handed to the splitter as a GeoArrow array and come back
+    the same way. Returns the pieces, and for each piece the index of the
+    geometry it came from.
     """
     if len(geometries) == 0:
         return numpy.empty(0, dtype=object), numpy.empty(0, dtype=numpy.int64)
     if len(geometries) <= SPLIT_CHUNK_SIZE:
-        return split_core(
-            geometries, grid.width, grid.height, grid.transform, *split_args
-        )
-
-    pieces = []
-    parents = []
-    for start in tqdm(range(0, len(geometries), SPLIT_CHUNK_SIZE)):
         geometry, parent = split_core(
-            geometries[start : start + SPLIT_CHUNK_SIZE],
+            to_geoarrow(geometries),
             grid.width,
             grid.height,
             grid.transform,
             *split_args,
         )
-        pieces.append(geometry)
+        return from_geoarrow(geometry), parent
+
+    pieces = []
+    parents = []
+    for start in tqdm(range(0, len(geometries), SPLIT_CHUNK_SIZE)):
+        geometry, parent = split_core(
+            to_geoarrow(geometries.iloc[start : start + SPLIT_CHUNK_SIZE]),
+            grid.width,
+            grid.height,
+            grid.transform,
+            *split_args,
+        )
+        pieces.append(from_geoarrow(geometry))
         parents.append(parent + start)
     return numpy.concatenate(pieces), numpy.concatenate(parents)
 
@@ -300,7 +324,7 @@ def split_linestrings(
     # split every feature in one call
     geometry, parent = _split_in_chunks(
         split_linestrings_core,
-        linestring_features.geometry.to_numpy(),
+        linestring_features.geometry,
         grid,
         bounded,
     )
@@ -362,7 +386,7 @@ def split_polygons_experimental(
     # split every feature in one call: crossing into the extension per
     # feature costs far more than the splitting itself
     geometry, parent = _split_in_chunks(
-        split_polygons_core, polygon_features.geometry.to_numpy(), grid
+        split_polygons_core, polygon_features.geometry, grid
     )
     logger.info(f"  Split {len(polygon_features)} areas into {len(geometry)} pieces")
     # repeat each parent feature's attributes for each of its pieces
