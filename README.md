@@ -42,6 +42,62 @@ If all worked okay, you should be able to run python and import snail:
     NAME
         snail - snail - the spatial networks impact assessment library
 
+## Using snail as a Python library
+
+The high-level `snail.overlay_raster` and `snail.overlay_rasters` functions
+split vector features (points, lines or polygons) along the cells of a raster
+grid and attribute the raster cell values to each split feature:
+
+```python
+>>> import geopandas
+>>> import snail
+
+>>> features = geopandas.read_file("lines.geojson")
+>>> splits = snail.overlay_raster(features, "gridded_data.tif")
+>>> splits.to_file("split_lines_with_raster_values.gpkg")
+```
+
+The result contains one row per split feature (each feature is split wherever
+it crosses a raster cell boundary), with the input feature attributes, cell
+indices in columns `index_i` and `index_j`, and one column of raster values
+per band. Values from a single-band raster are attributed under the raster
+filename stem (e.g. `gridded_data`) or the name given as `column`; values from
+a multi-band raster are attributed under `"{column}_band_{n}"` for each band
+`n`, or select bands with `bands`:
+
+```python
+>>> splits = snail.overlay_raster(
+...     features, "gridded_data.tif", bands=[1, 2], column="depth"
+... )
+>>> splits.columns
+Index([..., 'index_i', 'index_j', 'depth_band_1', 'depth_band_2'], dtype='object')
+```
+
+If the features and raster are in different coordinate reference systems, the
+features are implicitly reprojected to the raster CRS for splitting and value
+lookup, then returned in their original CRS. Rasters can be given as file
+paths or open rasterio datasets.
+
+`snail.overlay_rasters` intersects all features with all rasters in one call,
+splitting on each distinct grid and attributing one column per raster band.
+Pass a list of raster paths, or a `pandas.DataFrame` with columns `path`
+(required), `bands` (optional band numbers, e.g. `"1,2,3"`, defaulting to all
+bands) and `key` (optional output column name, defaulting to the raster
+filename stem):
+
+```python
+>>> import pandas
+>>> rasters = pandas.DataFrame({
+...     "path": ["flood_rp100.tif", "flood_rp1000.tif"],
+...     "key": ["rp100", "rp1000"],
+... })
+>>> splits = snail.overlay_rasters(features, rasters)
+```
+
+Lower-level building blocks (grid definitions, splitting, cell indexing,
+value lookup) are available in `snail.intersection`, and helpers for reading
+and writing files in `snail.io`.
+
 ## Using the `snail` command
 
 Once installed, you can use `snail` directly from the command line.
@@ -72,6 +128,16 @@ snail split \
 Adding `--lazy-rasters` keeps large raster bands on disk and fetches values
 lazily via `xarray`/`dask`.
 
+Input features can be any vector format readable by geopandas (GeoPackage,
+Shapefile, GeoJSON, GeoParquet...), and the output format is picked from the
+output file extension (`.parquet` or `.geoparquet` for GeoParquet). Pick a
+layer from a multi-layer file with `--layer NAME`, or split every layer with
+`--all-layers` (writing each to a layer of a GeoPackage output). Attributed
+values from a single-band raster are stored in a column named by `--column`
+(default: raster filename stem); a multi-band raster attributes one column
+per band, named `"{column}_band_{n}"`, with bands selected by e.g. `--band 1 2`
+(default: all bands).
+
 Split multiple vector feature files along the grids defined by multiple raster
 files, attributing all raster values:
 
@@ -79,7 +145,28 @@ files, attributing all raster values:
 snail process -fs features.csv -rs rasters.csv
 ```
 
-Where at a minimum, each CSV has a column `path` with the path to each file.
+`snail process` calculates all features intersected with all rasters: each
+row of the features CSV is split against every distinct raster grid and
+produces one output file, with one column of attributed values per raster
+file/band.
+
+At a minimum, each CSV has a column `path` with the path to each file (relative
+to `--directory`, if given). Optional columns in the features CSV:
+
+- `layer`: layer name to read from a multi-layer file. Use `*` to process
+  every layer in the file (one output file per layer).
+- `output_path`: where to write the split and attributed features. If not
+  provided, outputs are named `"{features_stem}_{layer}__{rasters_csv_stem}.parquet"`
+  next to the input file (layer part omitted if no layer is specified). The
+  output format is picked from the file extension, as for `snail split`.
+
+Optional columns in the rasters CSV:
+
+- `bands`: band numbers to attribute, e.g. `1` or `"1,2,3"` (default: all bands).
+- `key`: output column name (multi-band rasters attribute one column per band,
+  named `"{key}_band_{n}"`). If not provided, keys are generated from any other
+  metadata columns (e.g. a `hazard` column with value `flood` gives key
+  `hazard:flood`), falling back to the raster path.
 
 The `--lazy-rasters` flag can be supplied to `snail process` when working with
 large rasters.

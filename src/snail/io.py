@@ -1,6 +1,8 @@
 import importlib.util
 import logging
+from contextlib import contextmanager
 from os import PathLike
+from pathlib import Path
 from typing import TYPE_CHECKING, Union
 
 import geopandas
@@ -12,7 +14,6 @@ import rioxarray
 from snail.intersection import (
     GridDefinition,
     _is_xarray_dataarray,
-    get_raster_values_for_splits,
 )
 
 if TYPE_CHECKING:
@@ -22,50 +23,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def associate_raster_files(splits, rasters, lazy: bool = False):
-    """Read values from a list of raster files for a set of indexed split geometries
+def band_column_name(key: str, band_number: int, number_of_bands: int) -> str:
+    """Name the output column for a raster band.
 
-    Parameters
-    ----------
-    splits: pandas.DataFrame
-        split geometries with raster indices in columns named "i_{grid_id}", "j_{grid_id}"
-        for each grid_id in `rasters`
-
-    rasters: pandas.DataFrame
-        table of raster metadata with columns: key, grid_id, path, bands
-
-    lazy: bool, default False
-        When True, raster bands are opened lazily via xarray/dask. Requires
-        optional dependencies (xarray, dask, rioxarray).
-
-    Returns
-    -------
-    pandas.DataFrame
-        split geometries with raster data values at indexed locations
+    Single-band rasters attribute values in a column named by `key`,
+    multi-band rasters in a column per band, named "{key}_band_{band_number}".
     """
-    # to prevent a fragmented dataframe (and a memory explosion), add series to a dict
-    # and then concat afterwards -- do not append to an existing dataframe
-    raster_data: dict[str, pandas.Series] = {}
-
-    # associate values
-    for raster, band_number, band_data in read_rasters(rasters, lazy=lazy):
-        logger.info(
-            "Associating values from raster %s grid %s band %s",
-            raster.key,
-            raster.grid_id,
-            band_number,
-        )
-        raster_data[raster.key] = get_raster_values_for_splits(
-            splits,
-            band_data,
-            f"i_{raster.grid_id}",
-            f"j_{raster.grid_id}",
-        )
-
-    raster_data = pandas.DataFrame(raster_data)
-    splits = pandas.concat([splits, raster_data], axis="columns")
-
-    return splits
+    if number_of_bands == 1:
+        return key
+    return f"{key}_band_{band_number}"
 
 
 def read_rasters(rasters, lazy: bool = False):
@@ -89,15 +55,37 @@ def read_rasters(rasters, lazy: bool = False):
                 data_array.close()
 
 
+def _is_rasterio_dataset(value) -> bool:
+    """True for an open rasterio dataset (duck-typed, covers the reader classes)"""
+    return isinstance(value, rasterio.DatasetReader) or (
+        hasattr(value, "read") and hasattr(value, "transform") and hasattr(value, "crs")
+    )
+
+
+@contextmanager
+def _open_raster(raster):
+    """Yield a rasterio dataset from either a path or an open dataset"""
+    if _is_rasterio_dataset(raster):
+        # already open - pass through, the caller owns closing it
+        yield raster
+    else:
+        with rasterio.open(raster) as dataset:
+            yield dataset
+
+
 def read_raster_band_data(
     source: Union[str, PathLike, "xarray.DataArray"],
     band_number: int = 1,
     lazy: bool = False,
 ) -> Union[numpy.ndarray, "xarray.DataArray"]:
+    """Read a single band from a raster path, open rasterio dataset or DataArray"""
     if band_number < 1:
         raise ValueError(f"band_number must be >= 1, got {band_number}")
     if _is_xarray_dataarray(source):
         return _select_dataarray_band(source, band_number)
+
+    if _is_rasterio_dataset(source):
+        return source.read(band_number)
 
     if isinstance(source, (str, PathLike)):
         if not lazy:
@@ -109,7 +97,8 @@ def read_raster_band_data(
         return band_data
 
     raise TypeError(
-        "Unsupported raster source; expected a path-like object or xarray.DataArray."
+        "Unsupported raster source; expected a path-like object, "
+        "an open rasterio dataset or an xarray.DataArray."
     )
 
 
@@ -134,7 +123,13 @@ def extend_rasters_metadata(
         raster_bands.append(bands)
 
     rasters["grid_id"] = grid_ids
-    if "bands" not in rasters.columns:
+    if "bands" in rasters.columns:
+        # fill any missing values with all the bands discovered in the raster
+        rasters["bands"] = [
+            discovered if given is None else given
+            for given, discovered in zip(rasters.bands, raster_bands)
+        ]
+    else:
         rasters["bands"] = raster_bands
 
     return rasters, grids
@@ -143,17 +138,19 @@ def extend_rasters_metadata(
 def read_raster_metadata(
     source: Union[str, PathLike, "xarray.DataArray"],
 ) -> tuple[GridDefinition, tuple[int]]:
+    """Read grid definition and band indexes from a raster path, an open
+    rasterio dataset or an xarray DataArray"""
     if _is_xarray_dataarray(source):
         return _read_dataarray_metadata(source)
 
-    with rasterio.open(source) as dataset:
+    with _open_raster(source) as dataset:
         bands = dataset.indexes
         grid = GridDefinition.from_rasterio(dataset)
     return grid, bands
 
 
 def read_features(path, layer=None):
-    if path.suffix in (".parquet", ".geoparquet"):
+    if Path(path).suffix in (".parquet", ".geoparquet"):
         features = geopandas.read_parquet(path)
     else:
         if importlib.util.find_spec("pyogrio"):
@@ -166,6 +163,47 @@ def read_features(path, layer=None):
             features = geopandas.read_file(path, engine=engine)
 
     return features[~features.geometry.isna()]
+
+
+def read_layer_names(path) -> list[str]:
+    """List the layer names in a vector file"""
+    if importlib.util.find_spec("pyogrio"):
+        import pyogrio
+
+        return [name for name, _geometry_type in pyogrio.list_layers(path)]
+    else:
+        import fiona
+
+        return fiona.listlayers(path)
+
+
+def write_features(features: geopandas.GeoDataFrame, path, layer=None):
+    """Write features to a vector file or GeoParquet, depending on file extension
+
+    Paths ending ".parquet" or ".geoparquet" are written with
+    `geopandas.GeoDataFrame.to_parquet`, anything else is passed to
+    `geopandas.GeoDataFrame.to_file` (with `layer` if provided, for formats
+    such as GeoPackage which support multiple layers).
+    """
+    if Path(path).suffix in (".parquet", ".geoparquet"):
+        if layer is not None:
+            raise ValueError(
+                f"Cannot write layer {layer!r} to {path}: Parquet output does not support layers"
+            )
+        logger.info("Writing %s", path)
+        if logger.getEffectiveLevel() == logging.WARNING:
+            print("Writing", path)
+        features.to_parquet(path)
+    elif layer is not None:
+        logger.info("Writing %s:%s", path, layer)
+        if logger.getEffectiveLevel() == logging.WARNING:
+            print("Writing", f"{path}:{layer}")
+        features.to_file(path, layer=layer)
+    else:
+        logger.info("Writing %s", path)
+        if logger.getEffectiveLevel() == logging.WARNING:
+            print("Writing", path)
+        features.to_file(path)
 
 
 def write_grid_to_raster(
