@@ -83,7 +83,7 @@ def overlay_raster(
 
     splits = split_features(features, grid, experimental=experimental)
     for band_number in bands:
-        band_column = band_column_name(column, band_number, len(bands))
+        band_column = band_column_name(column, band_number, len(all_bands))
         logger.info(
             "Attributing values from %s band %s in column %s",
             _describe_raster(raster),
