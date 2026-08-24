@@ -182,8 +182,11 @@ def snail(args=None):
     logger.info("Start.")
     try:
         args.func(args)
-    except AttributeError:
-        parser.print_help()
+    except AttributeError as e:
+        if "no attribute 'func'" in str(e):
+            parser.print_help()
+        else:
+            raise
     logger.info("Done.")
 
 
