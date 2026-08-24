@@ -35,55 +35,6 @@ def band_column_name(key: str, band_number: int, number_of_bands: int) -> str:
     return f"{key}_band_{band_number}"
 
 
-def associate_raster_files(splits, rasters, lazy: bool = False):
-    """Read values from a list of raster files for a set of indexed split geometries
-
-    Parameters
-    ----------
-    splits: pandas.DataFrame
-        split geometries with raster indices in columns named "i_{grid_id}", "j_{grid_id}"
-        for each grid_id in `rasters`
-
-    rasters: pandas.DataFrame
-        table of raster metadata with columns: key, grid_id, path, bands
-
-    lazy: bool, default False
-        When True, raster bands are opened lazily via xarray/dask. Requires
-        optional dependencies (xarray, dask, rioxarray).
-
-    Returns
-    -------
-    pandas.DataFrame
-        split geometries with raster data values at indexed locations, one
-        column per raster band, named by raster key (with a "_band_{n}" suffix
-        for each band of a multi-band raster)
-    """
-    # to prevent a fragmented dataframe (and a memory explosion), add series to a dict
-    # and then concat afterwards -- do not append to an existing dataframe
-    raster_data: dict[str, pandas.Series] = {}
-
-    # associate values
-    for raster, band_number, band_data in read_rasters(rasters, lazy=lazy):
-        logger.info(
-            "Associating values from raster %s grid %s band %s",
-            raster.key,
-            raster.grid_id,
-            band_number,
-        )
-        column = band_column_name(raster.key, band_number, len(raster.bands))
-        raster_data[column] = get_raster_values_for_splits(
-            splits,
-            band_data,
-            f"i_{raster.grid_id}",
-            f"j_{raster.grid_id}",
-        )
-
-    raster_data = pandas.DataFrame(raster_data)
-    splits = pandas.concat([splits, raster_data], axis="columns")
-
-    return splits
-
-
 def read_rasters(rasters, lazy: bool = False):
     for raster in rasters.itertuples():
         try:

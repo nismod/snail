@@ -13,11 +13,11 @@ from snail.overlay import overlay_raster, overlay_rasters, parse_bands, split_fe
 class TestOverlayRaster:
     def test_single_band_from_path(self, two_band_raster, lines_over_raster):
         splits = overlay_raster(lines_over_raster, two_band_raster, bands=[1])
-        # column named by raster filename stem for a single band
-        assert "two_band" in splits.columns
+        # column named by band for a multi-band raster
+        assert "two_band_band_1" in splits.columns
         # first line splits into two cells, second stays in one
         assert len(splits) == 3
-        assert_array_equal(splits["two_band"].values, [0.0, 1.0, 22.0])
+        assert_array_equal(splits["two_band_band_1"].values, [0.0, 1.0, 22.0])
         assert_array_equal(splits["index_i"].values, [0, 1, 2])
         assert_array_equal(splits["index_j"].values, [0, 0, 2])
         assert splits.crs == lines_over_raster.crs
@@ -34,12 +34,12 @@ class TestOverlayRaster:
         splits = overlay_raster(
             lines_over_raster, two_band_raster, bands=[2], column="depth"
         )
-        assert_array_equal(splits["depth"].values, [100.0, 101.0, 122.0])
+        assert_array_equal(splits["depth_band_2"].values, [100.0, 101.0, 122.0])
 
     def test_open_dataset(self, two_band_raster, lines_over_raster):
         with rasterio.open(two_band_raster) as dataset:
             splits = overlay_raster(lines_over_raster, dataset, bands=[1])
-        assert_array_equal(splits["two_band"].values, [0.0, 1.0, 22.0])
+        assert_array_equal(splits["two_band_band_1"].values, [0.0, 1.0, 22.0])
 
     def test_dataarray(self, two_band_raster, lines_over_raster):
         rioxarray = pytest.importorskip("rioxarray")
@@ -47,14 +47,14 @@ class TestOverlayRaster:
         splits = overlay_raster(
             lines_over_raster, data_array, bands=[1], column="two_band"
         )
-        assert_array_equal(splits["two_band"].values, [0.0, 1.0, 22.0])
+        assert_array_equal(splits["two_band_band_1"].values, [0.0, 1.0, 22.0])
 
     def test_lazy_reads_the_same_values(self, two_band_raster, lines_over_raster):
         pytest.importorskip("rioxarray")
         splits = overlay_raster(
             lines_over_raster, two_band_raster, bands=[1], lazy=True
         )
-        assert_array_equal(splits["two_band"].values, [0.0, 1.0, 22.0])
+        assert_array_equal(splits["two_band_band_1"].values, [0.0, 1.0, 22.0])
 
     def test_reprojects_features_to_raster_crs(
         self, two_band_raster, lines_over_raster
@@ -64,19 +64,19 @@ class TestOverlayRaster:
         # implicitly reprojected to the raster CRS for splitting and lookup,
         # then returned in the original CRS
         assert splits.crs == projected.crs
-        assert_array_equal(splits["two_band"].values, [0.0, 1.0, 22.0])
+        assert_array_equal(splits["two_band_band_1"].values, [0.0, 1.0, 22.0])
 
     def test_points(self, two_band_raster):
         points = gpd.GeoDataFrame(
             {"geometry": [Point(0.5, 3.5), Point(2.5, 1.5)]}, crs="EPSG:4326"
         )
         splits = overlay_raster(points, two_band_raster, bands=[1])
-        assert_array_equal(splits["two_band"].values, [0.0, 22.0])
+        assert_array_equal(splits["two_band_band_1"].values, [0.0, 22.0])
 
     def test_outside_raster_is_nan(self, two_band_raster):
         points = gpd.GeoDataFrame({"geometry": [Point(10.5, 10.5)]}, crs="EPSG:4326")
         splits = overlay_raster(points, two_band_raster, bands=[1])
-        assert np.isnan(splits["two_band"].values[0])
+        assert np.isnan(splits["two_band_band_1"].values[0])
         assert_array_equal(splits["index_i"].values, [-1])
 
 
@@ -98,7 +98,7 @@ class TestOverlayRasters:
             }
         )
         splits = overlay_rasters(lines_over_raster, rasters)
-        assert_array_equal(splits["flood"].values, [0.0, 1.0, 22.0])
+        assert_array_equal(splits["flood_band_1"].values, [0.0, 1.0, 22.0])
         assert_array_equal(splits["heat_band_1"].values, [0.0, 1.0, 22.0])
         assert_array_equal(splits["heat_band_2"].values, [100.0, 101.0, 122.0])
 
@@ -113,7 +113,7 @@ class TestOverlayRasters:
             }
         )
         splits = overlay_rasters(lines_over_raster, rasters)
-        assert_array_equal(splits["flood"].values, [0.0, 1.0, 22.0])
+        assert_array_equal(splits["flood_band_1"].values, [0.0, 1.0, 22.0])
         assert_array_equal(splits["heat_band_1"].values, [0.0, 1.0, 22.0])
         assert_array_equal(splits["heat_band_2"].values, [100.0, 101.0, 122.0])
 

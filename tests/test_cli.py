@@ -82,7 +82,7 @@ def test_split_all_layers(tmp_path, two_band_raster, lines_over_raster):
 
     for layer in ("first", "second"):
         splits = gpd.read_file(output_path, layer=layer)
-        assert_array_equal(splits["two_band"].values, [0.0, 1.0, 22.0])
+        assert_array_equal(splits["two_band_band_1"].values, [0.0, 1.0, 22.0])
 
 
 def test_process_default_output_and_wildcard_layers(

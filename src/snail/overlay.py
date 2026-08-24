@@ -26,7 +26,6 @@ from snail.intersection import (
     split_polygons_experimental,
 )
 from snail.io import (
-    associate_raster_files,
     band_column_name,
     extend_rasters_metadata,
     read_raster_band_data,
@@ -137,7 +136,32 @@ def overlay_rasters(
     prepare, split_func = _prepare_and_split_funcs(features, experimental)
     prepared = prepare(features)
     splits = split_features_for_rasters(prepared, grids, split_func)
-    return associate_raster_files(splits, rasters, lazy=lazy)
+
+    # to prevent a fragmented dataframe (and a memory explosion), add series to a dict
+    # and then concat afterwards -- do not append to an existing dataframe
+    raster_data: dict[str, pandas.Series] = {}
+    # associate values
+    for raster in rasters.itertuples():
+        _, all_bands = read_raster_metadata(raster.path)
+        for band_number in raster.bands:
+            logger.info(
+                "Associating values from raster %s grid %s band %s",
+                raster.key,
+                raster.grid_id,
+                band_number,
+            )
+            column = band_column_name(raster.key, band_number, len(all_bands))
+            band_data = read_raster_band_data(raster.path, int(band_number), lazy=lazy)
+            raster_data[column] = get_raster_values_for_splits(
+                splits,
+                band_data,
+                f"i_{raster.grid_id}",
+                f"j_{raster.grid_id}",
+            )
+
+    raster_data = pandas.DataFrame(raster_data)
+    splits = pandas.concat([splits, raster_data], axis="columns")
+    return splits
 
 
 def split_features(
@@ -248,7 +272,7 @@ def _format_key(row, colnames):
         key = "|".join(parts)
     else:
         # fall back to path as key
-        key = row.loc["path"]
+        key = _raster_key(row.loc["path"])
     return key
 
 
@@ -274,7 +298,7 @@ def _normalise_rasters(rasters) -> pandas.DataFrame:
 
         if len(set(keys)) != len(keys):
             # duplicate filename stems - fall back to full paths as keys
-            keys = [_describe_raster(p) for p in df.path]
+            keys = [_raster_key(p) for p in df.path]
         df["key"] = keys
 
     if "bands" in df.columns:
