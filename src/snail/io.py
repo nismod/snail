@@ -241,12 +241,18 @@ def write_features(features: geopandas.GeoDataFrame, path, layer=None):
                 f"Cannot write layer {layer!r} to {path}: Parquet output does not support layers"
             )
         logger.info("Writing %s", path)
+        if logger.getEffectiveLevel() == logging.WARNING:
+            print("Writing", path)
         features.to_parquet(path)
     elif layer is not None:
         logger.info("Writing %s:%s", path, layer)
+        if logger.getEffectiveLevel() == logging.WARNING:
+            print("Writing", f"{path}:{layer}")
         features.to_file(path, layer=layer)
     else:
         logger.info("Writing %s", path)
+        if logger.getEffectiveLevel() == logging.WARNING:
+            print("Writing", path)
         features.to_file(path)
 
 
