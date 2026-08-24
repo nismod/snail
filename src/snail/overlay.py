@@ -229,7 +229,12 @@ def _crs_equal(a, b) -> bool:
 
 def _raster_key(raster) -> str:
     """Default output column name for a raster path or open dataset"""
-    name = getattr(raster, "name", raster)  # datasets know the path they came from
+    name = getattr(raster, "name", None)
+    if name is None:
+        if isinstance(raster, (str, Path)):
+            name = raster
+        else:
+            return "raster"
     stem = Path(str(name)).stem
     return stem if stem else "raster"
 
