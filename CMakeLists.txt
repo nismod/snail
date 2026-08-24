@@ -14,6 +14,7 @@ find_package(pybind11 CONFIG REQUIRED)
 python_add_library(intersections MODULE ${CPP_SRC_DIR}/intersections.cpp WITH_SOABI
                    ${CPP_SRC_DIR}/geometry.cpp ${CPP_SRC_DIR}/operations.cpp)
 
+target_compile_features(intersections PRIVATE cxx_std_17)
 target_include_directories(intersections PUBLIC ${CPP_SRC_DIR})
 target_link_libraries(intersections PRIVATE pybind11::headers)
 target_compile_definitions(intersections PRIVATE VERSION_INFO=${PROJECT_VERSION})
