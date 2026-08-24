@@ -17,6 +17,26 @@
 using linestr = std::vector<snail::geometry::Coord>;
 using snail::geometry::LineString;
 
+/// Split a linestring, as a list of pieces, so that the expectations below
+/// can be written as plain lists of points
+static std::vector<linestr> split_line(const linestr &coordinates,
+                                       const snail::grid::Grid &grid, const bool bounded = false) {
+  snail::operations::LinePieces pieces =
+      snail::operations::splitLineStringGrid(coordinates, grid, bounded);
+  std::vector<linestr> out;
+  for (std::size_t p = 0; p + 1 < pieces.offsets.size(); p++) {
+    out.push_back(linestr(pieces.coordinates.begin() + pieces.offsets[p],
+                          pieces.coordinates.begin() + pieces.offsets[p + 1]));
+  }
+  return out;
+}
+
+static std::vector<linestr> split_line(const LineString &line,
+                                       const snail::grid::Grid &grid,
+                                       const bool bounded = false) {
+  return split_line(line.coordinates, grid, bounded);
+}
+
 struct Config {
   linestr linestring;
   std::vector<linestr> expected_splits;
@@ -200,8 +220,7 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 
   // Using default Affine transform(1, 0, 0, 0, 1, 0)
   snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
-  std::vector<linestr> splits =
-      snail::operations::findIntersectionsLineString(line, test_raster);
+  std::vector<linestr> splits = split_line(geom, test_raster);
 
   // DEBUG
   /*
@@ -236,10 +255,8 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
 TEST_CASE("LineString corner produces zero-length split", "[decomposition]") {
   snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
   linestr coordinates = {{0.0, 0.0}, {1.0, 1.0}, {2.0, 0.0}};
-  snail::geometry::LineString line(coordinates);
 
-  auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster);
+  auto splits = split_line(coordinates, test_raster);
 
   bool zero_length_found = false;
   for (const auto &segment : splits) {
@@ -258,8 +275,7 @@ TEST_CASE("LineString outside grid remains unchanged", "[decomposition]") {
   linestr coordinates = {{3.0, 0.5}, {6.0, 0.7}};
   snail::geometry::LineString line(coordinates);
 
-  auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster, true);
+  auto splits = split_line(line, test_raster, true);
 
   REQUIRE(splits.size() == 1);
   REQUIRE(splits[0].size() == coordinates.size());
@@ -281,8 +297,7 @@ TEST_CASE("LineString partially overlapping grid splits correctly",
       {{1.0, 0.5}, {1.5, 0.5}},
   };
 
-  auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster, true);
+  auto splits = split_line(line, test_raster, true);
 
   REQUIRE(splits.size() == expected.size());
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -300,7 +315,7 @@ TEST_CASE("Bounded intersection leaves non-intersecting lines unsplit",
 
   SECTION("Overlaps x and y range with near-touch at {2.,0.}") {
     snail::geometry::LineString line({{1., -1.}, {3.0000000001, 1.}});
-    auto splits = snail::operations::findIntersectionsLineString(
+    auto splits = split_line(
         line, test_raster, true);
 
     REQUIRE(splits.size() == 1);
@@ -310,7 +325,7 @@ TEST_CASE("Bounded intersection leaves non-intersecting lines unsplit",
 
   SECTION("Overlaps x and y range without intersecting") {
     snail::geometry::LineString line({{1., -2.}, {2.5, -0.5}, {4., 1.}});
-    auto splits = snail::operations::findIntersectionsLineString(
+    auto splits = split_line(
         line, test_raster, true);
 
     REQUIRE(splits.size() == 1);
@@ -325,7 +340,7 @@ TEST_CASE("Bounded intersection handles reversed segment endpoints",
 
   SECTION("reversed x direction") {
     snail::geometry::LineString line({{1.5, 0.5}, {-5.0, 0.5}});
-    auto splits = snail::operations::findIntersectionsLineString(
+    auto splits = split_line(
         line, test_raster, true);
 
     REQUIRE(splits.size() == 3);
@@ -335,7 +350,7 @@ TEST_CASE("Bounded intersection handles reversed segment endpoints",
 
   SECTION("reversed y direction") {
     snail::geometry::LineString line({{0.5, 1.5}, {0.5, -5.0}});
-    auto splits = snail::operations::findIntersectionsLineString(
+    auto splits = split_line(
         line, test_raster, true);
 
     REQUIRE(splits.size() == 3);
@@ -350,7 +365,7 @@ TEST_CASE("Bounded intersection handles segments parallel to grid bounds",
 
   SECTION("vertical segment on a grid boundary") {
     snail::geometry::LineString line({{0.0, -1.0}, {0.0, 5.0}});
-    auto splits = snail::operations::findIntersectionsLineString(
+    auto splits = split_line(
         line, test_raster, true);
 
     REQUIRE(splits == std::vector<linestr>{
@@ -363,7 +378,7 @@ TEST_CASE("Bounded intersection handles segments parallel to grid bounds",
 
   SECTION("horizontal segment on a grid boundary") {
     snail::geometry::LineString line({{-1.0, 0.0}, {5.0, 0.0}});
-    auto splits = snail::operations::findIntersectionsLineString(
+    auto splits = split_line(
         line, test_raster, true);
 
     REQUIRE(splits == std::vector<linestr>{
@@ -381,14 +396,14 @@ TEST_CASE("Bounded intersection leaves disjoint parallel segments unchanged",
 
   SECTION("vertical segment outside") {
     snail::geometry::LineString line({{3.0, -1.0}, {3.0, 3.0}});
-    auto splits = snail::operations::findIntersectionsLineString(
+    auto splits = split_line(
         line, test_raster, true);
     REQUIRE(splits == std::vector<linestr>{{{3.0, -1.0}, {3.0, 3.0}}});
   }
 
   SECTION("horizontal segment outside") {
     snail::geometry::LineString line({{-1.0, 3.0}, {3.0, 3.0}});
-    auto splits = snail::operations::findIntersectionsLineString(
+    auto splits = split_line(
         line, test_raster, true);
     REQUIRE(splits == std::vector<linestr>{{{-1.0, 3.0}, {3.0, 3.0}}});
   }
@@ -423,8 +438,7 @@ TEST_CASE("LineString crossing whole grid splits when bounded, any direction",
   snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
   snail::geometry::LineString line(test_data.linestring);
 
-  auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster, true);
+  auto splits = split_line(line, test_raster, true);
 
   REQUIRE(splits.size() == expected.size());
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -467,8 +481,7 @@ TEST_CASE("Segment collinear with grid edge splits within bounds when bounded",
   snail::grid::Grid test_raster(2, 2, snail::transform::Affine());
   snail::geometry::LineString line(test_data.linestring);
 
-  auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster, true);
+  auto splits = split_line(line, test_raster, true);
 
   REQUIRE(splits.size() == expected.size());
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -489,8 +502,7 @@ TEST_CASE("Segment collinear with grid edge outside extent remains unchanged",
   linestr coordinates = {{0.0, 3.0}, {0.0, 5.0}};
   snail::geometry::LineString line(coordinates);
 
-  auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster, true);
+  auto splits = split_line(line, test_raster, true);
 
   REQUIRE(splits.size() == 1);
   REQUIRE(splits[0].size() == coordinates.size());
@@ -515,8 +527,7 @@ TEST_CASE("Segment collinear with interior gridline splits at crossings",
   };
 
   bool bounded = GENERATE(true, false);
-  auto splits = snail::operations::findIntersectionsLineString(
-      line, test_raster, bounded);
+  auto splits = split_line(line, test_raster, bounded);
 
   REQUIRE(splits.size() == expected.size());
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -542,8 +553,7 @@ TEST_CASE("Diagonal segment inside grid is split when bounded",
       {{1.05, 1.0}, {1.8, 1.6}},
   };
 
-  auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster, true);
+  auto splits = split_line(line, test_raster, true);
 
   REQUIRE(splits.size() == expected.size());
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -561,8 +571,7 @@ TEST_CASE("Bounded splits keep interior vertices within grid extents",
   linestr coordinates = {{-2.0, 0.5}, {1.5, 0.5}};
   snail::geometry::LineString line(coordinates);
 
-  auto splits =
-      snail::operations::findIntersectionsLineString(line, test_raster, true);
+  auto splits = split_line(line, test_raster, true);
 
   REQUIRE(splits.size() == 3);
   for (std::size_t segment_idx = 0; segment_idx < splits.size();
@@ -623,8 +632,7 @@ TEST_CASE("Split with different grid", "[decomposition]") {
   snail::grid::Grid test_raster(
       2, 2,
       snail::transform::Affine(90.0, 0.0, 132165.0, 0.0, -90.0, 2055230.0));
-  std::vector<linestr> splits =
-      snail::operations::findIntersectionsLineString(line, test_raster);
+  std::vector<linestr> splits = split_line(geom, test_raster);
 
   // Test that we're getting the expected number of splits
   REQUIRE(splits.size() == expected_splits.size());
@@ -653,30 +661,41 @@ static double total_area(const std::vector<snail::geometry::Polygon> &pieces) {
   return total;
 }
 
+static double ring_area2(const linestr &ring) {
+  // relative to the first point, to avoid cancellation for small rings far
+  // from the origin
+  double area2 = 0.0;
+  double x0 = ring.front().x;
+  double y0 = ring.front().y;
+  for (std::size_t i = 0; i + 1 < ring.size(); ++i) {
+    area2 += (ring[i].x - x0) * (ring[i + 1].y - y0) -
+             (ring[i + 1].x - x0) * (ring[i].y - y0);
+  }
+  return area2;
+}
 
-TEST_CASE("Square splits to quarters", "[decomposition]") {
-   // Linestring points are marked by o:
-  // Intersection points are marked by (o):
-  // Gridline segments are marked by = and ‖
+static double polygon_area(const snail::geometry::Polygon &polygon) {
+  // holes are wound clockwise, so their signed area is negative
+  double area2 = ring_area2(polygon.exterior);
+  for (const linestr &interior : polygon.interiors) {
+    area2 += ring_area2(interior);
+  }
+  return area2 / 2.0;
+}
+
+TEST_CASE("Square is split into cell pieces", "[polygon]") {
   // +---------------+--------------+
   // |               |              |
-  // |               |              |
-  // |               |              |
-  // |       o------(o)------o      |
-  // |       |       ‖       |      |
-  // |       |       ‖       |      |
-  // |       |       ‖       |      |
-  // +------(o)=====(o)=====(o)-----+
-  // |       |       ‖       |      |
-  // |       |       ‖       |      |
-  // |       |       ‖       |      |
-  // |       o------(o)------o      |
-  // |               |              |
-  // |               |              |
+  // |      o--------+--------o     |
+  // |      |........|........|     |
+  // |      |........|........|     |
+  // +------+--------+--------+-----+
+  // |      |........|........|     |
+  // |      |........|........|     |
+  // |      o--------+--------o     |
   // |               |              |
   // +---------------+--------------+
   // (0,0)         (1,0)          (2,0)
-  // Using default Affine transform(1, 0, 0, 0, 1, 0)
   snail::grid::Grid grid(2, 2, snail::transform::Affine());
   std::vector<linestr> rings = {
       {{0.5, 0.5}, {1.5, 0.5}, {1.5, 1.5}, {0.5, 1.5}, {0.5, 0.5}}};
@@ -690,8 +709,7 @@ TEST_CASE("Square splits to quarters", "[decomposition]") {
   REQUIRE(std::abs(total_area(pieces) - 1.0) < TOL);
 }
 
-TEST_CASE("Concave polygon may split to several pieces per cell",
-          "[polygon]") {
+TEST_CASE("Concave polygon may split to several pieces per cell", "[polygon]") {
   // U-shape: both arms cross into the cell above, so cell (0,1) holds two
   // disjoint pieces
   snail::grid::Grid grid(2, 2, snail::transform::Affine());
@@ -804,8 +822,7 @@ TEST_CASE("Issue 45 polygons with vertices near gridlines", "[polygon]") {
   // crossings on gridline": vertices sit within ~1e-14 of a gridline
   snail::grid::Grid grid(
       698, 252,
-      snail::transform::Affine(0.0031, 0.0, -78.34655, 0.0, -0.0031,
-                               18.52365));
+      snail::transform::Affine(0.0031, 0.0, -78.34655, 0.0, -0.0031, 18.52365));
 
   linestr building1 = {{-77.280182457, 17.97282044099908},
                        {-77.28015690000001, 17.97282209999907},
@@ -834,12 +851,9 @@ TEST_CASE("Issue 45 polygons with vertices near gridlines", "[polygon]") {
                        {-77.34835, 18.45626119999909}};
 
   auto test_ring = GENERATE_COPY(building1, building2, building3);
+  auto pieces = snail::operations::splitPolygonGrid({test_ring}, grid);
 
-  auto pieces =
-      snail::operations::splitPolygonGrid({test_ring}, grid);
-
-  double expected_area = std::abs(snail::geometry::ringTwiceSignedArea(test_ring)) / 2.0;
+  double expected_area = std::abs(ring_area2(test_ring)) / 2.0;
   REQUIRE(pieces.size() >= 1);
-  REQUIRE(std::abs(total_area(pieces) - expected_area) <
-          1e-6 * expected_area);
+  REQUIRE(std::abs(total_area(pieces) - expected_area) < 1e-6 * expected_area);
 }

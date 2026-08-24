@@ -90,7 +90,7 @@ def test_get_cell_indices(test_linestring, expected):
 
 def assert_split_pieces_cover_polygon(polygon, splits):
     """The valid, non-overlapping splits should exactly cover the polygon."""
-    assert splits
+    assert len(splits) > 0
     for split in splits:
         assert isinstance(split, Polygon)
         assert split.is_valid
@@ -129,7 +129,9 @@ def assert_splits_match_shapely_grid_intersections(
             (
                 index
                 for index, actual_piece in enumerate(unmatched)
-                if actual_piece.equals(expected_piece)
+                if actual_piece.equals_exact(
+                    expected_piece, tolerance=1e-12, normalize=True
+                )
             ),
             None,
         )
@@ -178,6 +180,13 @@ def test_split_polygon_matches_shapely_grid_intersections(polygon, transform):
     assert_splits_match_shapely_grid_intersections(
         polygon, splits, nrows, ncols, transform
     )
+    """Each split should be a valid Polygon, and the split pieces should sum
+    to the area of the polygon they came from"""
+    for split in splits:
+        assert isinstance(split, Polygon)
+        assert split.is_valid
+    total = sum(split.area for split in splits)
+    assert total == pytest.approx(polygon.area, rel=1e-6)
 
 
 def test_split_polygons_issue_53():

@@ -35,7 +35,7 @@ dependencies = [
     "rasterio",
     "rioxarray",
     "scipy",
-    "shapely>=2.1.0",
+    "shapely>=2.1",
     "xarray",
     "zarr>=3.0.8",
 ]

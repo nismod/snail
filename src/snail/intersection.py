@@ -16,8 +16,12 @@ from shapely.ops import linemerge
 
 from snail.core.intersections import (  # type: ignore
     get_cell_indices,
-    split_linestring,
-    split_polygon,
+)
+from snail.core.intersections import (
+    split_linestrings as split_linestrings_core,
+)
+from snail.core.intersections import (
+    split_polygons as split_polygons_core,
 )
 
 # optional progress bars
@@ -32,9 +36,38 @@ if "SNAIL_PROGRESS" in os.environ and os.environ["SNAIL_PROGRESS"] in (
 else:
     from snail.tqdm_standin import tqdm_standin as tqdm
 
-# Use some high degree of precision to round polygon coordinates
-# when polygonizing split edges to help avoid floating point errors
-POLYGON_COORDINATE_PRECISION = 9
+
+# Features are split in chunks rather than all at once: a single call would
+# give no sign of progress on a long job, and would hold every piece of
+# every feature in memory at once.
+SPLIT_CHUNK_SIZE = 1000
+
+
+def _split_in_chunks(split_core, geometries, grid, *split_args):
+    """Split geometries with a batch splitter, a chunk at a time
+
+    Returns the pieces, and for each piece the index of the geometry it came
+    from.
+    """
+    if len(geometries) <= SPLIT_CHUNK_SIZE:
+        return split_core(
+            geometries, grid.width, grid.height, grid.transform, *split_args
+        )
+
+    pieces = []
+    parents = []
+    for start in tqdm(range(0, len(geometries), SPLIT_CHUNK_SIZE)):
+        geometry, parent = split_core(
+            geometries[start : start + SPLIT_CHUNK_SIZE],
+            grid.width,
+            grid.height,
+            grid.transform,
+            *split_args,
+        )
+        pieces.append(geometry)
+        parents.append(parent + start)
+    return numpy.concatenate(pieces), numpy.concatenate(parents)
+
 
 # Module-level logger
 logger = logging.getLogger(__name__)
@@ -207,26 +240,30 @@ def split_linestrings(
     grid: GridDefinition,
     bounded=False,
 ) -> geopandas.GeoDataFrame:
-    """Split linestrings along a grid"""
+    """Split linestrings along a grid
+
+    Each piece lies within a single grid cell; together the pieces of a
+    feature are that feature, cut up, so the split conserves its length.
+    """
     # TODO check for MultiLineString
     # throw error or coerce (df.explode)
-    pieces = []
-    for i in tqdm(range(len(linestring_features))):
-        # split edge
-        geom_splits = split_linestring(
-            linestring_features.geometry[i],
-            grid.width,
-            grid.height,
-            grid.transform,
-            bounded=bounded,
-        )
-        for j, s in enumerate(geom_splits):
-            new_row = linestring_features.iloc[i].copy()
-            new_row.geometry = s
-            new_row["split"] = j
-            pieces.append(new_row)
-    logger.info(f"Split {len(linestring_features)} edges into {len(pieces)} pieces")
-    splits_df = geopandas.GeoDataFrame(pieces, crs=grid.crs, geometry="geometry")
+    # split every feature in one call
+    geometry, parent = _split_in_chunks(
+        split_linestrings_core,
+        linestring_features.geometry.to_numpy(),
+        grid,
+        bounded,
+    )
+    logger.info(f"Split {len(linestring_features)} edges into {len(geometry)} pieces")
+    # repeat each parent feature's attributes for each of its pieces
+    splits_df = geopandas.GeoDataFrame(linestring_features.iloc[parent])
+    # number each parent's pieces from zero
+    piece_counts = numpy.bincount(parent, minlength=len(linestring_features))
+    splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
+        numpy.cumsum(piece_counts) - piece_counts, piece_counts
+    )
+    splits_df.geometry = geometry
+    splits_df.crs = grid.crs
     return splits_df
 
 
@@ -272,24 +309,20 @@ def split_polygons_experimental(
     is assumed to be valid) along the grid lines and assemble the polygon
     pieces that cover each cell.
     """
-    pieces = []
-    polygon_features["split"] = 0
-    for i in tqdm(range(len(polygon_features))):
-        # split area
-        geom_splits = split_polygon(
-            polygon_features.geometry[i],
-            grid.width,
-            grid.height,
-            grid.transform,
-        )
-        # add to collection
-        for j, s in enumerate(geom_splits):
-            new_row = polygon_features.iloc[i].copy()
-            new_row.geometry = s
-            new_row["split"] = j
-            pieces.append(new_row)
-    logger.info(f"  Split {len(polygon_features)} areas into {len(pieces)} pieces")
-    splits_df = geopandas.GeoDataFrame(pieces)
+    # split every feature in one call: crossing into the extension per
+    # feature costs far more than the splitting itself
+    geometry, parent = _split_in_chunks(
+        split_polygons_core, polygon_features.geometry.to_numpy(), grid
+    )
+    logger.info(f"  Split {len(polygon_features)} areas into {len(geometry)} pieces")
+    # repeat each parent feature's attributes for each of its pieces
+    splits_df = geopandas.GeoDataFrame(polygon_features.iloc[parent])
+    # number each parent's pieces from zero
+    piece_counts = numpy.bincount(parent, minlength=len(polygon_features))
+    splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
+        numpy.cumsum(piece_counts) - piece_counts, piece_counts
+    )
+    splits_df.geometry = geometry
     splits_df.crs = grid.crs
     return splits_df
 
