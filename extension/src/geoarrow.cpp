@@ -206,6 +206,36 @@ public:
     return {x[x_base + vertex], y[y_base + vertex]};
   }
 
+  /// Vertices [begin, end) as a run the split kernels can read.
+  ///
+  /// Interleaved 2D coordinates already *are* a run of Coord - that is what
+  /// the static_assert on sizeof(Coord) at the top of this file pins down -
+  /// so the span points straight into the Arrow buffer and nothing is
+  /// copied. Every other layout has a gap between one vertex's y and the
+  /// next's x, or holds x and y apart altogether, so those are gathered into
+  /// a buffer that is reused from one geometry to the next.
+  /// Are the coordinates laid out exactly as a run of Coord? Interleaved
+  /// with nothing but x and y is, provided the slice this view starts at
+  /// lands on a vertex boundary rather than between a vertex's two doubles.
+  bool contiguous() const {
+    return xy != nullptr && stride == 2 && xy_base % 2 == 0;
+  }
+
+  operations::CoordSpan run(int64_t begin, int64_t end) {
+    const std::size_t count = static_cast<std::size_t>(end - begin);
+    if (contiguous()) {
+      const auto *first =
+          reinterpret_cast<const geo::Coord *>(xy + xy_base) + begin;
+      return {first, count};
+    }
+    gathered.clear();
+    gathered.reserve(count);
+    for (int64_t v = begin; v < end; v++) {
+      gathered.push_back(at(v));
+    }
+    return gathered;
+  }
+
 private:
   /// Doubles per vertex in an interleaved layout, read out of Arrow's
   /// fixed-size-list format string "+w:<width>": 2 for xy, 3 for xyz or
@@ -254,6 +284,8 @@ private:
   const double *y = nullptr;
   int64_t x_base = 0;
   int64_t y_base = 0;
+  /// where a layout that is not already a run of Coord is gathered into
+  std::vector<geo::Coord> gathered;
 };
 
 /// Check the GeoArrow extension name, when the producer declares one. A
@@ -324,15 +356,9 @@ struct LineStringReader {
 
   int64_t size() const { return lines->length; }
 
-  /// Read linestring i into the given buffer
-  void read(int64_t i, linestr &out) const {
-    out.clear();
-    int64_t begin = listBegin(lines, i);
-    int64_t end = listEnd(lines, i);
-    out.reserve(static_cast<std::size_t>(end - begin));
-    for (int64_t v = begin; v < end; v++) {
-      out.push_back(coordinates.at(v));
-    }
+  /// The vertices of linestring i
+  operations::CoordSpan read(int64_t i) {
+    return coordinates.run(listBegin(lines, i), listEnd(lines, i));
   }
 };
 
@@ -356,21 +382,42 @@ struct PolygonReader {
 
   int64_t size() const { return polygons->length; }
 
-  /// Read the rings of polygon i into the given buffer, exterior first.
-  /// The ring structure is explicit in the offsets, so rings are recovered
-  /// exactly rather than inferred from where coordinates close back on
-  /// themselves.
-  void read(int64_t i, std::vector<linestr> &out) const {
+  /// The rings of polygon i, exterior first. The ring structure is explicit
+  /// in the offsets, so rings are recovered exactly rather than inferred
+  /// from where coordinates close back on themselves.
+  ///
+  /// Only one ring's span is valid at a time unless the coordinates are
+  /// contiguous, since a gathered ring reuses the same buffer - so a
+  /// polygon whose coordinates need gathering is materialised ring by ring
+  /// into `out` first, and spans taken over that.
+  void read(int64_t i, std::vector<operations::CoordSpan> &out,
+            std::vector<linestr> &scratch) {
     out.clear();
-    for (int64_t r = listBegin(polygons, i); r < listEnd(polygons, i); r++) {
-      linestr ring;
-      int64_t begin = listBegin(rings, r);
-      int64_t end = listEnd(rings, r);
+    const int64_t first = listBegin(polygons, i);
+    const int64_t last = listEnd(polygons, i);
+    if (coordinates.contiguous()) {
+      for (int64_t r = first; r < last; r++) {
+        out.push_back(coordinates.run(listBegin(rings, r), listEnd(rings, r)));
+      }
+      return;
+    }
+    std::size_t used = 0;
+    for (int64_t r = first; r < last; r++) {
+      if (used == scratch.size()) {
+        scratch.emplace_back();
+      }
+      // the ring buffers keep their capacity from the previous polygon
+      linestr &ring = scratch[used++];
+      ring.clear();
+      const int64_t begin = listBegin(rings, r);
+      const int64_t end = listEnd(rings, r);
       ring.reserve(static_cast<std::size_t>(end - begin));
       for (int64_t v = begin; v < end; v++) {
         ring.push_back(coordinates.at(v));
       }
-      out.push_back(std::move(ring));
+    }
+    for (std::size_t r = 0; r < used; r++) {
+      out.push_back(scratch[r]);
     }
   }
 };
@@ -576,17 +623,33 @@ private:
 /// and for each piece the index of the geometry it was split from.
 struct BatchData {
   GeometryType type = GeometryType::linestring;
-  std::vector<geo::Coord> coordinates;
-  /// where each run of coordinates begins: one run per piece for
-  /// linestrings, one per ring for polygons. Offsets are 32-bit, which is
-  /// what a plain Arrow list takes, and are relative to this batch.
-  std::vector<int32_t> vertex_offsets{0};
-  /// where each polygon's run of rings begins; unused for linestrings
-  std::vector<int32_t> ring_offsets{0};
+  /// The split kernels append straight into these, one geometry after
+  /// another, so a batch's buffers are the ones the kernel filled. Nothing
+  /// is concatenated on the way out, and no offset is rebased: the kernels
+  /// record where a piece starts in the buffer they are filling, which for
+  /// a whole batch is already the offset Arrow wants. Only the one matching
+  /// `type` is used.
+  operations::LinePieces lines;
+  operations::PolygonPieces polygons;
   /// the geometry each piece came from, indexed across the whole stream
   std::vector<int64_t> parents;
 
   int64_t size() const { return static_cast<int64_t>(parents.size()); }
+
+  std::vector<geo::Coord> &coordinates() {
+    return type == GeometryType::polygon ? polygons.coordinates
+                                         : lines.coordinates;
+  }
+
+  /// Where each run of coordinates begins: one run per piece for
+  /// linestrings, one per ring for polygons.
+  std::vector<int32_t> &vertexOffsets() {
+    return type == GeometryType::polygon ? polygons.ring_offsets
+                                         : lines.offsets;
+  }
+
+  /// Where each polygon's run of rings begins; unused for linestrings
+  std::vector<int32_t> &ringOffsets() { return polygons.polygon_offsets; }
 };
 
 /// Mark a schema and everything under it as holding no nulls
@@ -691,7 +754,7 @@ static void exportArray(BatchData data, ArrowArray *out) {
       ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr));
 
   const int64_t pieces = data.size();
-  const int64_t n_vertices = static_cast<int64_t>(data.coordinates.size());
+  const int64_t n_vertices = static_cast<int64_t>(data.coordinates().size());
 
   ArrowArray *geometry = array->children[0];
   ArrowArray *vertices = geometry->children[0];
@@ -699,12 +762,12 @@ static void exportArray(BatchData data, ArrowArray *out) {
     // polygons over rings, then rings over vertices
     ArrowArray *rings = vertices;
     vertices = rings->children[0];
-    rings->length = static_cast<int64_t>(data.vertex_offsets.size()) - 1;
-    adoptBuffer(rings, 1, std::move(data.vertex_offsets));
-    adoptBuffer(geometry, 1, std::move(data.ring_offsets));
+    rings->length = static_cast<int64_t>(data.vertexOffsets().size()) - 1;
+    adoptBuffer(rings, 1, std::move(data.vertexOffsets()));
+    adoptBuffer(geometry, 1, std::move(data.ringOffsets()));
   } else {
     // a linestring is a plain run of vertices, so one level of offsets does
-    adoptBuffer(geometry, 1, std::move(data.vertex_offsets));
+    adoptBuffer(geometry, 1, std::move(data.vertexOffsets()));
   }
   geometry->length = pieces;
   vertices->length = n_vertices;
@@ -712,7 +775,7 @@ static void exportArray(BatchData data, ArrowArray *out) {
   // the coordinates as bare doubles: two per vertex, hence the length
   ArrowArray *xy = vertices->children[0];
   xy->length = 2 * n_vertices;
-  adoptBuffer(xy, 1, std::move(data.coordinates));
+  adoptBuffer(xy, 1, std::move(data.coordinates()));
 
   ArrowArray *parent = array->children[1];
   parent->length = pieces;
@@ -748,50 +811,30 @@ struct SplitState {
 };
 
 /// Split one batch of linestrings into pieces
-static void splitLineStringBatch(const LineStringReader &reader,
+static void splitLineStringBatch(LineStringReader &reader,
                                  const grid::Grid &grid, bool bounded,
                                  int64_t parent_base, BatchData &out) {
-  linestr line;
   for (int64_t l = 0; l < reader.size(); l++) {
-    reader.read(l, line);
-    operations::LinePieces pieces =
-        operations::splitLineStringGrid(line, grid, bounded);
-
-    std::size_t base = out.coordinates.size();
-    out.coordinates.insert(out.coordinates.end(), pieces.coordinates.begin(),
-                           pieces.coordinates.end());
-    for (std::size_t p = 1; p < pieces.offsets.size(); p++) {
-      out.vertex_offsets.push_back(
-          static_cast<int32_t>(base + pieces.offsets[p]));
-      out.parents.push_back(parent_base + l);
-    }
+    const std::size_t before = out.lines.size();
+    operations::splitLineStringGrid(reader.read(l), grid, bounded, out.lines);
+    // one parent per piece this line produced; a line that fell apart into
+    // nothing produces none
+    out.parents.insert(out.parents.end(), out.lines.size() - before,
+                       parent_base + l);
   }
 }
 
 /// Split one batch of polygons into pieces
-static void splitPolygonBatch(const PolygonReader &reader,
-                              const grid::Grid &grid, int64_t parent_base,
-                              BatchData &out) {
-  std::vector<linestr> rings;
+static void splitPolygonBatch(PolygonReader &reader, const grid::Grid &grid,
+                              int64_t parent_base, BatchData &out) {
+  std::vector<operations::CoordSpan> rings;
+  std::vector<linestr> scratch;
   for (int64_t p = 0; p < reader.size(); p++) {
-    reader.read(p, rings);
-    operations::PolygonPieces pieces =
-        operations::splitPolygonGridPieces(rings, grid);
-
-    // concatenate onto the batch, shifting the offsets
-    std::size_t coordinate_base = out.coordinates.size();
-    std::size_t ring_base = out.vertex_offsets.size() - 1;
-    out.coordinates.insert(out.coordinates.end(), pieces.coordinates.begin(),
-                           pieces.coordinates.end());
-    for (std::size_t r = 1; r < pieces.ring_offsets.size(); r++) {
-      out.vertex_offsets.push_back(
-          static_cast<int32_t>(coordinate_base + pieces.ring_offsets[r]));
-    }
-    for (std::size_t q = 1; q < pieces.polygon_offsets.size(); q++) {
-      out.ring_offsets.push_back(
-          static_cast<int32_t>(ring_base + pieces.polygon_offsets[q]));
-      out.parents.push_back(parent_base + p);
-    }
+    reader.read(p, rings, scratch);
+    const std::size_t before = out.polygons.size();
+    operations::splitPolygonGridPieces(rings, grid, out.polygons);
+    out.parents.insert(out.parents.end(), out.polygons.size() - before,
+                       parent_base + p);
   }
 }
 
@@ -828,7 +871,7 @@ static std::optional<BatchData> nextSplitBatch(SplitState *state) {
     }
     state->parent_base += count;
 
-    if (out.coordinates.size() >
+    if (out.coordinates().size() >
         static_cast<std::size_t>(std::numeric_limits<int32_t>::max())) {
       throw std::overflow_error(
           "One batch split to more coordinates than a GeoArrow array with "

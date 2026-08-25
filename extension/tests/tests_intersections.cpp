@@ -857,3 +857,105 @@ TEST_CASE("Issue 45 polygons with vertices near gridlines", "[polygon]") {
   REQUIRE(pieces.size() >= 1);
   REQUIRE(std::abs(total_area(pieces) - expected_area) < 1e-6 * expected_area);
 }
+
+/// A north-up raster transform: scaled, offset, and with y running downwards
+/// so that the split's mirror correction is exercised too. Deliberately not
+/// the identity - under the identity a coordinate transformed twice looks
+/// exactly like one transformed once, which would hide the bug these tests
+/// are here to catch.
+static snail::transform::Affine appendTestTransform() {
+  return snail::transform::Affine(2, 0, 100, 0, -3, 50);
+}
+
+/// A grid-space position in the world coordinates that transform implies
+static snail::geometry::Coord atCell(double column, double row) {
+  return snail::geometry::Coord(2 * column + 100, 50 - 3 * row);
+}
+
+TEST_CASE("Splitting appends to a shared accumulator", "[polygon][append]") {
+  // Splitting a column of geometries fills one accumulator rather than one
+  // result per geometry, so that the whole batch can be handed to Arrow as
+  // it stands. Doing so must give exactly what splitting each on its own
+  // and concatenating would, with offsets already absolute.
+  snail::grid::Grid grid(4, 4, appendTestTransform());
+  std::vector<std::vector<linestr>> polygons = {
+      {{atCell(0.5, 0.5), atCell(1.5, 0.5), atCell(1.5, 1.5),
+        atCell(0.5, 1.5), atCell(0.5, 0.5)}},
+      // one with a hole, and one lying wholly inside a single cell
+      {{atCell(0.2, 0.2), atCell(3.8, 0.2), atCell(3.8, 3.8),
+        atCell(0.2, 3.8), atCell(0.2, 0.2)},
+       {atCell(1.2, 1.2), atCell(1.2, 2.8), atCell(2.8, 2.8),
+        atCell(2.8, 1.2), atCell(1.2, 1.2)}},
+      {{atCell(2.1, 2.1), atCell(2.9, 2.1), atCell(2.9, 2.9),
+        atCell(2.1, 2.9), atCell(2.1, 2.1)}},
+  };
+
+  snail::operations::PolygonPieces together;
+  std::size_t expected_pieces = 0;
+  std::vector<snail::geometry::Coord> expected_coordinates;
+  for (const auto &rings : polygons) {
+    std::vector<snail::operations::CoordSpan> spans(rings.begin(), rings.end());
+    auto alone = snail::operations::splitPolygonGridPieces(spans, grid);
+    expected_pieces += alone.size();
+    expected_coordinates.insert(expected_coordinates.end(),
+                                alone.coordinates.begin(),
+                                alone.coordinates.end());
+    snail::operations::splitPolygonGridPieces(spans, grid, together);
+  }
+
+  REQUIRE(expected_pieces > 0);
+  REQUIRE(together.size() == expected_pieces);
+  REQUIRE(together.coordinates.size() == expected_coordinates.size());
+  for (std::size_t i = 0; i < expected_coordinates.size(); i++) {
+    REQUIRE(together.coordinates[i].x == expected_coordinates[i].x);
+    REQUIRE(together.coordinates[i].y == expected_coordinates[i].y);
+  }
+
+  // offsets index the accumulator as a whole: ascending, starting at zero,
+  // and ending at what it holds
+  REQUIRE(together.ring_offsets.front() == 0);
+  REQUIRE(together.ring_offsets.back() ==
+          (int32_t)together.coordinates.size());
+  for (std::size_t r = 1; r < together.ring_offsets.size(); r++) {
+    REQUIRE(together.ring_offsets[r] >= together.ring_offsets[r - 1]);
+  }
+  REQUIRE(together.polygon_offsets.front() == 0);
+  REQUIRE(together.polygon_offsets.back() ==
+          (int32_t)together.ring_offsets.size() - 1);
+}
+
+TEST_CASE("Linestring splitting appends to a shared accumulator",
+          "[linestring][append]") {
+  snail::grid::Grid grid(4, 4, appendTestTransform());
+  std::vector<linestr> lines = {
+      {atCell(0.5, 0.5), atCell(3.5, 0.5)},
+      {atCell(0.5, 0.5), atCell(0.75, 0.5), atCell(1.5, 1.5)},
+      // degenerate: a single repeated point contributes no piece at all
+      {atCell(2.5, 2.5), atCell(2.5, 2.5)},
+  };
+
+  snail::operations::LinePieces together;
+  std::size_t expected_pieces = 0;
+  std::vector<snail::geometry::Coord> expected_coordinates;
+  for (const auto &line : lines) {
+    auto alone = snail::operations::splitLineStringGrid(line, grid);
+    expected_pieces += alone.size();
+    expected_coordinates.insert(expected_coordinates.end(),
+                                alone.coordinates.begin(),
+                                alone.coordinates.end());
+    snail::operations::splitLineStringGrid(line, grid, false, together);
+  }
+
+  REQUIRE(expected_pieces > 0);
+  REQUIRE(together.size() == expected_pieces);
+  REQUIRE(together.coordinates.size() == expected_coordinates.size());
+  for (std::size_t i = 0; i < expected_coordinates.size(); i++) {
+    REQUIRE(together.coordinates[i].x == expected_coordinates[i].x);
+    REQUIRE(together.coordinates[i].y == expected_coordinates[i].y);
+  }
+  REQUIRE(together.offsets.front() == 0);
+  REQUIRE(together.offsets.back() == (int32_t)together.coordinates.size());
+  for (std::size_t p = 1; p < together.offsets.size(); p++) {
+    REQUIRE(together.offsets[p] >= together.offsets[p - 1]);
+  }
+}

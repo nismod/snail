@@ -31,8 +31,9 @@ geometryCoordinates(py::object geometry) {
       py::module_::import("shapely").attr("get_coordinates")(geometry));
 }
 
-/// Copy an offset array out as the int64 numpy array shapely expects
-py::array_t<std::int64_t> offsetArray(const std::vector<std::size_t> &offsets) {
+/// Copy an offset array out as the int64 numpy array shapely expects.
+/// The pieces hold theirs as int32, the width an Arrow list takes.
+py::array_t<std::int64_t> offsetArray(const std::vector<std::int32_t> &offsets) {
   py::array_t<std::int64_t> array((py::ssize_t)offsets.size());
   std::int64_t *out = array.mutable_data();
   for (std::size_t i = 0; i < offsets.size(); i++) {
