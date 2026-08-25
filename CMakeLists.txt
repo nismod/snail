@@ -9,9 +9,15 @@ project(
 
 set(CPP_SRC_DIR extension/src)
 # Vendored rather than fetched, so that building from an sdist needs no
-# network. Regenerate with scripts/vendor_nanoarrow.py; see the README there
-# for why its symbols are namespaced.
-set(NANOARROW_DIR extension/vendor/nanoarrow)
+# network. Regenerate with scripts/vendor_nanoarrow.py and
+# scripts/vendor_geoarrow.py; see those for why the symbols are namespaced.
+#
+# Both amalgamations include each other by directory - geoarrow.c asks for
+# "nanoarrow/nanoarrow.h" - so extension/vendor is the include path they share,
+# and NANOARROW_DIR is on the path as well for our own flat "nanoarrow.hpp".
+set(VENDOR_DIR extension/vendor)
+set(NANOARROW_DIR ${VENDOR_DIR}/nanoarrow)
+set(GEOARROW_DIR ${VENDOR_DIR}/geoarrow)
 
 find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED)
@@ -19,13 +25,14 @@ find_package(pybind11 CONFIG REQUIRED)
 python_add_library(intersections MODULE ${CPP_SRC_DIR}/intersections.cpp WITH_SOABI
                    ${CPP_SRC_DIR}/geoarrow.cpp ${CPP_SRC_DIR}/geometry.cpp
                    ${CPP_SRC_DIR}/operations.cpp
-                   ${NANOARROW_DIR}/nanoarrow.c)
+                   ${NANOARROW_DIR}/nanoarrow.c
+                   ${GEOARROW_DIR}/geoarrow.c)
 
 target_compile_features(intersections PRIVATE cxx_std_17)
 set_target_properties(intersections PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
 target_include_directories(intersections PUBLIC ${CPP_SRC_DIR})
 # SYSTEM: vendored code is not ours to keep warning-free
-target_include_directories(intersections SYSTEM PRIVATE ${NANOARROW_DIR})
+target_include_directories(intersections SYSTEM PRIVATE ${VENDOR_DIR} ${NANOARROW_DIR})
 target_link_libraries(intersections PRIVATE pybind11::headers)
 target_compile_definitions(intersections PRIVATE VERSION_INFO=${PROJECT_VERSION})
 

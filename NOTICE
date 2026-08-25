@@ -20,3 +20,14 @@ extension/vendor/nanoarrow/NOTICE.txt.
 
 This product includes software developed at
 The Apache Software Foundation (http://www.apache.org/).
+
+--------------------------------------------------------------------------
+
+geoarrow-c
+Copyright 2023 Dewey Dunnington and geoarrow-c contributors
+
+Licensed under the Apache License, Version 2.0.
+
+Bundled at extension/vendor/geoarrow, generated from a pinned upstream
+revision by scripts/vendor_geoarrow.py. Its full licence text is at
+extension/vendor/geoarrow/LICENSE.txt. Upstream ships no NOTICE file.
