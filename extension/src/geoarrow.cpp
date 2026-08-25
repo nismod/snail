@@ -101,79 +101,28 @@ static std::string metadataValue(const char *metadata, const char *key) {
 
 // -- Reading GeoArrow arrays -------------------------------------------------
 
-/// Does any slot of an array hold a null?
-static bool hasNulls(const ArrowArray *array) {
-  if (array->null_count > 0) {
-    return true;
-  }
-  if (array->null_count == 0 || array->n_buffers == 0) {
-    return false;
-  }
-  // A producer may leave null_count at -1 rather than count them, so fall
-  // back to the validity bitmap, which is always buffer 0 where an array
-  // has one at all. It holds one bit per slot, least significant bit
-  // first, set for a value that is present.
-  const auto *validity = static_cast<const uint8_t *>(array->buffers[0]);
-  if (validity == nullptr) {
-    // no bitmap at all: every slot is valid
-    return false;
-  }
-  for (int64_t i = 0; i < array->length; i++) {
-    int64_t bit = array->offset + i;
-    if (((validity[bit >> 3] >> (bit & 7)) & 1) == 0) {
-      return true;
-    }
-  }
-  return false;
+/// Does any slot of an array hold a null? A producer may leave null_count
+/// at -1 rather than count them, in which case nanoarrow counts the bits of
+/// the validity bitmap itself.
+static bool hasNulls(const ArrowArrayView *view) {
+  return ArrowArrayViewComputeNullCount(view) > 0;
 }
 
-/// The offsets of an Arrow list array: for element i, where its run of
-/// children begins and ends.
+/// Where element i of a list array's run of children begins, in the units
+/// of the child array.
 ///
-/// Offsets are buffer 1, behind the validity bitmap, and are 32-bit for a
-/// list ("+l") or 64-bit for a large list ("+L"). They index the child
-/// array's own elements, so they are read without regard to the child's
-/// offset - but a sliced array carries a slot offset of its own, which
-/// shifts where in the offsets buffer element i is described.
-class ListOffsets {
-public:
-  ListOffsets() = default;
+/// nanoarrow reads the offsets buffer as 32-bit for a list ("+l") or 64-bit
+/// for a large list ("+L") from the view's storage type, so the two need no
+/// distinguishing here. It indexes that buffer directly, though, and a
+/// sliced array carries a slot offset of its own that shifts where in the
+/// buffer element i is described - hence the view's offset added here.
+static int64_t listBegin(const ArrowArrayView *view, int64_t i) {
+  return ArrowArrayViewListChildOffset(view, view->offset + i);
+}
 
-  ListOffsets(const ArrowSchema *schema, const ArrowArray *array,
-              const char *what) {
-    if (std::strcmp(schema->format, "+l") == 0) {
-      offsets32 = static_cast<const int32_t *>(array->buffers[1]);
-    } else if (std::strcmp(schema->format, "+L") == 0) {
-      offsets64 = static_cast<const int64_t *>(array->buffers[1]);
-    } else {
-      throw std::invalid_argument(std::string("Expected ") + what +
-                                  " as an Arrow list array, got format '" +
-                                  schema->format + "'");
-    }
-    if (array->length > 0 && offsets32 == nullptr && offsets64 == nullptr) {
-      throw std::invalid_argument(std::string("Malformed Arrow array: ") +
-                                  what + " has no offsets buffer");
-    }
-    slot = array->offset;
-    length = array->length;
-  }
-
-  /// Start of element i, in the units of the child array
-  int64_t begin(int64_t i) const {
-    int64_t at = slot + i;
-    return offsets32 != nullptr ? offsets32[at] : offsets64[at];
-  }
-
-  int64_t end(int64_t i) const { return begin(i + 1); }
-
-  int64_t size() const { return length; }
-
-private:
-  const int32_t *offsets32 = nullptr;
-  const int64_t *offsets64 = nullptr;
-  int64_t slot = 0;
-  int64_t length = 0;
-};
+static int64_t listEnd(const ArrowArrayView *view, int64_t i) {
+  return listBegin(view, i + 1);
+}
 
 /// GeoArrow coordinates, in either of the layouts the format allows:
 /// interleaved as a fixed_size_list<double>[2], which is how geopandas
@@ -184,45 +133,40 @@ class Coordinates {
 public:
   Coordinates() = default;
 
-  Coordinates(const ArrowSchema *schema, const ArrowArray *array) {
-    checkSchema(schema);
-    if (hasNulls(array)) {
+  /// Read from a view of coordinates whose schema checkSchema has already
+  /// passed, so the layout here is one of the two it allows. The schema
+  /// comes along because a view carries no field names, and the separated
+  /// layout finds its x and y by name.
+  Coordinates(const ArrowArrayView *view, const ArrowSchema *schema) {
+    if (hasNulls(view)) {
       throw std::invalid_argument("Cannot split geometries with missing "
                                   "(null) coordinates");
     }
-    stride = interleavedStride(schema);
-    if (stride > 0) {
-      const ArrowArray *values = array->children[0];
+    if (view->storage_type == NANOARROW_TYPE_FIXED_SIZE_LIST) {
+      // A fixed-size list lays its elements end to end in one child buffer,
+      // so vertex v starts at stride * v - shifted by the list's own slot
+      // offset, and again by the child's.
+      stride = view->layout.child_size_elements;
+      const ArrowArrayView *values = view->children[0];
       if (hasNulls(values)) {
         throw std::invalid_argument("Cannot split geometries with missing "
                                     "(null) coordinates");
       }
-      // A fixed-size list of width `stride` lays its elements end to end in
-      // one child buffer, so vertex v starts at stride * v - shifted by the
-      // list's own slot offset, and again by the child's.
-      xy = static_cast<const double *>(values->buffers[1]);
-      xy_base = values->offset + stride * array->offset;
-      if (array->length > 0 && xy == nullptr) {
-        throw std::invalid_argument(
-            "Malformed Arrow array: no coordinates buffer");
-      }
+      xy = values->buffer_views[1].data.as_double;
+      xy_base = values->offset + stride * view->offset;
       return;
     }
     // Separated: one child array per dimension, each with its own offset
-    const ArrowArray *x_array = array->children[dimension(schema, "x", 0)];
-    const ArrowArray *y_array = array->children[dimension(schema, "y", 1)];
-    if (hasNulls(x_array) || hasNulls(y_array)) {
+    const ArrowArrayView *x_view = view->children[dimension(schema, "x", 0)];
+    const ArrowArrayView *y_view = view->children[dimension(schema, "y", 1)];
+    if (hasNulls(x_view) || hasNulls(y_view)) {
       throw std::invalid_argument("Cannot split geometries with missing "
                                   "(null) coordinates");
     }
-    x = static_cast<const double *>(x_array->buffers[1]);
-    y = static_cast<const double *>(y_array->buffers[1]);
-    x_base = x_array->offset + array->offset;
-    y_base = y_array->offset + array->offset;
-    if (array->length > 0 && (x == nullptr || y == nullptr)) {
-      throw std::invalid_argument(
-          "Malformed Arrow array: no coordinates buffer");
-    }
+    x = x_view->buffer_views[1].data.as_double;
+    y = y_view->buffer_views[1].data.as_double;
+    x_base = x_view->offset + view->offset;
+    y_base = y_view->offset + view->offset;
   }
 
   /// Validate the coordinate layout without needing any data
@@ -365,30 +309,26 @@ static void checkGeometrySchema(const ArrowSchema *schema, GeometryType type) {
 /// A geoarrow.linestring batch: a list of coordinates per linestring,
 /// list<vertices: coordinates> in either coordinate layout
 struct LineStringReader {
-  ListOffsets lines;
+  const ArrowArrayView *lines;
   Coordinates coordinates;
 
-  LineStringReader(const ArrowSchema *schema, const ArrowArray *array) {
-    if (array->n_children != 1) {
-      throw std::invalid_argument(
-          "Malformed Arrow list array: expected exactly one child");
-    }
-    if (hasNulls(array)) {
+  LineStringReader(const ArrowArrayView *view, const ArrowSchema *schema)
+      : lines(view) {
+    if (hasNulls(view)) {
       throw std::invalid_argument(
           "Cannot split missing (null) geometries: drop or fill null "
           "geometries first");
     }
-    lines = ListOffsets(schema, array, "linestrings");
-    coordinates = Coordinates(schema->children[0], array->children[0]);
+    coordinates = Coordinates(view->children[0], schema->children[0]);
   }
 
-  int64_t size() const { return lines.size(); }
+  int64_t size() const { return lines->length; }
 
   /// Read linestring i into the given buffer
   void read(int64_t i, linestr &out) const {
     out.clear();
-    int64_t begin = lines.begin(i);
-    int64_t end = lines.end(i);
+    int64_t begin = listBegin(lines, i);
+    int64_t end = listEnd(lines, i);
     out.reserve(static_cast<std::size_t>(end - begin));
     for (int64_t v = begin; v < end; v++) {
       out.push_back(coordinates.at(v));
@@ -399,34 +339,22 @@ struct LineStringReader {
 /// A geoarrow.polygon batch: a list of rings per polygon, each ring a list
 /// of coordinates - list<rings: list<vertices: coordinates>>
 struct PolygonReader {
-  ListOffsets polygons;
-  ListOffsets rings;
+  const ArrowArrayView *polygons;
+  const ArrowArrayView *rings;
   Coordinates coordinates;
 
-  PolygonReader(const ArrowSchema *schema, const ArrowArray *array) {
-    if (array->n_children != 1) {
-      throw std::invalid_argument(
-          "Malformed Arrow list array: expected exactly one child");
-    }
-    const ArrowSchema *rings_schema = schema->children[0];
-    const ArrowArray *rings_array = array->children[0];
-    if (rings_array->n_children != 1) {
-      throw std::invalid_argument(
-          "Expected a geoarrow.polygon array (a list of rings of "
-          "coordinates)");
-    }
-    if (hasNulls(array) || hasNulls(rings_array)) {
+  PolygonReader(const ArrowArrayView *view, const ArrowSchema *schema)
+      : polygons(view), rings(view->children[0]) {
+    if (hasNulls(polygons) || hasNulls(rings)) {
       throw std::invalid_argument(
           "Cannot split missing (null) geometries or rings: drop or fill "
           "null geometries first");
     }
-    polygons = ListOffsets(schema, array, "polygons");
-    rings = ListOffsets(rings_schema, rings_array, "polygon rings");
-    coordinates =
-        Coordinates(rings_schema->children[0], rings_array->children[0]);
+    const ArrowSchema *rings_schema = schema->children[0];
+    coordinates = Coordinates(rings->children[0], rings_schema->children[0]);
   }
 
-  int64_t size() const { return polygons.size(); }
+  int64_t size() const { return polygons->length; }
 
   /// Read the rings of polygon i into the given buffer, exterior first.
   /// The ring structure is explicit in the offsets, so rings are recovered
@@ -434,10 +362,10 @@ struct PolygonReader {
   /// themselves.
   void read(int64_t i, std::vector<linestr> &out) const {
     out.clear();
-    for (int64_t r = polygons.begin(i); r < polygons.end(i); r++) {
+    for (int64_t r = listBegin(polygons, i); r < listEnd(polygons, i); r++) {
       linestr ring;
-      int64_t begin = rings.begin(r);
-      int64_t end = rings.end(r);
+      int64_t begin = listBegin(rings, r);
+      int64_t end = listEnd(rings, r);
       ring.reserve(static_cast<std::size_t>(end - begin));
       for (int64_t v = begin; v < end; v++) {
         ring.push_back(coordinates.at(v));
@@ -516,6 +444,16 @@ public:
     } else {
       checkGeometrySchema(schema.get(), type);
     }
+
+    // One view over the geometry column, laid out from its schema now and
+    // pointed at each batch as it arrives.
+    ArrowError error;
+    ArrowErrorInit(&error);
+    if (ArrowArrayViewInitFromSchema(view.get(), geometrySchema(), &error) !=
+        NANOARROW_OK) {
+      throw std::invalid_argument(
+          std::string("Could not read the geometry column: ") + error.message);
+    }
   }
 
   /// The source stream, its schema and any batch still held may all be
@@ -530,41 +468,46 @@ public:
   }
 
   /// The schema of the geometries themselves, within the batches
-  const ArrowSchema *geometrySchema() {
+  const ArrowSchema *geometrySchema() const {
     return geometry_child >= 0 ? schema.get()->children[geometry_child]
                                : schema.get();
   }
 
-  /// The geometries within a batch this stream produced
-  const ArrowArray *geometryArray(ArrowArray *batch) const {
-    if (geometry_child < 0) {
-      return batch;
-    }
-    if (geometry_child >= batch->n_children) {
-      throw std::runtime_error("Arrow batch does not match the stream schema");
-    }
-    return batch->children[geometry_child];
-  }
-
-  /// Pull the next batch. Returns false once the source is exhausted.
-  bool next(nanoarrow::UniqueArray &batch) {
+  /// Pull the next batch and view its geometries, returning nullptr once the
+  /// source is exhausted. The batch owns the buffers the view points at, so
+  /// it has to outlive the reading.
+  const ArrowArrayView *next(nanoarrow::UniqueArray &batch) {
     batch.reset();
     if (single->release != nullptr) {
       // a one-batch source: hand the array over, emptying it so that the
       // next call reports the end of the stream
       single.move(batch.get());
-      return true;
+    } else if (stream->release == nullptr) {
+      return nullptr;
+    } else {
+      if (stream.get()->get_next(stream.get(), batch.get()) != 0) {
+        throw std::runtime_error(
+            std::string("Could not read the next batch of geometries: ") +
+            lastError());
+      }
+      // the producer marks the end of the stream with a released array
+      if (batch->release == nullptr) {
+        return nullptr;
+      }
     }
-    if (stream->release == nullptr) {
-      return false;
+
+    // Pointing the view at the batch also checks it over: that its children
+    // and buffers are the shape the schema promised, and that its offsets
+    // stay inside the arrays they index. Reading below can then trust it.
+    ArrowError error;
+    ArrowErrorInit(&error);
+    if (ArrowArrayViewSetArray(view.get(), geometryArray(batch.get()),
+                               &error) != NANOARROW_OK) {
+      throw std::invalid_argument(
+          std::string("Could not read a batch of geometries: ") +
+          error.message);
     }
-    if (stream.get()->get_next(stream.get(), batch.get()) != 0) {
-      throw std::runtime_error(
-          std::string("Could not read the next batch of geometries: ") +
-          lastError());
-    }
-    // the producer marks the end of the stream with a released array
-    return batch->release != nullptr;
+    return view.get();
   }
 
 private:
@@ -597,6 +540,17 @@ private:
         "GeoArrow extension type");
   }
 
+  /// The geometries within a batch this stream produced
+  const ArrowArray *geometryArray(ArrowArray *batch) const {
+    if (geometry_child < 0) {
+      return batch;
+    }
+    if (geometry_child >= batch->n_children) {
+      throw std::runtime_error("Arrow batch does not match the stream schema");
+    }
+    return batch->children[geometry_child];
+  }
+
   /// A stream reports a failure by returning non-zero and leaving the
   /// detail behind for get_last_error
   const char *lastError() {
@@ -609,6 +563,7 @@ private:
 
   nanoarrow::UniqueArrayStream stream;
   nanoarrow::UniqueArray single;
+  nanoarrow::UniqueArrayView view;
   nanoarrow::UniqueSchema schema;
   /// which column of a record batch holds the geometries; -1 when the
   /// batches are the geometries themselves
@@ -850,22 +805,22 @@ static void splitPolygonBatch(const PolygonReader &reader,
 static std::optional<BatchData> nextSplitBatch(SplitState *state) {
   while (true) {
     nanoarrow::UniqueArray batch;
-    if (!state->input.next(batch)) {
+    const ArrowArrayView *geometries = state->input.next(batch);
+    if (geometries == nullptr) {
       return std::nullopt;
     }
-    const ArrowArray *geometries = state->input.geometryArray(batch.get());
     const ArrowSchema *schema = state->input.geometrySchema();
 
     BatchData out;
     out.type = state->type;
     int64_t count = 0;
     if (state->type == GeometryType::polygon) {
-      PolygonReader reader(schema, geometries);
+      PolygonReader reader(geometries, schema);
       count = reader.size();
       py::gil_scoped_release unlocked;
       splitPolygonBatch(reader, state->grid, state->parent_base, out);
     } else {
-      LineStringReader reader(schema, geometries);
+      LineStringReader reader(geometries, schema);
       count = reader.size();
       py::gil_scoped_release unlocked;
       splitLineStringBatch(reader, state->grid, state->bounded,

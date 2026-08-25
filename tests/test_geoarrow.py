@@ -315,6 +315,26 @@ class TestSourceKinds:
 
         assert_same_pieces(actual, expected)
 
+    def test_sliced_arrays(self, many_linestrings, polygons):
+        """A slice shares the buffers of the array it came from and records
+        where in them it starts. That offset shifts which offsets describe an
+        element, so a slice must split to the pieces of its geometries alone
+        and not of the ones before it."""
+        for geometries, split in (
+            (many_linestrings, core_split_linestrings),
+            (polygons, core_split_polygons),
+        ):
+            array = pa.array(geometries.to_arrow(geometry_encoding="geoarrow"))
+            sliced = array.slice(1, len(array) - 1)
+            assert sliced.offset == 1
+
+            actual = geometry_of(split(sliced, NROWS, NCOLS, TRANSFORM))
+            expected = geometry_of(
+                split(to_geoarrow(geometries[1:]), NROWS, NCOLS, TRANSFORM)
+            )
+
+            assert_same_pieces(actual, expected)
+
 
 class TestStream:
     def test_nothing_is_split_until_the_stream_is_read(self, many_linestrings):
@@ -529,6 +549,28 @@ class TestErrors:
         )
         with pytest.raises(ValueError, match="explode"):
             core_split_linestrings(to_geoarrow(multi), NROWS, NCOLS, TRANSFORM)
+
+    def test_rejects_a_batch_that_does_not_match_the_schema(self, linestrings):
+        """A stream states its type up front and is taken at its word, so the
+        batches that follow are checked against it rather than read blindly"""
+        array = pa.array(linestrings.to_arrow(geometry_encoding="geoarrow"))
+        schema = pa.schema(
+            [
+                pa.field(
+                    "geometry",
+                    array.type,
+                    nullable=False,
+                    metadata={b"ARROW:extension:name": b"geoarrow.linestring"},
+                )
+            ]
+        )
+        mismatched = pa.RecordBatch.from_arrays(
+            [pa.array([[1, 2]], type=pa.list_(pa.int32()))], names=["geometry"]
+        )
+        reader = pa.RecordBatchReader.from_batches(schema, iter([mismatched]))
+
+        with pytest.raises(ValueError, match="Could not read a batch"):
+            batches_of(core_split_linestrings(reader, NROWS, NCOLS, TRANSFORM))
 
     def test_rejects_wkb_encoding(self, linestrings):
         arrow = linestrings.to_arrow(geometry_encoding="WKB")
