@@ -7,6 +7,7 @@ implicitly reproject features to the raster CRS (and back) if they differ.
 """
 
 import logging
+from os import PathLike
 from pathlib import Path
 
 import geopandas
@@ -19,14 +20,15 @@ from snail.intersection import (
     prepare_linestrings,
     prepare_points,
     prepare_polygons,
+    read_raster_values_for_splits,
     split_features_for_rasters,
     split_geometries,
     split_linestrings,
     split_points,
     split_polygons,
-    split_polygons_experimental,
 )
 from snail.io import (
+    _is_rasterio_dataset,
     band_column_name,
     extend_rasters_metadata,
     read_raster_band_data,
@@ -42,8 +44,7 @@ def overlay_raster(
     raster,
     bands: list[int] | None = None,
     column: str | None = None,
-    experimental: bool = False,
-    lazy: bool = False,
+    max_raster_memory_mb: int = 256,
 ) -> geopandas.GeoDataFrame:
     """Split features along a raster grid and attribute cell values
 
@@ -60,11 +61,8 @@ def overlay_raster(
         Output column name (default: raster filename stem). Values from a
         single band are attributed under this name directly, multiple bands
         under "{column}_band_{n}" for each band n.
-    experimental : bool
-        Use the experimental (faster, less robust) polygon splitting routine
-    lazy : bool
-        Read raster bands lazily via xarray/dask rather than into memory.
-        Only applies when `raster` is a file path.
+    max_raster_memory_mb : int
+        Maximum size, in MiB, of each application-managed raster read buffer.
 
     Returns
     -------
@@ -81,7 +79,18 @@ def overlay_raster(
     if column is None:
         column = _raster_key(raster)
 
-    splits = split_features(features, grid, experimental=experimental)
+    splits = split_features(features, grid)
+    if isinstance(raster, (str, PathLike)) or _is_rasterio_dataset(raster):
+        values = read_raster_values_for_splits(
+            splits, raster, bands, max_raster_memory_mb=max_raster_memory_mb
+        )
+    else:
+        values = {
+            band_number: get_raster_values_for_splits(
+                splits, read_raster_band_data(raster, int(band_number))
+            )
+            for band_number in bands
+        }
     for band_number in bands:
         band_column = band_column_name(column, band_number, len(all_bands))
         logger.info(
@@ -90,16 +99,14 @@ def overlay_raster(
             band_number,
             band_column,
         )
-        band_data = read_raster_band_data(raster, int(band_number), lazy=lazy)
-        splits[band_column] = get_raster_values_for_splits(splits, band_data)
+        splits[band_column] = values[band_number]
     return splits
 
 
 def overlay_rasters(
     features: geopandas.GeoDataFrame,
     rasters: list | pandas.DataFrame,
-    experimental: bool = False,
-    lazy: bool = False,
+    max_raster_memory_mb: int = 256,
 ) -> geopandas.GeoDataFrame:
     """Split features along multiple raster grids and attribute cell values
 
@@ -112,17 +119,10 @@ def overlay_rasters(
         Point, LineString or Polygon features (multi-geometries are exploded)
     rasters : list | pandas.DataFrame
         Either a sequence of raster file paths or open rasterio datasets, or
-        a DataFrame with columns:
-            - "path" (required): file path or open rasterio dataset
-            - "bands" (optional): band numbers to attribute, as an int, a
-              comma-separated string ("1,2,3"), or a list/tuple of ints -
-              defaults to all bands
-            - "key" (optional): output column name - defaults to the raster
-              filename stem
-    experimental : bool
-        Use the experimental (faster, less robust) polygon splitting routine
-    lazy : bool
-        Read raster bands lazily via xarray/dask rather than into memory
+        a DataFrame. Its required ``path`` column contains a path or dataset;
+        optional ``bands`` and ``key`` columns select bands and output names.
+    max_raster_memory_mb : int
+        Maximum size, in MiB, of each application-managed raster read buffer.
 
     Returns
     -------
@@ -134,7 +134,7 @@ def overlay_rasters(
     """
     rasters = _normalise_rasters(rasters)
     rasters, grids = extend_rasters_metadata(rasters)
-    prepare, split_func = _prepare_and_split_funcs(features, experimental)
+    prepare, split_func = _prepare_and_split_funcs(features)
     prepared = prepare(features)
     splits = split_features_for_rasters(prepared, grids, split_func)
 
@@ -144,6 +144,27 @@ def overlay_rasters(
     # associate values
     for raster in rasters.itertuples():
         _, all_bands = read_raster_metadata(raster.path)
+        if isinstance(raster.path, (str, PathLike)) or _is_rasterio_dataset(
+            raster.path
+        ):
+            values = read_raster_values_for_splits(
+                splits,
+                raster.path,
+                raster.bands,
+                f"i_{raster.grid_id}",
+                f"j_{raster.grid_id}",
+                max_raster_memory_mb,
+            )
+        else:
+            values = {
+                band_number: get_raster_values_for_splits(
+                    splits,
+                    read_raster_band_data(raster.path, int(band_number)),
+                    f"i_{raster.grid_id}",
+                    f"j_{raster.grid_id}",
+                )
+                for band_number in raster.bands
+            }
         for band_number in raster.bands:
             logger.info(
                 "Associating values from raster %s grid %s band %s",
@@ -152,13 +173,7 @@ def overlay_rasters(
                 band_number,
             )
             column = band_column_name(raster.key, band_number, len(all_bands))
-            band_data = read_raster_band_data(raster.path, int(band_number), lazy=lazy)
-            raster_data[column] = get_raster_values_for_splits(
-                splits,
-                band_data,
-                f"i_{raster.grid_id}",
-                f"j_{raster.grid_id}",
-            )
+            raster_data[column] = values[band_number]
 
     raster_data = pandas.DataFrame(raster_data)
     splits = pandas.concat([splits, raster_data], axis="columns")
@@ -168,7 +183,6 @@ def overlay_rasters(
 def split_features(
     features: geopandas.GeoDataFrame,
     grid: GridDefinition,
-    experimental: bool = False,
 ) -> geopandas.GeoDataFrame:
     """Split point, linestring or polygon features along a grid
 
@@ -182,8 +196,6 @@ def split_features(
         Point, LineString or Polygon features (multi-geometries are exploded)
     grid : GridDefinition
         Grid to split features along
-    experimental : bool
-        Use the experimental (faster, less robust) polygon splitting routine
 
     Returns
     -------
@@ -194,7 +206,7 @@ def split_features(
     if features.empty:
         return apply_indices(features, grid)
     source_crs = features.crs
-    prepare, split_func = _prepare_and_split_funcs(features, experimental)
+    prepare, split_func = _prepare_and_split_funcs(features)
     prepared = prepare(features)
 
     if source_crs is None or grid.crs is None:
@@ -226,7 +238,7 @@ def split_features(
     return splits
 
 
-def _prepare_and_split_funcs(features: geopandas.GeoDataFrame, experimental: bool):
+def _prepare_and_split_funcs(features: geopandas.GeoDataFrame):
     """Pick prepare and split functions for the features' geometry type"""
     kinds = _geom_kinds(features)
     if len(kinds) > 1 or "GeometryCollection" in kinds:
@@ -242,8 +254,6 @@ def _prepare_and_split_funcs(features: geopandas.GeoDataFrame, experimental: boo
     elif "LineString" in geom_type:
         return prepare_linestrings, split_linestrings
     elif "Polygon" in geom_type:
-        if experimental:
-            return prepare_polygons, split_polygons_experimental
         return prepare_polygons, split_polygons
     raise ValueError(f"Could not process vector data of type {geom_type}")
 

@@ -28,7 +28,6 @@ def snail(args=None):
     """snail command"""
     parser = argparse.ArgumentParser(prog="snail")
     parser.add_argument("--verbose", "-v", action="count", default=0)
-    parser.add_argument("-x", "--experimental", action="store_true")
     subparsers = parser.add_subparsers(help="Run a command")
 
     parser_split = subparsers.add_parser(
@@ -110,9 +109,10 @@ def snail(args=None):
         "in one column per band, named '{column}_band_{n}'",
     )
     parser_split.add_argument(
-        "--lazy-rasters",
-        action="store_true",
-        help=("Read raster bands lazily with xarray/dask when attributing values."),
+        "--max-raster-memory-mb",
+        type=int,
+        default=256,
+        help="Maximum MiB for each raster attribution read buffer (default: 256)",
     )
     parser_split.add_argument(
         "-o",
@@ -148,9 +148,10 @@ def snail(args=None):
         help="CSV file with raster layers",
     )
     parser_process.add_argument(
-        "--lazy-rasters",
-        action="store_true",
-        help="Read raster bands lazily with xarray/dask during processing.",
+        "--max-raster-memory-mb",
+        type=int,
+        default=256,
+        help="Maximum MiB for each raster attribution read buffer (default: 256)",
     )
     parser_process.set_defaults(func=process)
 
@@ -232,11 +233,10 @@ def split(args):
                 args.raster,
                 bands=args.band,
                 column=args.column,
-                experimental=args.experimental,
-                lazy=args.lazy_rasters,
+                max_raster_memory_mb=args.max_raster_memory_mb,
             )
         else:
-            splits = split_features(features, layer_grid, args.experimental)
+            splits = split_features(features, layer_grid)
 
         if args.all_layers:
             write_features(splits, args.output, layer=layer)
@@ -274,8 +274,7 @@ def process(args):
         _process_layer(
             vector_layer,
             rasters,
-            experimental=args.experimental,
-            lazy=args.lazy_rasters,
+            max_raster_memory_mb=args.max_raster_memory_mb,
         )
 
 
@@ -283,8 +282,7 @@ def _process_layer(
     vector_layer,
     rasters,
     *,
-    experimental: bool = False,
-    lazy: bool = False,
+    max_raster_memory_mb: int = 256,
 ):
     vector_path = Path(vector_layer.path)
     layer = getattr(vector_layer, "layer", None)
@@ -295,7 +293,9 @@ def _process_layer(
     features = read_features(vector_path, layer)
     logger.info("Features CRS %s", features.crs)
 
-    with_data = overlay_rasters(features, rasters, experimental=experimental, lazy=lazy)
+    with_data = overlay_rasters(
+        features, rasters, max_raster_memory_mb=max_raster_memory_mb
+    )
     write_features(with_data, vector_layer.output_path)
 
 

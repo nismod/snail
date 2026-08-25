@@ -82,6 +82,11 @@ indices in columns ``index_i`` and ``index_j``, and one column of raster
 values per band. If the features and raster are in different coordinate
 reference systems, the features are implicitly reprojected to the raster CRS
 for splitting and value lookup, then returned in their original CRS.
+File-backed rasters are read through bounded windows by default; use the
+``max_raster_memory_mb`` argument to tune the application-level read buffer
+(256 MiB by default). NumPy, xarray and Dask inputs retain their existing array
+indexing behavior, so their memory use follows the caller's materialization or
+chunking choices.
 
 :func:`snail.overlay_rasters` intersects all features with all rasters in one
 call, splitting on each distinct grid and attributing one column per raster
@@ -111,11 +116,12 @@ Split features on a grid defined by a GeoTIFF, optionally adding the values from
         --features lines.geojson \
         --raster gridded_data.tif \
         --attribute \
-        --lazy-rasters \
+        --max-raster-memory-mb 256 \
         --output split_lines_with_raster_values.geojson
 
-Add ``--lazy-rasters`` to keep raster bands on disk and fetch values lazily via
-``xarray``/``dask``.
+Raster files are attributed through bounded rasterio windows. The memory limit
+applies to each application-managed read buffer across all selected bands; it
+does not limit GDAL's internal cache, vector splitting, or the final output.
 
 
 Split multiple vector feature files along the grids defined by multiple raster files, attributing all raster values::

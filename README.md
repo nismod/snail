@@ -76,7 +76,11 @@ Index([..., 'index_i', 'index_j', 'depth_band_1', 'depth_band_2'], dtype='object
 If the features and raster are in different coordinate reference systems, the
 features are implicitly reprojected to the raster CRS for splitting and value
 lookup, then returned in their original CRS. Rasters can be given as file
-paths or open rasterio datasets.
+paths or open rasterio datasets. File-backed rasters are read through bounded
+windows by default; set `max_raster_memory_mb` to tune the application-level
+read buffer (256 MiB by default). NumPy, xarray and Dask inputs retain their
+existing array indexing behavior, so their memory use is governed by how the
+caller materializes or chunks them.
 
 `snail.overlay_rasters` intersects all features with all rasters in one call,
 splitting on each distinct grid and attributing one column per raster band.
@@ -121,12 +125,13 @@ snail split \
     --features lines.geojson \
     --raster gridded_data.tif \
     --attribute \
-    --lazy-rasters \
+    --max-raster-memory-mb 256 \
     --output split_lines_with_raster_values.geojson
 ```
 
-Adding `--lazy-rasters` keeps large raster bands on disk and fetches values
-lazily via `xarray`/`dask`.
+Raster files are attributed through bounded rasterio windows. The memory limit
+applies to each application-managed read buffer across all selected bands; it
+does not limit GDAL's internal cache, vector splitting, or the final output.
 
 Input features can be any vector format readable by geopandas (GeoPackage,
 Shapefile, GeoJSON, GeoParquet...), and the output format is picked from the
@@ -168,8 +173,8 @@ Optional columns in the rasters CSV:
   metadata columns (e.g. a `hazard` column with value `flood` gives key
   `hazard:flood`), falling back to the raster path.
 
-The `--lazy-rasters` flag can be supplied to `snail process` when working with
-large rasters.
+Use `--max-raster-memory-mb` with `snail process` to tune each raster read
+buffer (the default is 256 MiB).
 
 ### Transform
 
@@ -283,19 +288,9 @@ Python-level comparison, run:
 python scripts/benchmark_split.py
 ```
 
-The Python benchmark still compares `split_polygons` (the Shapely/GEOS overlay
-implementation) with `split_polygons_experimental` (the C++ per-cell
-implementation). It reports timings and piece counts, and checks that both
-implementations conserve polygon area. Results are machine-dependent; use the
-same environment and workload when comparing changes.
-
-Recent run in the `snail-dev` environment:
-
-| Workload | Overlay | Experimental | Speedup | Pieces |
-| --- | ---: | ---: | ---: | ---: |
-| 500 small buildings | 119.7 ms | 2.8 ms | 42.7× | 725 |
-| 50 medium circles | 458.5 ms | 11.9 ms | 38.4× | 18,051 |
-| 1 large circle | 215.8 ms | 4.5 ms | 47.5× | 6,528 |
+The Python benchmark measures the default bounded polygon splitter. Results
+are machine-dependent; use the same environment and workload when comparing
+changes.
 
 ### C++ library
 

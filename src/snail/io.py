@@ -9,7 +9,6 @@ import geopandas
 import numpy
 import pandas
 import rasterio
-import rioxarray
 
 from snail.intersection import (
     GridDefinition,
@@ -34,27 +33,6 @@ def band_column_name(key: str, band_number: int, number_of_bands: int) -> str:
     return f"{key}_band_{band_number}"
 
 
-def read_rasters(rasters, lazy: bool = False):
-    for raster in rasters.itertuples():
-        try:
-            if lazy:
-                data_array = rioxarray.open_rasterio(raster.path, chunks="auto")
-                source = data_array
-            else:
-                data_array = None
-                source = raster.path
-
-            for band_number in raster.bands:
-                yield (
-                    raster,
-                    band_number,
-                    read_raster_band_data(source, band_number, lazy=lazy),
-                )
-        finally:
-            if data_array is not None:
-                data_array.close()
-
-
 def _is_rasterio_dataset(value) -> bool:
     """True for an open rasterio dataset (duck-typed, covers the reader classes)"""
     return isinstance(value, rasterio.DatasetReader) or (
@@ -76,7 +54,6 @@ def _open_raster(raster):
 def read_raster_band_data(
     source: Union[str, PathLike, "xarray.DataArray"],
     band_number: int = 1,
-    lazy: bool = False,
 ) -> Union[numpy.ndarray, "xarray.DataArray"]:
     """Read a single band from a raster path, open rasterio dataset or DataArray"""
     if band_number < 1:
@@ -88,13 +65,8 @@ def read_raster_band_data(
         return source.read(band_number)
 
     if isinstance(source, (str, PathLike)):
-        if not lazy:
-            with rasterio.open(source) as dataset:
-                band_data: numpy.ndarray = dataset.read(band_number)
-        else:
-            data_array = rioxarray.open_rasterio(source, chunks="auto")
-            band_data = _select_dataarray_band(data_array, band_number)
-        return band_data
+        with rasterio.open(source) as dataset:
+            return dataset.read(band_number)
 
     raise TypeError(
         "Unsupported raster source; expected a path-like object, "
