@@ -45,7 +45,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "affine",
-    "ruff",
+    # Pinned to a minor series: CI runs `ruff check` as a gate, so an
+    # unpinned ruff turns any new default rule into a red build on code
+    # nobody touched.
+    "ruff>=0.16,<0.17",
     "hilbertcurve",
     "nbstripout",
     "pytest-cov",
