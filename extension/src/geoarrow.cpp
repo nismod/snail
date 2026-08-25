@@ -53,6 +53,11 @@
 // Brings the Arrow C data and stream interface structs with it.
 #include "nanoarrow.hpp"
 
+// Vendored and namespaced the same way, and compiled against the nanoarrow
+// above. Decodes WKB and walks any GeoArrow encoding through a visitor that
+// reports each feature's own geometry type.
+#include "geoarrow/geoarrow.h"
+
 #include "geoarrow.hpp"
 #include "geometry.hpp"
 #include "grid.hpp"
@@ -77,6 +82,44 @@ enum class GeometryType { linestring, polygon };
 static const char *extensionName(GeometryType type) {
   return type == GeometryType::polygon ? "geoarrow.polygon"
                                        : "geoarrow.linestring";
+}
+
+/// How a source holds its geometries.
+///
+/// GeoArrow's native encodings put the coordinates in Arrow buffers, which
+/// are read in place. Its serialised WKB encoding puts each geometry in a
+/// binary blob instead, which has to be decoded - and only says what type a
+/// geometry is once decoded, per feature rather than per column.
+enum class Encoding { native, wkb };
+
+static const char *WKB_EXTENSION_NAME = "geoarrow.wkb";
+
+/// The name a piece of this type goes by in WKB error messages
+static const char *geometryTypeName(enum GeoArrowGeometryType type) {
+  switch (type) {
+  case GEOARROW_GEOMETRY_TYPE_POINT:
+    return "Point";
+  case GEOARROW_GEOMETRY_TYPE_LINESTRING:
+    return "LineString";
+  case GEOARROW_GEOMETRY_TYPE_POLYGON:
+    return "Polygon";
+  case GEOARROW_GEOMETRY_TYPE_MULTIPOINT:
+    return "MultiPoint";
+  case GEOARROW_GEOMETRY_TYPE_MULTILINESTRING:
+    return "MultiLineString";
+  case GEOARROW_GEOMETRY_TYPE_MULTIPOLYGON:
+    return "MultiPolygon";
+  case GEOARROW_GEOMETRY_TYPE_GEOMETRYCOLLECTION:
+    return "GeometryCollection";
+  default:
+    return "geometry";
+  }
+}
+
+/// The one WKB geometry type a typed split accepts
+static enum GeoArrowGeometryType wanted(GeometryType type) {
+  return type == GeometryType::polygon ? GEOARROW_GEOMETRY_TYPE_POLYGON
+                                       : GEOARROW_GEOMETRY_TYPE_LINESTRING;
 }
 
 // -- Arrow schema metadata ---------------------------------------------------
@@ -291,10 +334,14 @@ private:
 /// Check the GeoArrow extension name, when the producer declares one. A
 /// plain nested list array of the right shape is accepted too, so that
 /// arrays built directly with pyarrow work.
-static void checkExtensionName(const ArrowSchema *schema, GeometryType type) {
+static Encoding checkExtensionName(const ArrowSchema *schema,
+                                   GeometryType type) {
   std::string name = metadataValue(schema->metadata, "ARROW:extension:name");
   if (name.empty() || name == extensionName(type)) {
-    return;
+    return Encoding::native;
+  }
+  if (name == WKB_EXTENSION_NAME) {
+    return Encoding::wkb;
   }
   std::string message = std::string("Expected a ") + extensionName(type) +
                         " array, got Arrow extension type '" + name + "'";
@@ -307,9 +354,17 @@ static void checkExtensionName(const ArrowSchema *schema, GeometryType type) {
 }
 
 /// Validate that a schema describes the expected GeoArrow geometry type,
-/// before any data has arrived
-static void checkGeometrySchema(const ArrowSchema *schema, GeometryType type) {
-  checkExtensionName(schema, type);
+/// before any data has arrived, and say how it is encoded.
+///
+/// Only the native encodings can be checked this far ahead: a WKB column
+/// says nothing about what its geometries are until they are decoded, so
+/// the type check for those happens per feature as they are read.
+static Encoding checkGeometrySchema(const ArrowSchema *schema,
+                                    GeometryType type) {
+  const Encoding encoding = checkExtensionName(schema, type);
+  if (encoding == Encoding::wkb) {
+    return encoding;
+  }
   if (std::strcmp(schema->format, "+l") != 0 &&
       std::strcmp(schema->format, "+L") != 0) {
     throw std::invalid_argument(
@@ -336,6 +391,7 @@ static void checkGeometrySchema(const ArrowSchema *schema, GeometryType type) {
   } else {
     Coordinates::checkSchema(schema->children[0]);
   }
+  return encoding;
 }
 
 /// A geoarrow.linestring batch: a list of coordinates per linestring,
@@ -422,6 +478,64 @@ struct PolygonReader {
   }
 };
 
+/// A geoarrow.wkb batch, read through geoarrow-c.
+///
+/// WKB is a serialised encoding: the coordinates sit inside each blob, so
+/// unlike the native encodings they cannot be pointed at where they lie and
+/// have to be decoded. geoarrow-c does that, handing each feature to a
+/// visitor - which is also the only place a WKB geometry's type is known,
+/// since the column as a whole does not declare one.
+class WkbReader {
+public:
+  WkbReader(const WkbReader &) = delete;
+  WkbReader &operator=(const WkbReader &) = delete;
+
+  ~WkbReader() {
+    if (ready) {
+      GeoArrowArrayReaderReset(&reader);
+    }
+  }
+
+  WkbReader() = default;
+
+  /// Lay the reader out from the column's schema, once
+  void init(const ArrowSchema *schema) {
+    GeoArrowError error;
+    if (GeoArrowArrayReaderInitFromSchema(&reader, schema, &error) !=
+        GEOARROW_OK) {
+      throw std::invalid_argument(
+          std::string("Could not read the geometry column as WKB: ") +
+          error.message);
+    }
+    ready = true;
+  }
+
+  /// Point it at a batch
+  void setArray(const ArrowArray *array) {
+    GeoArrowError error;
+    if (GeoArrowArrayReaderSetArray(&reader, array, &error) != GEOARROW_OK) {
+      throw std::invalid_argument(
+          std::string("Could not read a batch of WKB geometries: ") +
+          error.message);
+    }
+  }
+
+  /// Walk feature i, handing its parts to the visitor
+  void visit(int64_t i, GeoArrowVisitor *visitor) {
+    GeoArrowError error;
+    visitor->error = &error;
+    if (GeoArrowArrayReaderVisit(&reader, i, 1, visitor) != GEOARROW_OK) {
+      throw std::invalid_argument(
+          std::string("Could not read WKB geometry at row ") +
+          std::to_string(i) + ": " + error.message);
+    }
+  }
+
+private:
+  GeoArrowArrayReader reader{};
+  bool ready = false;
+};
+
 // -- Reading the source ------------------------------------------------------
 
 /// Take ownership of the struct a PyCapsule holds. The PyCapsule interface
@@ -487,13 +601,19 @@ public:
     // columns. Anything else is a stream of the geometries themselves.
     if (std::strcmp(schema.get()->format, "+s") == 0) {
       geometry_child = findGeometryField(schema.get(), type);
-      checkGeometrySchema(schema.get()->children[geometry_child], type);
+      encoding = checkGeometrySchema(schema.get()->children[geometry_child], type);
     } else {
-      checkGeometrySchema(schema.get(), type);
+      encoding = checkGeometrySchema(schema.get(), type);
     }
 
-    // One view over the geometry column, laid out from its schema now and
-    // pointed at each batch as it arrives.
+    // One reader over the geometry column, laid out from its schema now and
+    // pointed at each batch as it arrives. Which reader depends on how the
+    // column is encoded: the native encodings are read in place through an
+    // Arrow view, WKB is decoded by geoarrow-c.
+    if (encoding == Encoding::wkb) {
+      wkb.init(geometrySchema());
+      return;
+    }
     ArrowError error;
     ArrowErrorInit(&error);
     if (ArrowArrayViewInitFromSchema(view.get(), geometrySchema(), &error) !=
@@ -520,17 +640,29 @@ public:
                                : schema.get();
   }
 
-  /// Pull the next batch and view its geometries, returning nullptr once the
-  /// source is exhausted. The batch owns the buffers the view points at, so
-  /// it has to outlive the reading.
-  const ArrowArrayView *next(nanoarrow::UniqueArray &batch) {
+  /// How this source holds its geometries
+  Encoding source() const { return encoding; }
+
+  /// The Arrow view of the current batch's geometries; native encodings only
+  const ArrowArrayView *geometryView() { return view.get(); }
+
+  /// The WKB reader positioned on the current batch; WKB sources only
+  WkbReader &wkbReader() { return wkb; }
+
+  /// How many geometries the current batch holds
+  int64_t length() const { return batch_length; }
+
+  /// Pull the next batch and point the reader at its geometries, returning
+  /// false once the source is exhausted. The batch owns what the reader
+  /// reads, so it has to outlive the reading.
+  bool next(nanoarrow::UniqueArray &batch) {
     batch.reset();
     if (single->release != nullptr) {
       // a one-batch source: hand the array over, emptying it so that the
       // next call reports the end of the stream
       single.move(batch.get());
     } else if (stream->release == nullptr) {
-      return nullptr;
+      return false;
     } else {
       if (stream.get()->get_next(stream.get(), batch.get()) != 0) {
         throw std::runtime_error(
@@ -539,22 +671,28 @@ public:
       }
       // the producer marks the end of the stream with a released array
       if (batch->release == nullptr) {
-        return nullptr;
+        return false;
       }
     }
 
+    const ArrowArray *geometries = geometryArray(batch.get());
+    batch_length = geometries->length;
+    if (encoding == Encoding::wkb) {
+      wkb.setArray(geometries);
+      return true;
+    }
     // Pointing the view at the batch also checks it over: that its children
     // and buffers are the shape the schema promised, and that its offsets
     // stay inside the arrays they index. Reading below can then trust it.
     ArrowError error;
     ArrowErrorInit(&error);
-    if (ArrowArrayViewSetArray(view.get(), geometryArray(batch.get()),
-                               &error) != NANOARROW_OK) {
+    if (ArrowArrayViewSetArray(view.get(), geometries, &error) !=
+        NANOARROW_OK) {
       throw std::invalid_argument(
           std::string("Could not read a batch of geometries: ") +
           error.message);
     }
-    return view.get();
+    return true;
   }
 
 private:
@@ -611,6 +749,9 @@ private:
   nanoarrow::UniqueArrayStream stream;
   nanoarrow::UniqueArray single;
   nanoarrow::UniqueArrayView view;
+  WkbReader wkb;
+  Encoding encoding = Encoding::native;
+  int64_t batch_length = 0;
   nanoarrow::UniqueSchema schema;
   /// which column of a record batch holds the geometries; -1 when the
   /// batches are the geometries themselves
@@ -838,6 +979,199 @@ static void splitPolygonBatch(PolygonReader &reader, const grid::Grid &grid,
   }
 }
 
+/// Splits the geometries geoarrow-c decodes out of a WKB column.
+///
+/// The callbacks arrive nested, and that nesting is the point: a
+/// MULTILINESTRING opens a geom_start of its own and then one per part, and
+/// a GEOMETRYCOLLECTION one per member, each carrying that member's own
+/// type. Splitting happens at the innermost level, where the coordinates
+/// are, so `depth` tracks how far in we are and `type` is whatever the
+/// innermost open geometry is.
+///
+/// This class only ever accepts one type - it backs the typed entry points,
+/// which give back native GeoArrow of that type, so a feature that is
+/// something else has nowhere to go and is refused with the row it is in.
+class WkbSplitter {
+public:
+  WkbSplitter(GeometryType type, const grid::Grid &grid, bool bounded,
+              BatchData &out)
+      : want(wanted(type)), expected(type), grid(grid), bounded(bounded),
+        out(out) {}
+
+  /// A visitor bound to this splitter. geoarrow-c calls plain C function
+  /// pointers, so each one recovers the splitter from private_data.
+  GeoArrowVisitor visitor() {
+    GeoArrowVisitor v;
+    GeoArrowVisitorInitVoid(&v);
+    v.feat_start = [](GeoArrowVisitor *v) { return self(v)->featStart(); };
+    v.null_feat = [](GeoArrowVisitor *v) { return self(v)->nullFeat(); };
+    v.geom_start = [](GeoArrowVisitor *v, enum GeoArrowGeometryType type,
+                      enum GeoArrowDimensions) {
+      return self(v)->geomStart(type);
+    };
+    v.ring_start = [](GeoArrowVisitor *v) { return self(v)->ringStart(); };
+    v.coords = [](GeoArrowVisitor *v, const GeoArrowCoordView *c) {
+      return self(v)->coords(c);
+    };
+    v.ring_end = [](GeoArrowVisitor *v) { return self(v)->ringEnd(); };
+    v.geom_end = [](GeoArrowVisitor *v) { return self(v)->geomEnd(); };
+    v.private_data = this;
+    return v;
+  }
+
+  /// Which row of the source is being read, for error messages
+  void startRow(int64_t index) { row = index; }
+
+  /// How many pieces this splitter has produced
+  std::size_t pieces() const {
+    return expected == GeometryType::polygon ? out.polygons.size()
+                                             : out.lines.size();
+  }
+
+private:
+  static WkbSplitter *self(GeoArrowVisitor *v) {
+    return static_cast<WkbSplitter *>(v->private_data);
+  }
+
+  /// A callback cannot let a C++ exception escape into geoarrow-c, so it
+  /// records the complaint and returns a failure code; the message is
+  /// raised on the way back out.
+  int refuse(std::string what) {
+    problem = std::move(what);
+    return EINVAL;
+  }
+
+  int featStart() {
+    depth = 0;
+    rings.clear();
+    ring_starts.clear();
+    coordinates.clear();
+    return GEOARROW_OK;
+  }
+
+  /// The native path refuses a null geometry rather than dropping it, and
+  /// this must too: the same data in two encodings should not behave
+  /// differently. WKB knows which row it is on, so it says.
+  int nullFeat() {
+    return refuse("Cannot split missing (null) geometries (row " +
+                  std::to_string(row) +
+                  "): drop or fill null geometries first");
+  }
+
+  int geomStart(enum GeoArrowGeometryType type) {
+    depth++;
+    if (depth == 1 && type != want) {
+      std::string message = std::string("Cannot split a ") +
+                            geometryTypeName(type) + " (row " +
+                            std::to_string(row) + ") as a " +
+                            extensionName(expected);
+      if (type == GEOARROW_GEOMETRY_TYPE_MULTILINESTRING ||
+          type == GEOARROW_GEOMETRY_TYPE_MULTIPOLYGON ||
+          type == GEOARROW_GEOMETRY_TYPE_MULTIPOINT ||
+          type == GEOARROW_GEOMETRY_TYPE_GEOMETRYCOLLECTION) {
+        message += "; merge or explode multi-part geometries before splitting";
+      }
+      return refuse(std::move(message));
+    }
+    return GEOARROW_OK;
+  }
+
+  int ringStart() {
+    ring_starts.push_back(coordinates.size());
+    return GEOARROW_OK;
+  }
+
+  /// Coordinates arrive in runs rather than one point at a time. WKB gives
+  /// one run per ring, laid out as interleaved xy - which is a run of Coord
+  /// already - so the common case is a single bulk append.
+  int coords(const GeoArrowCoordView *c) {
+    const std::size_t count = static_cast<std::size_t>(c->n_coords);
+    if (count == 0) {
+      return GEOARROW_OK;
+    }
+    if (c->coords_stride == 2 && c->values[1] == c->values[0] + 1) {
+      const auto *first = reinterpret_cast<const geo::Coord *>(c->values[0]);
+      coordinates.insert(coordinates.end(), first, first + count);
+      return GEOARROW_OK;
+    }
+    // a z or m ordinate to step over, or x and y held apart
+    const int32_t stride = c->coords_stride;
+    coordinates.reserve(coordinates.size() + count);
+    for (std::size_t i = 0; i < count; i++) {
+      coordinates.push_back(
+          {c->values[0][i * stride], c->values[1][i * stride]});
+    }
+    return GEOARROW_OK;
+  }
+
+  int ringEnd() { return GEOARROW_OK; }
+
+  int geomEnd() {
+    depth--;
+    if (depth != 0) {
+      return GEOARROW_OK;
+    }
+    // the outermost geometry has closed, so split what it held
+    if (expected == GeometryType::polygon) {
+      rings.clear();
+      for (std::size_t r = 0; r < ring_starts.size(); r++) {
+        const std::size_t begin = ring_starts[r];
+        const std::size_t end = r + 1 < ring_starts.size()
+                                    ? ring_starts[r + 1]
+                                    : coordinates.size();
+        rings.push_back({coordinates.data() + begin, end - begin});
+      }
+      operations::splitPolygonGridPieces(rings, grid, out.polygons);
+    } else {
+      operations::splitLineStringGrid({coordinates.data(), coordinates.size()},
+                                      grid, bounded, out.lines);
+    }
+    return GEOARROW_OK;
+  }
+
+  const enum GeoArrowGeometryType want;
+  const GeometryType expected;
+  const grid::Grid &grid;
+  const bool bounded;
+  BatchData &out;
+
+  int64_t row = 0;
+  int depth = 0;
+  /// every coordinate of the geometry being read, rings end to end
+  std::vector<geo::Coord> coordinates;
+  /// where each ring begins within them
+  std::vector<std::size_t> ring_starts;
+  std::vector<operations::CoordSpan> rings;
+
+public:
+  /// set when a callback refused a geometry, so the caller can raise it
+  std::string problem;
+};
+
+/// Split one batch of WKB geometries into pieces
+static void splitWkbBatch(InputStream &input, GeometryType type,
+                          const grid::Grid &grid, bool bounded,
+                          int64_t parent_base, BatchData &out) {
+  WkbSplitter splitter(type, grid, bounded, out);
+  GeoArrowVisitor visitor = splitter.visitor();
+  for (int64_t i = 0; i < input.length(); i++) {
+    const std::size_t before = splitter.pieces();
+    splitter.startRow(i);
+    try {
+      input.wkbReader().visit(i, &visitor);
+    } catch (const std::invalid_argument &) {
+      // a refusal from one of our own callbacks says more than the error
+      // geoarrow-c wraps it in
+      if (!splitter.problem.empty()) {
+        throw std::invalid_argument(splitter.problem);
+      }
+      throw;
+    }
+    out.parents.insert(out.parents.end(), splitter.pieces() - before,
+                       parent_base + i);
+  }
+}
+
 /// Read one batch from the source and split it, returning nothing once the
 /// source is exhausted.
 ///
@@ -848,26 +1182,30 @@ static void splitPolygonBatch(PolygonReader &reader, const grid::Grid &grid,
 static std::optional<BatchData> nextSplitBatch(SplitState *state) {
   while (true) {
     nanoarrow::UniqueArray batch;
-    const ArrowArrayView *geometries = state->input.next(batch);
-    if (geometries == nullptr) {
+    if (!state->input.next(batch)) {
       return std::nullopt;
     }
-    const ArrowSchema *schema = state->input.geometrySchema();
 
     BatchData out;
     out.type = state->type;
-    int64_t count = 0;
-    if (state->type == GeometryType::polygon) {
-      PolygonReader reader(geometries, schema);
-      count = reader.size();
+    const int64_t count = state->input.length();
+    if (state->input.source() == Encoding::wkb) {
       py::gil_scoped_release unlocked;
-      splitPolygonBatch(reader, state->grid, state->parent_base, out);
+      splitWkbBatch(state->input, state->type, state->grid, state->bounded,
+                    state->parent_base, out);
     } else {
-      LineStringReader reader(geometries, schema);
-      count = reader.size();
-      py::gil_scoped_release unlocked;
-      splitLineStringBatch(reader, state->grid, state->bounded,
-                           state->parent_base, out);
+      const ArrowArrayView *geometries = state->input.geometryView();
+      const ArrowSchema *schema = state->input.geometrySchema();
+      if (state->type == GeometryType::polygon) {
+        PolygonReader reader(geometries, schema);
+        py::gil_scoped_release unlocked;
+        splitPolygonBatch(reader, state->grid, state->parent_base, out);
+      } else {
+        LineStringReader reader(geometries, schema);
+        py::gil_scoped_release unlocked;
+        splitLineStringBatch(reader, state->grid, state->bounded,
+                             state->parent_base, out);
+      }
     }
     state->parent_base += count;
 

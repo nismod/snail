@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from numpy.testing import assert_array_equal
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Point, Polygon
 from snail.core.intersections import split_linestring as core_split_linestring
 from snail.core.intersections import split_linestrings as core_split_linestrings
 from snail.core.intersections import split_polygon as core_split_polygon
@@ -283,6 +283,72 @@ class TestSourceKinds:
         )
 
         assert_same_pieces(actual, expected)
+
+    def test_wkb_agrees_with_geoarrow(self, linestrings, polygons):
+        """WKB holds each geometry as a serialised blob rather than in Arrow
+        buffers, so it is decoded rather than read in place - and must give
+        exactly the pieces the geoarrow-encoded column gives"""
+        for geometries, split in (
+            (linestrings, core_split_linestrings),
+            (polygons, core_split_polygons),
+        ):
+            wkb = geometries.to_arrow(geometry_encoding="WKB")
+            field = pa.Field._import_from_c_capsule(wkb.__arrow_c_array__()[0])
+            assert field.metadata[b"ARROW:extension:name"] == b"geoarrow.wkb"
+
+            actual = geometry_of(split(wkb, NROWS, NCOLS, TRANSFORM))
+            expected = geometry_of(
+                split(to_geoarrow(geometries), NROWS, NCOLS, TRANSFORM)
+            )
+
+            assert_same_pieces(actual, expected)
+
+    def test_geoparquet_written_with_default_encoding(self, tmp_path, many_linestrings):
+        """GeoDataFrame.to_parquet writes geoarrow.wkb unless told otherwise,
+        so this is what a GeoParquet file looks like by default"""
+        frame = gpd.GeoDataFrame(
+            {"a": range(len(many_linestrings))}, geometry=many_linestrings
+        )
+        path = tmp_path / "default.parquet"
+        frame.to_parquet(path)
+        parquet = pq.ParquetFile(path)
+        assert (
+            parquet.schema_arrow.field("geometry").metadata[b"ARROW:extension:name"]
+            == b"geoarrow.wkb"
+        )
+
+        reader = pa.RecordBatchReader.from_batches(
+            parquet.schema_arrow, parquet.iter_batches(batch_size=2)
+        )
+        actual = geometry_of(core_split_linestrings(reader, NROWS, NCOLS, TRANSFORM))
+        expected = geometry_of(
+            core_split_linestrings(
+                to_geoarrow(many_linestrings), NROWS, NCOLS, TRANSFORM
+            )
+        )
+
+        assert_same_pieces(actual, expected)
+
+    def test_three_dimensional_wkb(self, many_linestrings, polygons):
+        """A z ordinate widens each coordinate in the blob too; splitting is
+        planar, so the pieces must be unchanged"""
+        for geometries, split in (
+            (many_linestrings, core_split_linestrings),
+            (polygons, core_split_polygons),
+        ):
+            actual = geometry_of(
+                split(
+                    with_z(geometries).to_arrow(geometry_encoding="WKB"),
+                    NROWS,
+                    NCOLS,
+                    TRANSFORM,
+                )
+            )
+            expected = geometry_of(
+                split(to_geoarrow(geometries), NROWS, NCOLS, TRANSFORM)
+            )
+
+            assert_same_pieces(actual, expected)
 
     def test_large_list_offsets_linestrings(self, many_linestrings):
         """Arrow lists may carry 64-bit offsets ("+L") instead of 32-bit.
@@ -572,17 +638,40 @@ class TestErrors:
         with pytest.raises(ValueError, match="Could not read a batch"):
             batches_of(core_split_linestrings(reader, NROWS, NCOLS, TRANSFORM))
 
-    def test_rejects_wkb_encoding(self, linestrings):
-        arrow = linestrings.to_arrow(geometry_encoding="WKB")
-        with pytest.raises(ValueError, match="geoarrow.wkb"):
-            core_split_linestrings(arrow, NROWS, NCOLS, TRANSFORM)
+    def test_wkb_names_the_row_and_type_it_could_not_split(self, linestrings):
+        """A WKB column says nothing about its geometry types until they are
+        decoded, so a feature of the wrong type is only found part-way
+        through: the error has to say which row, since the caller cannot see
+        it from the schema"""
+        mixed = gpd.GeoSeries([linestrings[0], Point(2.5, 2.5)])
+        with pytest.raises(ValueError, match=r"Cannot split a Point \(row 1\)"):
+            batches_of(
+                core_split_linestrings(
+                    mixed.to_arrow(geometry_encoding="WKB"), NROWS, NCOLS, TRANSFORM
+                )
+            )
+
+    def test_wkb_multi_part_geometries_say_what_to_do(self, linestrings):
+        multi = gpd.GeoSeries.from_wkt(
+            ["MULTILINESTRING ((0.5 0.5, 1.5 1.5), (2.5 2.5, 3.5 3.5))"]
+        )
+        with pytest.raises(ValueError, match="explode"):
+            batches_of(
+                core_split_linestrings(
+                    multi.to_arrow(geometry_encoding="WKB"), NROWS, NCOLS, TRANSFORM
+                )
+            )
 
     def test_rejects_null_geometries(self, linestrings):
+        """Both encodings refuse a null rather than dropping it: the same
+        data read two ways should not behave differently"""
         with_null = gpd.GeoSeries([linestrings[0], None])
-        with pytest.raises(ValueError, match="null"):
-            batches_of(
-                core_split_linestrings(to_geoarrow(with_null), NROWS, NCOLS, TRANSFORM)
-            )
+        for source in (
+            to_geoarrow(with_null),
+            with_null.to_arrow(geometry_encoding="WKB"),
+        ):
+            with pytest.raises(ValueError, match="null"):
+                batches_of(core_split_linestrings(source, NROWS, NCOLS, TRANSFORM))
 
     def test_rejects_non_arrow_source(self, linestrings):
         with pytest.raises(TypeError, match="Arrow"):
