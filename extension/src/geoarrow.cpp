@@ -518,6 +518,17 @@ public:
     }
   }
 
+  /// The source stream, its schema and any batch still held may all be
+  /// backed by Python objects, and a consumer may drop the split stream
+  /// without holding the GIL, so take it to let them go. Releasing them here
+  /// leaves the members' own destructors nothing to do.
+  ~InputStream() {
+    py::gil_scoped_acquire locked;
+    single.reset();
+    schema.reset();
+    stream.reset();
+  }
+
   /// The schema of the geometries themselves, within the batches
   const ArrowSchema *geometrySchema() {
     return geometry_child >= 0 ? schema.get()->children[geometry_child]
@@ -623,6 +634,14 @@ struct BatchData {
   int64_t size() const { return static_cast<int64_t>(parents.size()); }
 };
 
+/// Mark a schema and everything under it as holding no nulls
+static void clearNullable(ArrowSchema *schema) {
+  schema->flags &= ~static_cast<int64_t>(ARROW_FLAG_NULLABLE);
+  for (int64_t i = 0; i < schema->n_children; i++) {
+    clearNullable(schema->children[i]);
+  }
+}
+
 /// Build the schema of the split stream: record batches of a GeoArrow
 /// geometry column and the index of the geometry each piece came from.
 ///
@@ -641,14 +660,6 @@ struct BatchData {
 ///
 /// Coordinates go back interleaved because that is what the split fills: a
 /// vector of Coord is already a run of x, y, x, y doubles.
-/// Mark a schema and everything under it as holding no nulls
-static void clearNullable(ArrowSchema *schema) {
-  schema->flags &= ~static_cast<int64_t>(ARROW_FLAG_NULLABLE);
-  for (int64_t i = 0; i < schema->n_children; i++) {
-    clearNullable(schema->children[i]);
-  }
-}
-
 static void exportSchema(GeometryType type, ArrowSchema *out) {
   nanoarrow::UniqueSchema schema;
   ArrowSchemaInit(schema.get());
@@ -779,7 +790,6 @@ struct SplitState {
   /// how many geometries the stream has read, so that a piece's parent
   /// indexes the source as a whole rather than the batch it came from
   int64_t parent_base = 0;
-  std::string error;
 };
 
 /// Split one batch of linestrings into pieces
@@ -877,78 +887,78 @@ static std::optional<BatchData> nextSplitBatch(SplitState *state) {
 
 // -- The split stream, as an Arrow C stream ----------------------------------
 
-/// private_data of the ArrowArrayStream we hand out
-struct StreamPrivate {
-  std::unique_ptr<SplitState> state;
-};
-
-static SplitState *stateOf(ArrowArrayStream *stream) {
-  return static_cast<StreamPrivate *>(stream->private_data)->state.get();
-}
-
-/// Record a failure against the stream and return the code its callback
-/// should report.
+/// The producer behind the ArrowArrayStream we hand out. nanoarrow adapts
+/// these three methods into the C callbacks a consumer calls, and owns the
+/// instance: the consumer's release callback deletes it.
 ///
-/// Stream callbacks are plain C, so a C++ exception must not escape them:
-/// they signal failure by returning a non-zero errno and leaving the
-/// detail for get_last_error. The consumer turns that code back into an
-/// exception, and picking it deliberately keeps the type a caller sees the
+/// Those callbacks are plain C, so a C++ exception must not escape them.
+/// They signal failure by returning a non-zero errno and leaving the detail
+/// for get_last_error, and the consumer turns that code back into an
+/// exception. Picking the code deliberately keeps the type a caller sees the
 /// same either side of the stream starting - EINVAL surfaces as a
 /// ValueError, as a bad argument caught up front would have.
-static int streamFailed(SplitState *state, const std::exception &error,
-                        int code) {
-  state->error = error.what();
-  return code;
-}
-
-static int streamGetSchema(ArrowArrayStream *stream, ArrowSchema *out) {
-  SplitState *state = stateOf(stream);
-  try {
-    exportSchema(state->type, out);
-  } catch (const std::exception &error) {
-    return streamFailed(state, error, EIO);
+class SplitProducer {
+public:
+  /// Hand a split over to a stream the consumer owns from here on
+  static void toArrayStream(std::unique_ptr<SplitState> state,
+                            ArrowArrayStream *out) {
+    nanoarrow::ArrayStreamFactory<SplitProducer>::InitArrayStream(
+        new SplitProducer(std::move(state)), out);
   }
-  return 0;
-}
 
-static int streamGetNext(ArrowArrayStream *stream, ArrowArray *out) {
-  SplitState *state = stateOf(stream);
-  // The source and the geometries it holds may both be Python objects, and
-  // the consumer may call us without the GIL, so take it for the read and
-  // give it back around the splitting itself.
-  py::gil_scoped_acquire locked;
-  try {
-    std::optional<BatchData> batch = nextSplitBatch(state);
-    if (!batch.has_value()) {
-      // the end of a stream is a success returning a released array, not
-      // an error - the same convention the source uses with us
-      out->release = nullptr;
-      return 0;
+private:
+  explicit SplitProducer(std::unique_ptr<SplitState> state)
+      : state(std::move(state)) {}
+
+  /// the methods below are called from C through the factory's callbacks
+  friend class nanoarrow::ArrayStreamFactory<SplitProducer>;
+
+  int GetSchema(ArrowSchema *out) {
+    try {
+      exportSchema(state->type, out);
+    } catch (const std::exception &error) {
+      return failed(error, EIO);
     }
-    exportArray(std::move(*batch), out);
-  } catch (const std::invalid_argument &error) {
-    return streamFailed(state, error, EINVAL);
-  } catch (const std::overflow_error &error) {
-    return streamFailed(state, error, EINVAL);
-  } catch (const py::error_already_set &error) {
-    return streamFailed(state, error, EIO);
-  } catch (const std::exception &error) {
-    return streamFailed(state, error, EIO);
+    return 0;
   }
-  return 0;
-}
 
-static const char *streamGetLastError(ArrowArrayStream *stream) {
-  return stateOf(stream)->error.c_str();
-}
+  int GetNext(ArrowArray *out) {
+    // The source and the geometries it holds may both be Python objects, and
+    // the consumer may call us without the GIL, so take it for the read and
+    // give it back around the splitting itself.
+    py::gil_scoped_acquire locked;
+    try {
+      std::optional<BatchData> batch = nextSplitBatch(state.get());
+      if (!batch.has_value()) {
+        // the end of a stream is a success returning a released array, not
+        // an error - the same convention the source uses with us
+        out->release = nullptr;
+        return 0;
+      }
+      exportArray(std::move(*batch), out);
+    } catch (const std::invalid_argument &error) {
+      return failed(error, EINVAL);
+    } catch (const std::overflow_error &error) {
+      return failed(error, EINVAL);
+    } catch (const std::exception &error) {
+      return failed(error, EIO);
+    }
+    return 0;
+  }
 
-static void streamRelease(ArrowArrayStream *stream) {
-  // dropping the state releases the source stream, and with it Python
-  // references the consumer may be holding no lock for
-  py::gil_scoped_acquire locked;
-  delete static_cast<StreamPrivate *>(stream->private_data);
-  stream->release = nullptr;
-}
+  /// The consumer reads this after a callback fails, and only needs it to
+  /// stay valid until the next one, so holding the message here is enough.
+  const char *GetLastError() { return last_error.c_str(); }
+
+  /// Record a failure against the stream and return the code to report
+  int failed(const std::exception &error, int code) {
+    last_error = error.what();
+    return code;
+  }
+
+  std::unique_ptr<SplitState> state;
+  std::string last_error;
+};
 
 /// Called when the consumer drops the capsule. A capsule that was handed on
 /// to a reader arrives here already released - the reader moved the struct
@@ -992,14 +1002,15 @@ public:
           "This split has already been read: an Arrow stream can only be "
           "consumed once, so split again to read the pieces again");
     }
-    auto *owned = new StreamPrivate{std::move(state)};
-    auto *stream = new ArrowArrayStream();
-    stream->get_schema = streamGetSchema;
-    stream->get_next = streamGetNext;
-    stream->get_last_error = streamGetLastError;
-    stream->release = streamRelease;
-    stream->private_data = owned;
-    return py::capsule(stream, "arrow_array_stream", releaseStreamCapsule);
+    // The capsule takes the struct before the split goes into it, marked
+    // released so that failing to build the capsule frees an empty struct
+    // rather than stranding a split behind one nothing owns.
+    auto owned = std::make_unique<ArrowArrayStream>();
+    owned->release = nullptr;
+    py::capsule capsule(owned.get(), "arrow_array_stream",
+                        releaseStreamCapsule);
+    SplitProducer::toArrayStream(std::move(state), owned.release());
+    return capsule;
   }
 
 private:
