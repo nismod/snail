@@ -36,6 +36,62 @@ def geometry_of(stream):
     return read_split_stream(stream)[0]
 
 
+def assert_same_pieces(actual, expected):
+    """Two splits produced the same pieces, in the same order"""
+    assert len(actual) == len(expected)
+    for piece, want in zip(actual, expected):
+        assert piece.equals_exact(want, 1e-12)
+
+
+def vertices_type():
+    """fixed_size_list<xy: double>[2] - interleaved 2D coordinates"""
+    return pa.list_(pa.field("xy", pa.float64(), nullable=False), 2)
+
+
+def large_list_linestring_type():
+    """A geoarrow.linestring shape carrying 64-bit ("+L") list offsets"""
+    return pa.large_list(pa.field("vertices", vertices_type(), nullable=False))
+
+
+def large_list_polygon_type():
+    """A geoarrow.polygon shape carrying 64-bit ("+L") offsets at both levels"""
+    return pa.large_list(
+        pa.field(
+            "rings",
+            pa.large_list(pa.field("vertices", vertices_type(), nullable=False)),
+            nullable=False,
+        )
+    )
+
+
+def as_nested_lists(geometries):
+    """Geometries as the plain nested lists pyarrow.array builds from, so that
+    an array of any list type can be constructed from them"""
+    if geometries.geom_type.iloc[0] == "Polygon":
+        return [
+            [[list(xy) for xy in ring.coords] for ring in [p.exterior, *p.interiors]]
+            for p in geometries
+        ]
+    return [[list(xy) for xy in line.coords] for line in geometries]
+
+
+def with_z(geometries, height=100.0):
+    """The same geometries with a z ordinate added to every vertex"""
+    if geometries.geom_type.iloc[0] == "Polygon":
+        return gpd.GeoSeries(
+            [
+                Polygon(
+                    [(x, y, height) for x, y in p.exterior.coords],
+                    [[(x, y, height) for x, y in r.coords] for r in p.interiors],
+                )
+                for p in geometries
+            ]
+        )
+    return gpd.GeoSeries(
+        [LineString([(x, y, height) for x, y in line.coords]) for line in geometries]
+    )
+
+
 @pytest.fixture
 def linestrings():
     return gpd.GeoSeries(
@@ -143,13 +199,11 @@ class TestSourceKinds:
         """Interleaved coordinates may carry a z (or m) alongside x and y,
         which widens the step from one vertex to the next. Splitting is
         planar, so the pieces must match those of the 2D geometries."""
-        with_z = gpd.GeoSeries(
-            [
-                LineString([(x, y, 100.0 * i) for i, (x, y) in enumerate(line.coords)])
-                for line in many_linestrings
-            ]
+        arrow = with_z(many_linestrings).to_arrow(
+            geometry_encoding="geoarrow", include_z=True
         )
-        arrow = with_z.to_arrow(geometry_encoding="geoarrow", include_z=True)
+        field = pa.Field._import_from_c_capsule(arrow.__arrow_c_array__()[0])
+        assert field.type.value_type.list_size == 3
 
         actual = geometry_of(core_split_linestrings(arrow, NROWS, NCOLS, TRANSFORM))
         expected = geometry_of(
@@ -158,9 +212,7 @@ class TestSourceKinds:
             )
         )
 
-        assert len(actual) == len(expected)
-        for piece, want in zip(actual, expected):
-            assert piece.equals_exact(want, 1e-12)
+        assert_same_pieces(actual, expected)
 
     def test_geoparquet_with_separated_coordinates(self, tmp_path, many_linestrings):
         """GeoParquet stores coordinates separated into x and y columns
@@ -187,9 +239,72 @@ class TestSourceKinds:
             )
         )
 
-        assert len(actual) == len(expected)
-        for piece, want in zip(actual, expected):
-            assert piece.equals_exact(want, 1e-12)
+        assert_same_pieces(actual, expected)
+
+    def test_three_dimensional_polygons(self, polygons):
+        """As for linestrings: a z ordinate widens the step from one vertex to
+        the next, and splitting is planar, so the pieces must be unchanged"""
+        arrow = with_z(polygons).to_arrow(geometry_encoding="geoarrow", include_z=True)
+        field = pa.Field._import_from_c_capsule(arrow.__arrow_c_array__()[0])
+        assert field.type.value_type.value_type.list_size == 3
+
+        actual = geometry_of(core_split_polygons(arrow, NROWS, NCOLS, TRANSFORM))
+        expected = geometry_of(
+            core_split_polygons(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
+        )
+
+        assert_same_pieces(actual, expected)
+
+    def test_geoparquet_polygons_with_separated_coordinates(self, tmp_path, polygons):
+        """The separated-coordinate layout again, but nested one level deeper:
+        a polygon's rings each hold their own run of x and y"""
+        frame = gpd.GeoDataFrame({"a": range(len(polygons))}, geometry=polygons)
+        path = tmp_path / "polygons.parquet"
+        frame.to_parquet(path, geometry_encoding="geoarrow")
+        parquet = pq.ParquetFile(path)
+        rings = parquet.schema_arrow.field("geometry").type.value_type
+        assert pa.types.is_struct(rings.value_type)
+
+        reader = pa.RecordBatchReader.from_batches(
+            parquet.schema_arrow, parquet.iter_batches(batch_size=1)
+        )
+        actual = geometry_of(core_split_polygons(reader, NROWS, NCOLS, TRANSFORM))
+        expected = geometry_of(
+            core_split_polygons(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
+        )
+
+        assert_same_pieces(actual, expected)
+
+    def test_large_list_offsets_linestrings(self, many_linestrings):
+        """Arrow lists may carry 64-bit offsets ("+L") instead of 32-bit.
+        geopandas never emits them, but an array built with pyarrow can, and
+        the reader dispatches on both."""
+        arrow = pa.array(
+            as_nested_lists(many_linestrings), type=large_list_linestring_type()
+        )
+        assert pa.types.is_large_list(arrow.type)
+
+        actual = geometry_of(core_split_linestrings(arrow, NROWS, NCOLS, TRANSFORM))
+        expected = geometry_of(
+            core_split_linestrings(
+                to_geoarrow(many_linestrings), NROWS, NCOLS, TRANSFORM
+            )
+        )
+
+        assert_same_pieces(actual, expected)
+
+    def test_large_list_offsets_polygons(self, polygons):
+        """64-bit offsets at both levels of a polygon's nesting"""
+        arrow = pa.array(as_nested_lists(polygons), type=large_list_polygon_type())
+        assert pa.types.is_large_list(arrow.type)
+        assert pa.types.is_large_list(arrow.type.value_type)
+
+        actual = geometry_of(core_split_polygons(arrow, NROWS, NCOLS, TRANSFORM))
+        expected = geometry_of(
+            core_split_polygons(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
+        )
+
+        assert_same_pieces(actual, expected)
 
 
 class TestStream:
