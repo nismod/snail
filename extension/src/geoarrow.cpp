@@ -47,76 +47,16 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+// Vendored, and namespaced to Snail so that loading this extension alongside
+// pyarrow - or any other wheel that vendors nanoarrow - cannot collide.
+// Brings the Arrow C data and stream interface structs with it.
+#include "nanoarrow.hpp"
+
 #include "geoarrow.hpp"
 #include "geometry.hpp"
 #include "grid.hpp"
 #include "operations.hpp"
 #include "transform.hpp"
-
-// Arrow C data and stream interface structs - a frozen ABI, reproduced
-// verbatim from the specification rather than depending on an Arrow library
-// https://arrow.apache.org/docs/format/CDataInterface.html#structure-definitions
-#ifndef ARROW_C_DATA_INTERFACE
-#define ARROW_C_DATA_INTERFACE
-
-#define ARROW_FLAG_DICTIONARY_ORDERED 1
-#define ARROW_FLAG_NULLABLE 2
-#define ARROW_FLAG_MAP_KEYS_SORTED 4
-
-struct ArrowSchema {
-  // Array type description
-  const char *format;
-  const char *name;
-  const char *metadata;
-  int64_t flags;
-  int64_t n_children;
-  struct ArrowSchema **children;
-  struct ArrowSchema *dictionary;
-
-  // Release callback
-  void (*release)(struct ArrowSchema *);
-  // Opaque producer-specific data
-  void *private_data;
-};
-
-struct ArrowArray {
-  // Array data description
-  int64_t length;
-  int64_t null_count;
-  int64_t offset;
-  int64_t n_buffers;
-  int64_t n_children;
-  const void **buffers;
-  struct ArrowArray **children;
-  struct ArrowArray *dictionary;
-
-  // Release callback
-  void (*release)(struct ArrowArray *);
-  // Opaque producer-specific data
-  void *private_data;
-};
-
-#endif // ARROW_C_DATA_INTERFACE
-
-#ifndef ARROW_C_STREAM_INTERFACE
-#define ARROW_C_STREAM_INTERFACE
-
-struct ArrowArrayStream {
-  // Callback to get the stream type. Returns 0 on success.
-  int (*get_schema)(struct ArrowArrayStream *, struct ArrowSchema *out);
-  // Callback to get the next array. Returns 0 on success; on end of stream
-  // the returned array is marked released.
-  int (*get_next)(struct ArrowArrayStream *, struct ArrowArray *out);
-  // Callback to get further details of the last error
-  const char *(*get_last_error)(struct ArrowArrayStream *);
-
-  // Release callback
-  void (*release)(struct ArrowArrayStream *);
-  // Opaque producer-specific data
-  void *private_data;
-};
-
-#endif // ARROW_C_STREAM_INTERFACE
 
 namespace snail {
 namespace geoarrow {
@@ -143,34 +83,19 @@ static const char *extensionName(GeometryType type) {
 /// Read a value out of an ArrowSchema metadata blob. GeoArrow declares a
 /// geometry type there, under "ARROW:extension:name".
 ///
-/// The blob is packed, not a string: an int32 count of key/value pairs,
-/// then for each pair an int32 length and that many bytes for the key,
-/// and the same again for the value. Lengths are explicit, so neither keys
-/// nor values are null-terminated. Returns an empty string if the key is
-/// absent.
-static std::string metadataValue(const char *metadata, const std::string &key) {
-  if (metadata == nullptr) {
+/// The blob is packed rather than a string - an int32 count of key/value
+/// pairs, then each key and value as an int32 length followed by that many
+/// bytes - which nanoarrow decodes for us. Returns an empty string if the
+/// key is absent, or if there is no metadata at all.
+static std::string metadataValue(const char *metadata, const char *key) {
+  // left untouched when the key is not found, so start it empty
+  ArrowStringView value = ArrowCharView(nullptr);
+  if (ArrowMetadataGetValue(metadata, ArrowCharView(key), &value) !=
+          NANOARROW_OK ||
+      value.data == nullptr) {
     return "";
   }
-  const char *pos = metadata;
-  int32_t n_pairs = 0;
-  std::memcpy(&n_pairs, pos, sizeof(int32_t));
-  pos += sizeof(int32_t);
-  for (int32_t i = 0; i < n_pairs; i++) {
-    int32_t key_length = 0;
-    std::memcpy(&key_length, pos, sizeof(int32_t));
-    pos += sizeof(int32_t);
-    std::string current_key(pos, key_length);
-    pos += key_length;
-    int32_t value_length = 0;
-    std::memcpy(&value_length, pos, sizeof(int32_t));
-    pos += sizeof(int32_t);
-    if (current_key == key) {
-      return std::string(pos, value_length);
-    }
-    pos += value_length;
-  }
-  return "";
+  return {value.data, static_cast<std::size_t>(value.size_bytes)};
 }
 
 /// Encode a single key/value pair as an ArrowSchema metadata blob, in the
@@ -539,47 +464,6 @@ struct PolygonReader {
 
 // -- Reading the source ------------------------------------------------------
 
-/// An Arrow C struct we own - a schema, an array or a stream.
-///
-/// Every one of them carries its own release callback, and a null callback
-/// is how the interface marks a struct that has been released or moved
-/// from. Holding them in a scope guard means a throw part-way through
-/// setting a stream up cannot strand what the producer handed over.
-template <typename T> class Owned {
-public:
-  Owned() = default;
-  ~Owned() { reset(); }
-  Owned(const Owned &) = delete;
-  Owned &operator=(const Owned &) = delete;
-
-  void reset() {
-    if (owned.release != nullptr) {
-      owned.release(&owned);
-      owned.release = nullptr;
-    }
-  }
-
-  bool valid() const { return owned.release != nullptr; }
-  T *get() { return &owned; }
-
-  /// Take on a struct whose previous owner has given it up
-  void adopt(const T &from) {
-    reset();
-    owned = from;
-  }
-
-  /// Give the struct up to the caller, who becomes responsible for
-  /// releasing it, and leave this empty
-  T take() {
-    T moved = owned;
-    owned.release = nullptr;
-    return moved;
-  }
-
-private:
-  T owned{};
-};
-
 /// Take ownership of the struct a PyCapsule holds. The PyCapsule interface
 /// passes Arrow structs by move: the consumer copies the struct out and
 /// nulls the producer's release callback, so that only one of them will
@@ -611,8 +495,9 @@ public:
     if (py::hasattr(source, "__arrow_c_stream__")) {
       py::capsule capsule =
           source.attr("__arrow_c_stream__")().cast<py::capsule>();
-      stream.adopt(
-          movedFromCapsule<ArrowArrayStream>(capsule, "arrow_array_stream"));
+      ArrowArrayStream moved =
+          movedFromCapsule<ArrowArrayStream>(capsule, "arrow_array_stream");
+      stream.reset(&moved);
       // a stream states its type up front, before any batch arrives
       if (stream.get()->get_schema(stream.get(), schema.get()) != 0) {
         throw std::runtime_error(std::string("Could not read the schema of "
@@ -623,10 +508,12 @@ public:
       // a single array comes with its schema alongside, and stands in for a
       // stream of one batch
       py::tuple capsules = source.attr("__arrow_c_array__")();
-      schema.adopt(movedFromCapsule<ArrowSchema>(
-          capsules[0].cast<py::capsule>(), "arrow_schema"));
-      single.adopt(movedFromCapsule<ArrowArray>(
-          capsules[1].cast<py::capsule>(), "arrow_array"));
+      ArrowSchema moved_schema = movedFromCapsule<ArrowSchema>(
+          capsules[0].cast<py::capsule>(), "arrow_schema");
+      ArrowArray moved_array = movedFromCapsule<ArrowArray>(
+          capsules[1].cast<py::capsule>(), "arrow_array");
+      schema.reset(&moved_schema);
+      single.reset(&moved_array);
     } else {
       throw py::type_error(
           "Expected GeoArrow geometries: an object supporting the Arrow "
@@ -664,15 +551,15 @@ public:
   }
 
   /// Pull the next batch. Returns false once the source is exhausted.
-  bool next(Owned<ArrowArray> &batch) {
+  bool next(nanoarrow::UniqueArray &batch) {
     batch.reset();
-    if (single.valid()) {
+    if (single->release != nullptr) {
       // a one-batch source: hand the array over, emptying it so that the
       // next call reports the end of the stream
-      batch.adopt(single.take());
+      single.move(batch.get());
       return true;
     }
-    if (!stream.valid()) {
+    if (stream->release == nullptr) {
       return false;
     }
     if (stream.get()->get_next(stream.get(), batch.get()) != 0) {
@@ -681,7 +568,7 @@ public:
           lastError());
     }
     // the producer marks the end of the stream with a released array
-    return batch.valid();
+    return batch->release != nullptr;
   }
 
 private:
@@ -717,16 +604,16 @@ private:
   /// A stream reports a failure by returning non-zero and leaving the
   /// detail behind for get_last_error
   const char *lastError() {
-    if (!stream.valid() || stream.get()->get_last_error == nullptr) {
+    if (stream->release == nullptr || stream->get_last_error == nullptr) {
       return "";
     }
     const char *message = stream.get()->get_last_error(stream.get());
     return message == nullptr ? "" : message;
   }
 
-  Owned<ArrowArrayStream> stream;
-  Owned<ArrowArray> single;
-  Owned<ArrowSchema> schema;
+  nanoarrow::UniqueArrayStream stream;
+  nanoarrow::UniqueArray single;
+  nanoarrow::UniqueSchema schema;
   /// which column of a record batch holds the geometries; -1 when the
   /// batches are the geometries themselves
   int64_t geometry_child = -1;
@@ -1030,7 +917,7 @@ static void splitPolygonBatch(const PolygonReader &reader,
 /// geopandas cannot read a zero-length GeoArrow array.
 static std::shared_ptr<BatchData> nextSplitBatch(SplitState *state) {
   while (true) {
-    Owned<ArrowArray> batch;
+    nanoarrow::UniqueArray batch;
     if (!state->input.next(batch)) {
       return nullptr;
     }

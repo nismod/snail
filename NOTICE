@@ -1,0 +1,22 @@
+snail
+Copyright (c) 2020 Tom Russell and snail contributors
+
+snail itself is distributed under the MIT License; see LICENSE.
+
+This product bundles the following third-party software, whose own licence
+and notice files are kept alongside the bundled source:
+
+--------------------------------------------------------------------------
+
+Apache Arrow nanoarrow
+Copyright 2023 The Apache Software Foundation
+
+Licensed under the Apache License, Version 2.0.
+
+Bundled at extension/vendor/nanoarrow, generated from the upstream source
+release by scripts/vendor_nanoarrow.py. Its full licence text is at
+extension/vendor/nanoarrow/LICENSE.txt and its notice at
+extension/vendor/nanoarrow/NOTICE.txt.
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
