@@ -23,7 +23,8 @@ find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(pybind11 CONFIG REQUIRED)
 
 python_add_library(intersections MODULE ${CPP_SRC_DIR}/intersections.cpp WITH_SOABI
-                   ${CPP_SRC_DIR}/geoarrow.cpp ${CPP_SRC_DIR}/geometry.cpp
+                   ${CPP_SRC_DIR}/geoarrow.cpp ${CPP_SRC_DIR}/geoarrow_arrays.cpp
+                   ${CPP_SRC_DIR}/geometry.cpp
                    ${CPP_SRC_DIR}/operations.cpp
                    ${NANOARROW_DIR}/nanoarrow.c
                    ${GEOARROW_DIR}/geoarrow.c)
