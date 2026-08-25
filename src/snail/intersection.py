@@ -19,6 +19,9 @@ from snail.core.intersections import (  # type: ignore
     get_cell_indices,
 )
 from snail.core.intersections import (
+    split_geometries as split_geometries_core,
+)
+from snail.core.intersections import (
     split_linestrings as split_linestrings_core,
 )
 from snail.core.intersections import (
@@ -54,7 +57,11 @@ else:
 SPLIT_BATCH_SIZE = 5000
 
 
-def to_geoarrow(geometries: geopandas.GeoSeries, batch_size: int = SPLIT_BATCH_SIZE):
+def to_geoarrow(
+    geometries: geopandas.GeoSeries,
+    batch_size: int = SPLIT_BATCH_SIZE,
+    encoding: str = "geoarrow",
+):
     """Geometry column as a stream of GeoArrow batches, for the extension
 
     GeoArrow holds the geometries as flat coordinate and offset buffers,
@@ -74,6 +81,14 @@ def to_geoarrow(geometries: geopandas.GeoSeries, batch_size: int = SPLIT_BATCH_S
         Column of LineString or Polygon geometries to split.
     batch_size: int
         Number of features per batch. See :data:`SPLIT_BATCH_SIZE`.
+    encoding: str
+        ``"geoarrow"`` (the default) holds the coordinates in Arrow buffers,
+        which the extension reads in place. It requires every geometry in the
+        column to be the same, single-part type - geopandas raises
+        ``ValueError: Geometry type combination is not supported`` otherwise.
+        ``"WKB"`` serialises each geometry to a blob instead, which is slower
+        to read but can carry a column of mixed or multi-part geometries;
+        that is what :func:`split_geometries` uses.
 
     Returns
     -------
@@ -87,9 +102,12 @@ def to_geoarrow(geometries: geopandas.GeoSeries, batch_size: int = SPLIT_BATCH_S
     # extension name: that lives on the Arrow *field*, not on its type, and
     # is what tells the extension - and any later reader - which geometry
     # type these are.
-    schema_capsule, array_capsule = geometries.to_arrow(
-        geometry_encoding="geoarrow", interleaved=True
-    ).__arrow_c_array__()
+    exported = (
+        geometries.to_arrow(geometry_encoding="geoarrow", interleaved=True)
+        if encoding == "geoarrow"
+        else geometries.to_arrow(geometry_encoding=encoding)
+    )
+    schema_capsule, array_capsule = exported.__arrow_c_array__()
     field = pyarrow.Field._import_from_c_capsule(schema_capsule).with_name("geometry")
     array = pyarrow.Array._import_from_c_capsule(
         field.__arrow_c_schema__(), array_capsule
@@ -149,7 +167,25 @@ def read_split_stream(stream) -> tuple[numpy.ndarray, numpy.ndarray]:
     return numpy.concatenate(geometry), numpy.concatenate(parent)
 
 
-def _split(split_core, geometries, grid, **split_kwargs):
+def _splits_frame(features, geometry, parent, grid):
+    """Assemble split pieces back into a frame beside their parent features
+
+    Each piece carries the attributes of the feature it came from, and a
+    "split" column numbering that feature's pieces from zero.
+    """
+    # repeat each parent feature's attributes for each of its pieces
+    splits_df = geopandas.GeoDataFrame(features.iloc[parent])
+    # number each parent's pieces from zero
+    piece_counts = numpy.bincount(parent, minlength=len(features))
+    splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
+        numpy.cumsum(piece_counts) - piece_counts, piece_counts
+    )
+    splits_df.geometry = geometry
+    splits_df.crs = grid.crs
+    return splits_df
+
+
+def _split(split_core, geometries, grid, encoding="geoarrow", **split_kwargs):
     """Split a geometry column, streaming batches through the extension"""
     if len(geometries) == 0:
         return numpy.empty(0, dtype=object), numpy.empty(0, dtype=numpy.int64)
@@ -159,7 +195,7 @@ def _split(split_core, geometries, grid, **split_kwargs):
     # which only shows up on a grid that is not square.
     return read_split_stream(
         split_core(
-            to_geoarrow(geometries),
+            to_geoarrow(geometries, encoding=encoding),
             nrows=grid.height,
             ncols=grid.width,
             transform=grid.transform,
@@ -414,16 +450,7 @@ def split_linestrings(
         bounded=bounded,
     )
     logger.info(f"Split {len(linestring_features)} edges into {len(geometry)} pieces")
-    # repeat each parent feature's attributes for each of its pieces
-    splits_df = geopandas.GeoDataFrame(linestring_features.iloc[parent])
-    # number each parent's pieces from zero
-    piece_counts = numpy.bincount(parent, minlength=len(linestring_features))
-    splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
-        numpy.cumsum(piece_counts) - piece_counts, piece_counts
-    )
-    splits_df.geometry = geometry
-    splits_df.crs = grid.crs
-    return splits_df
+    return _splits_frame(linestring_features, geometry, parent, grid)
 
 
 def split_polygons(
@@ -472,16 +499,54 @@ def split_polygons_experimental(
     # feature costs far more than the splitting itself
     geometry, parent = _split(split_polygons_core, polygon_features.geometry, grid)
     logger.info(f"  Split {len(polygon_features)} areas into {len(geometry)} pieces")
-    # repeat each parent feature's attributes for each of its pieces
-    splits_df = geopandas.GeoDataFrame(polygon_features.iloc[parent])
-    # number each parent's pieces from zero
-    piece_counts = numpy.bincount(parent, minlength=len(polygon_features))
-    splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
-        numpy.cumsum(piece_counts) - piece_counts, piece_counts
+    return _splits_frame(polygon_features, geometry, parent, grid)
+
+
+def split_geometries(
+    features: geopandas.GeoDataFrame,
+    grid: GridDefinition,
+    bounded=False,
+) -> geopandas.GeoDataFrame:
+    """Split features of any geometry type along a grid
+
+    Unlike :func:`split_linestrings` and :func:`split_polygons_experimental`,
+    this does not require every feature to be the same type. Each is handled
+    on its own terms: LineStrings and Polygons are split, Points pass through
+    unchanged, multi-part geometries are split part by part, and a
+    GeometryCollection is split member by member. Every piece carries the
+    attributes of the feature it came from, whatever that feature was, and an
+    empty geometry comes back as itself rather than dropping its row.
+
+    This is what to reach for when a layer holds more than one geometry type.
+    For a layer that holds only one, the typed functions are cheaper: they
+    read and write the coordinates as Arrow buffers, where this serialises
+    every geometry through WKB in both directions.
+
+    Parameters
+    ----------
+    features: geopandas.GeoDataFrame
+        Features to split; other columns are carried over onto each piece.
+    grid: GridDefinition
+        Grid to split along.
+    bounded: bool
+        As :func:`split_linestrings`. Applies to the LineStrings among the
+        features; Polygons are always split for their whole extent.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        One row per piece, with a ``"split"`` column numbering each feature's
+        pieces from zero.
+    """
+    geometry, parent = _split(
+        split_geometries_core,
+        features.geometry,
+        grid,
+        encoding="WKB",
+        bounded=bounded,
     )
-    splits_df.geometry = geometry
-    splits_df.crs = grid.crs
-    return splits_df
+    logger.info(f"Split {len(features)} features into {len(geometry)} pieces")
+    return _splits_frame(features, geometry, parent, grid)
 
 
 def _try_merge(geom):

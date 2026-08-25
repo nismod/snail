@@ -2,9 +2,13 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+import pytest
 from numpy.testing import assert_array_equal
+from shapely import from_wkt
+from shapely.geometry import LineString, Point, Polygon
 
 from snail.cli import _default_output_path, _expand_layers, snail
+from snail.overlay import _geom_kinds
 
 
 def test_split_multiband_attributes_column_per_band(
@@ -150,3 +154,107 @@ def test_cli_without_command_prints_help(capsys):
 
     captured = capsys.readouterr()
     assert "usage: snail" in captured.out
+
+
+class TestGeomKinds:
+    """Which split a layer gets is decided by the kinds of geometry in it,
+    not by whichever one row 0 happens to hold"""
+
+    def test_multi_part_counts_as_its_single_part_kind(self):
+        """prepare_linestrings turns the one into the other, so a layer of
+        both is still one kind of thing to split"""
+        both = gpd.GeoSeries.from_wkt(
+            [
+                "LINESTRING (0.5 0.5, 1.5 1.5)",
+                "MULTILINESTRING ((2.5 2.5, 3.5 3.5))",
+            ]
+        )
+        assert _geom_kinds(gpd.GeoDataFrame(geometry=both)) == {"LineString"}
+
+    def test_different_kinds_are_counted_separately(self):
+        mixed = gpd.GeoSeries([Point(0.5, 0.5), LineString([(1.5, 1.5), (2.5, 2.5)])])
+        assert _geom_kinds(gpd.GeoDataFrame(geometry=mixed)) == {
+            "Point",
+            "LineString",
+        }
+
+    def test_nulls_are_ignored(self):
+        with_null = gpd.GeoSeries([LineString([(0.5, 0.5), (1.5, 1.5)]), None])
+        assert _geom_kinds(gpd.GeoDataFrame(geometry=with_null)) == {"LineString"}
+
+
+@pytest.fixture
+def mixed_features(tmp_path):
+    """A layer whose first row says nothing about the rest of it"""
+    features = gpd.GeoDataFrame(
+        {"name": ["a", "b", "c"]},
+        geometry=[
+            Point(2.5, 2.5),
+            LineString([(0.5, 0.5), (3.5, 0.5)]),
+            Polygon([(0.5, 0.5), (2.5, 0.5), (2.5, 2.5), (0.5, 2.5)]),
+        ],
+        crs="EPSG:4326",
+    )
+    path = tmp_path / "mixed.gpkg"
+    features.to_file(path)
+    return path
+
+
+def run_split(features_path, output_path):
+    snail(
+        [
+            "split",
+            "--features",
+            str(features_path),
+            "--transform",
+            "1",
+            "0",
+            "0",
+            "0",
+            "1",
+            "0",
+            "--width",
+            "4",
+            "--height",
+            "4",
+            "--output",
+            str(output_path),
+        ]
+    )
+
+
+def test_split_of_a_mixed_layer_keeps_every_feature(mixed_features, tmp_path):
+    """Row 0 is a Point, so before the mixed path this layer was processed as
+    points throughout: the line and the polygon came back unsplit"""
+    output = tmp_path / "split.gpkg"
+    run_split(mixed_features, output)
+
+    splits = gpd.read_file(output)
+    by_name = splits.groupby("name").size()
+    assert set(by_name.index) == {"a", "b", "c"}
+    # the point is not split, the line crosses x = 1, 2 and 3, and the
+    # polygon covers nine whole cells
+    assert by_name["a"] == 1
+    assert by_name["b"] == 4
+    assert by_name["c"] == 9
+    assert set(splits[splits.name == "c"].geometry.geom_type) == {"Polygon"}
+
+
+def test_split_of_a_single_kind_layer_is_unchanged(tmp_path):
+    """A layer of one kind keeps its typed split, multi-parts included"""
+    features = gpd.GeoDataFrame(
+        {"name": ["a", "b"]},
+        geometry=[
+            LineString([(0.5, 0.5), (3.5, 0.5)]),
+            from_wkt("MULTILINESTRING ((0.5 2.5, 3.5 2.5))"),
+        ],
+        crs="EPSG:4326",
+    )
+    path = tmp_path / "lines.gpkg"
+    features.to_file(path)
+    output = tmp_path / "split.gpkg"
+    run_split(path, output)
+
+    splits = gpd.read_file(output)
+    assert set(splits.geometry.geom_type) == {"LineString"}
+    assert len(splits) == 8

@@ -22,6 +22,7 @@ from snail.intersection import (
     apply_indices,
     generate_grid_boxes,
     get_raster_values_for_splits,
+    split_geometries,
     split_linestrings,
     split_polygons,
     split_polygons_experimental,
@@ -235,6 +236,62 @@ class TestSnailIntersections:
             expected_geom = expected.iloc[i, 1]
             assert actual_geom.equals(expected_geom)
         assert_array_equal(actual["col1"].values, expected["col1"].values)
+
+    def test_split_geometries_matches_the_typed_splits(self, grid, linestrings):
+        """A layer of one type must split the same way through either
+        entry point - the typed ones are cheaper, not different"""
+        typed = split_linestrings(linestrings, grid)
+        mixed = split_geometries(linestrings, grid)
+
+        assert len(mixed) == len(typed)
+        for actual, expected in zip(mixed.geometry, typed.geometry):
+            assert actual.equals_exact(expected, 1e-12)
+        assert_array_equal(mixed["split"].values, typed["split"].values)
+        assert_array_equal(mixed["col1"].values, typed["col1"].values)
+
+    def test_split_geometries_carries_attributes_across_types(self, grid):
+        """Every piece keeps its feature's attributes, whatever the feature
+        was, and each feature's pieces are numbered from zero"""
+        features = gpd.GeoDataFrame(
+            {"name": ["point", "line", "area"]},
+            geometry=[
+                Point(2.5, 2.5),
+                LineString([(0.5, 0.5), (3.5, 0.5)]),
+                Polygon([(0.5, 0.5), (2.5, 0.5), (2.5, 2.5), (0.5, 2.5)]),
+            ],
+        )
+
+        splits = split_geometries(features, grid)
+
+        counts = splits.groupby("name").size()
+        # a point is not split; the line crosses x = 1, 2 and 3; the polygon
+        # covers nine whole cells
+        assert counts["point"] == 1
+        assert counts["line"] == 4
+        assert counts["area"] == 9
+        for name, group in splits.groupby("name"):
+            assert sorted(group["split"]) == list(range(len(group))), name
+        assert list(splits[splits.name == "area"].geometry.geom_type) == (
+            ["Polygon"] * 9
+        )
+
+    def test_split_geometries_keeps_empty_geometries(self, grid):
+        """An empty geometry has nothing to split, and dropping it would take
+        its row's attributes with it"""
+        features = gpd.GeoDataFrame(
+            {"name": ["line", "nothing"]},
+            geometry=[
+                LineString([(0.5, 0.5), (3.5, 0.5)]),
+                shapely.from_wkt("GEOMETRYCOLLECTION EMPTY"),
+            ],
+        )
+
+        splits = split_geometries(features, grid)
+
+        assert list(splits[splits.name == "nothing"].geometry.geom_type) == [
+            "GeometryCollection"
+        ]
+        assert splits[splits.name == "nothing"].geometry.iloc[0].is_empty
 
     def test_split_polygons_experimental_with_hole(self, grid):
         polygon_with_hole = Polygon(
