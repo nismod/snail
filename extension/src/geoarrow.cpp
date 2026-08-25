@@ -76,12 +76,23 @@ static_assert(sizeof(geo::Coord) == 2 * sizeof(double),
               "Coord must be a bare pair of doubles to alias Arrow's "
               "interleaved coordinate buffer");
 
-/// The GeoArrow geometry types handled here
-enum class GeometryType { linestring, polygon };
+/// What a split produces.
+///
+/// The typed splits give back GeoArrow of one type, with the coordinates in
+/// Arrow buffers. A mixed split cannot: an Arrow stream has one schema for
+/// every batch, so pieces of several types need one encoding that carries
+/// any of them, and that is WKB.
+enum class GeometryType { linestring, polygon, mixed };
 
 static const char *extensionName(GeometryType type) {
-  return type == GeometryType::polygon ? "geoarrow.polygon"
-                                       : "geoarrow.linestring";
+  switch (type) {
+  case GeometryType::polygon:
+    return "geoarrow.polygon";
+  case GeometryType::mixed:
+    return "geoarrow.wkb";
+  default:
+    return "geoarrow.linestring";
+  }
 }
 
 /// How a source holds its geometries.
@@ -361,6 +372,20 @@ static Encoding checkExtensionName(const ArrowSchema *schema,
 /// the type check for those happens per feature as they are read.
 static Encoding checkGeometrySchema(const ArrowSchema *schema,
                                     GeometryType type) {
+  if (type == GeometryType::mixed) {
+    // A mixed split takes each geometry on its own terms, so the column may
+    // be anything geoarrow-c can walk - any native encoding, or WKB. Asking
+    // geoarrow-c to parse the schema is both the check and the answer.
+    GeoArrowSchemaView view;
+    GeoArrowError error;
+    if (GeoArrowSchemaViewInit(&view, schema, &error) != GEOARROW_OK) {
+      throw std::invalid_argument(
+          std::string("Expected GeoArrow geometries: ") + error.message);
+    }
+    // read through the visitor either way, since only that reports a
+    // geometry's own type
+    return Encoding::wkb;
+  }
   const Encoding encoding = checkExtensionName(schema, type);
   if (encoding == Encoding::wkb) {
     return encoding;
@@ -760,6 +785,138 @@ private:
 
 // -- Writing batches of split pieces -----------------------------------------
 
+/// Append a run of coordinates geoarrow-c handed over.
+///
+/// They arrive in runs rather than one point at a time, and WKB gives one
+/// run per ring laid out as interleaved xy - which is a run of Coord
+/// already - so the common case is a single bulk append. A z or m ordinate
+/// to step over, or x and y held apart, falls back to gathering. Only x and
+/// y are read: splitting is planar.
+static int appendCoords(const GeoArrowCoordView *c,
+                        std::vector<geo::Coord> &into) {
+  const std::size_t count = static_cast<std::size_t>(c->n_coords);
+  if (count == 0) {
+    return GEOARROW_OK;
+  }
+  if (c->coords_stride == 2 && c->values[1] == c->values[0] + 1) {
+    const auto *first = reinterpret_cast<const geo::Coord *>(c->values[0]);
+    into.insert(into.end(), first, first + count);
+    return GEOARROW_OK;
+  }
+  const int32_t stride = c->coords_stride;
+  into.reserve(into.size() + count);
+  for (std::size_t i = 0; i < count; i++) {
+    into.push_back({c->values[0][i * stride], c->values[1][i * stride]});
+  }
+  return GEOARROW_OK;
+}
+
+/// Writes pieces out as WKB, for the mixed split.
+///
+/// geoarrow-c's writer is driven through the same visitor protocol its
+/// reader speaks, so a piece is written by calling geom_start, the
+/// coordinates, and geom_end. Coordinates go in as a run rather than a
+/// point at a time, and a vector of Coord is already the interleaved xy
+/// buffer a run describes, so nothing is copied on the way in either.
+class WkbWriter {
+public:
+  WkbWriter(const WkbWriter &) = delete;
+  WkbWriter &operator=(const WkbWriter &) = delete;
+
+  WkbWriter() {
+    if (GeoArrowWKBWriterInit(&writer) != GEOARROW_OK) {
+      throw std::runtime_error("Could not start writing WKB");
+    }
+    GeoArrowWKBWriterInitVisitor(&writer, &into);
+  }
+
+  ~WkbWriter() { GeoArrowWKBWriterReset(&writer); }
+
+  /// A run of coordinates as geoarrow-c describes one: x and y interleaved,
+  /// two doubles to a vertex, which is exactly a Coord array
+  static GeoArrowCoordView asRun(const geo::Coord *coordinates,
+                                 std::size_t count) {
+    GeoArrowCoordView run{};
+    const auto *values = reinterpret_cast<const double *>(coordinates);
+    run.values[0] = values;
+    run.values[1] = values + 1;
+    run.n_coords = static_cast<int64_t>(count);
+    run.n_values = 2;
+    run.coords_stride = 2;
+    return run;
+  }
+
+  void writeLineString(const geo::Coord *coordinates, std::size_t count) {
+    begin(GEOARROW_GEOMETRY_TYPE_LINESTRING);
+    if (count > 0) {
+      const GeoArrowCoordView run = asRun(coordinates, count);
+      check(into.coords(&into, &run));
+    }
+    end();
+  }
+
+  void writePoint(const geo::Coord &coordinate) {
+    begin(GEOARROW_GEOMETRY_TYPE_POINT);
+    const GeoArrowCoordView run = asRun(&coordinate, 1);
+    check(into.coords(&into, &run));
+    end();
+  }
+
+  /// Rings exterior first, as the split produces them
+  void writePolygon(const geo::Coord *coordinates, const int32_t *ring_offsets,
+                    std::size_t rings) {
+    begin(GEOARROW_GEOMETRY_TYPE_POLYGON);
+    for (std::size_t r = 0; r < rings; r++) {
+      const int32_t from = ring_offsets[r];
+      const int32_t to = ring_offsets[r + 1];
+      check(into.ring_start(&into));
+      if (to > from) {
+        const GeoArrowCoordView run =
+            asRun(coordinates + from, static_cast<std::size_t>(to - from));
+        check(into.coords(&into, &run));
+      }
+      check(into.ring_end(&into));
+    }
+    end();
+  }
+
+  /// A geometry that held nothing goes back as itself, holding nothing
+  void writeEmpty(enum GeoArrowGeometryType type) {
+    begin(type);
+    end();
+  }
+
+  /// Hand the written blobs over as an Arrow array
+  void finish(ArrowArray *out) {
+    GeoArrowError error;
+    if (GeoArrowWKBWriterFinish(&writer, out, &error) != GEOARROW_OK) {
+      throw std::runtime_error(std::string("Could not finish writing WKB: ") +
+                               error.message);
+    }
+  }
+
+private:
+  void begin(enum GeoArrowGeometryType type) {
+    check(into.feat_start(&into));
+    check(into.geom_start(&into, type, GEOARROW_DIMENSIONS_XY));
+  }
+
+  void end() {
+    check(into.geom_end(&into));
+    check(into.feat_end(&into));
+  }
+
+  static void check(int code) {
+    if (code != GEOARROW_OK) {
+      throw std::runtime_error("Could not write a piece as WKB");
+    }
+  }
+
+  GeoArrowWKBWriter writer{};
+  GeoArrowVisitor into{};
+};
+
+
 /// One batch of split pieces: the geometries in GeoArrow's flat layout,
 /// and for each piece the index of the geometry it was split from.
 struct BatchData {
@@ -772,6 +929,9 @@ struct BatchData {
   /// `type` is used.
   operations::LinePieces lines;
   operations::PolygonPieces polygons;
+  /// where a mixed split's pieces go instead: one WKB blob each, since an
+  /// Arrow stream has one schema and only WKB can carry every type
+  std::unique_ptr<WkbWriter> wkb;
   /// the geometry each piece came from, indexed across the whole stream
   std::vector<int64_t> parents;
 
@@ -819,12 +979,49 @@ static void clearNullable(ArrowSchema *schema) {
 ///
 /// Coordinates go back interleaved because that is what the split fills: a
 /// vector of Coord is already a run of x, y, x, y doubles.
+/// The part of the output schema every encoding shares: the extension name
+/// on the geometry field, the parent index alongside it, and the promise
+/// that none of it is nullable.
+static void exportSchemaTail(GeometryType type, nanoarrow::UniqueSchema &schema,
+                             ArrowSchema *out) {
+  // the extension name rides on the geometry field, which is where a
+  // GeoArrow reader looks for it. SetMetadata copies the blob, so the
+  // builder's buffer is free to go out of scope here.
+  nanoarrow::UniqueBuffer metadata;
+  NANOARROW_THROW_NOT_OK(ArrowMetadataBuilderInit(metadata.get(), nullptr));
+  NANOARROW_THROW_NOT_OK(ArrowMetadataBuilderAppend(
+      metadata.get(), ArrowCharView("ARROW:extension:name"),
+      ArrowCharView(extensionName(type))));
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetMetadata(
+      schema->children[0], reinterpret_cast<const char *>(metadata->data)));
+
+  NANOARROW_THROW_NOT_OK(
+      ArrowSchemaSetType(schema->children[1], NANOARROW_TYPE_INT64));
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(schema->children[1], "parent"));
+
+  // A split never produces a null - not a null piece, ring, vertex or
+  // parent index - so say so. nanoarrow marks every field nullable by
+  // default; GeoArrow asks that a geometry's inner arrays contain no nulls,
+  // and declaring it lets a reader skip looking for validity bitmaps.
+  clearNullable(schema.get());
+
+  schema.move(out);
+}
+
 static void exportSchema(GeometryType type, ArrowSchema *out) {
   nanoarrow::UniqueSchema schema;
   ArrowSchemaInit(schema.get());
   NANOARROW_THROW_NOT_OK(ArrowSchemaSetTypeStruct(schema.get(), 2));
 
   ArrowSchema *geometry = schema->children[0];
+  if (type == GeometryType::mixed) {
+    // WKB is one binary blob per piece: no nesting, and no coordinates Arrow
+    // can see. The extension name is still what tells a reader these are
+    // geometries, so the tail of this function does the rest.
+    NANOARROW_THROW_NOT_OK(ArrowSchemaSetType(geometry, NANOARROW_TYPE_BINARY));
+    NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(geometry, "geometry"));
+    return exportSchemaTail(type, schema, out);
+  }
   NANOARROW_THROW_NOT_OK(ArrowSchemaSetType(geometry, NANOARROW_TYPE_LIST));
   NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(geometry, "geometry"));
 
@@ -842,28 +1039,7 @@ static void exportSchema(GeometryType type, ArrowSchema *out) {
       ArrowSchemaSetType(vertices->children[0], NANOARROW_TYPE_DOUBLE));
   NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(vertices->children[0], "xy"));
 
-  // the extension name rides on the geometry field, which is where a
-  // GeoArrow reader looks for it. SetMetadata copies the blob, so the
-  // builder's buffer is free to go out of scope here.
-  nanoarrow::UniqueBuffer metadata;
-  NANOARROW_THROW_NOT_OK(ArrowMetadataBuilderInit(metadata.get(), nullptr));
-  NANOARROW_THROW_NOT_OK(ArrowMetadataBuilderAppend(
-      metadata.get(), ArrowCharView("ARROW:extension:name"),
-      ArrowCharView(extensionName(type))));
-  NANOARROW_THROW_NOT_OK(ArrowSchemaSetMetadata(
-      geometry, reinterpret_cast<const char *>(metadata->data)));
-
-  NANOARROW_THROW_NOT_OK(
-      ArrowSchemaSetType(schema->children[1], NANOARROW_TYPE_INT64));
-  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(schema->children[1], "parent"));
-
-  // A split never produces a null - not a null piece, ring, vertex or
-  // parent index - so say so. nanoarrow marks every field nullable by
-  // default; GeoArrow asks that a geometry's inner arrays contain no nulls,
-  // and declaring it lets a reader skip looking for validity bitmaps.
-  clearNullable(schema.get());
-
-  schema.move(out);
+  exportSchemaTail(type, schema, out);
 }
 
 /// Hand a vector's storage to Arrow as buffer `i` of an array, without
@@ -873,6 +1049,43 @@ static void adoptBuffer(ArrowArray *array, int64_t i, std::vector<T> values) {
   nanoarrow::UniqueBuffer buffer;
   nanoarrow::BufferInitSequence(buffer.get(), std::move(values));
   NANOARROW_THROW_NOT_OK(ArrowArraySetBuffer(array, i, buffer.get()));
+}
+
+/// Build a record batch over a batch of WKB pieces.
+///
+/// The writer has already produced the geometry column as an Arrow array of
+/// its own, so this only has to put it beside a parent column in a struct.
+/// The geometry column is *moved* in - a bitwise copy, then the source's
+/// release callback nulled without calling it, which is how Arrow says a
+/// struct changes hands - so the blobs are not copied either.
+static void exportWkbArray(BatchData data, ArrowArray *out) {
+  const int64_t pieces = data.size();
+
+  nanoarrow::UniqueArray geometry;
+  data.wkb->finish(geometry.get());
+  if (geometry->length != pieces) {
+    throw std::runtime_error(
+        "Wrote " + std::to_string(geometry->length) +
+        " WKB pieces but recorded " + std::to_string(pieces) + " parents");
+  }
+
+  nanoarrow::UniqueArray array;
+  NANOARROW_THROW_NOT_OK(
+      ArrowArrayInitFromType(array.get(), NANOARROW_TYPE_STRUCT));
+  NANOARROW_THROW_NOT_OK(ArrowArrayAllocateChildren(array.get(), 2));
+  geometry.move(array->children[0]);
+
+  ArrowArray *parent = array->children[1];
+  NANOARROW_THROW_NOT_OK(
+      ArrowArrayInitFromType(parent, NANOARROW_TYPE_INT64));
+  parent->length = pieces;
+  adoptBuffer(parent, 1, std::move(data.parents));
+
+  array->length = pieces;
+  NANOARROW_THROW_NOT_OK(ArrowArrayFinishBuilding(
+      array.get(), NANOARROW_VALIDATION_LEVEL_MINIMAL, nullptr));
+
+  array.move(out);
 }
 
 /// Build a record batch over a batch of split pieces, mirroring the tree
@@ -887,6 +1100,10 @@ static void adoptBuffer(ArrowArray *array, int64_t i, std::vector<T> values) {
 /// hold everything. Lengths are set per level, since the buffers arrive
 /// whole rather than being appended to element by element.
 static void exportArray(BatchData data, ArrowArray *out) {
+  if (data.type == GeometryType::mixed) {
+    return exportWkbArray(std::move(data), out);
+  }
+
   nanoarrow::UniqueSchema schema;
   exportSchema(data.type, schema.get());
 
@@ -1081,27 +1298,8 @@ private:
     return GEOARROW_OK;
   }
 
-  /// Coordinates arrive in runs rather than one point at a time. WKB gives
-  /// one run per ring, laid out as interleaved xy - which is a run of Coord
-  /// already - so the common case is a single bulk append.
   int coords(const GeoArrowCoordView *c) {
-    const std::size_t count = static_cast<std::size_t>(c->n_coords);
-    if (count == 0) {
-      return GEOARROW_OK;
-    }
-    if (c->coords_stride == 2 && c->values[1] == c->values[0] + 1) {
-      const auto *first = reinterpret_cast<const geo::Coord *>(c->values[0]);
-      coordinates.insert(coordinates.end(), first, first + count);
-      return GEOARROW_OK;
-    }
-    // a z or m ordinate to step over, or x and y held apart
-    const int32_t stride = c->coords_stride;
-    coordinates.reserve(coordinates.size() + count);
-    for (std::size_t i = 0; i < count; i++) {
-      coordinates.push_back(
-          {c->values[0][i * stride], c->values[1][i * stride]});
-    }
-    return GEOARROW_OK;
+    return appendCoords(c, coordinates);
   }
 
   int ringEnd() { return GEOARROW_OK; }
@@ -1172,6 +1370,220 @@ static void splitWkbBatch(InputStream &input, GeometryType type,
   }
 }
 
+/// Splits a column holding geometries of more than one type.
+///
+/// Where WkbSplitter accepts one type and refuses the rest, this one takes
+/// each geometry as it comes: a LineString and a Polygon are split by the
+/// kernel for their type, a Point has nothing to split and goes through
+/// unchanged, and a MULTI* or a GEOMETRYCOLLECTION is a container whose
+/// members are each handled on their own terms. Since geoarrow-c reports a
+/// container's members as nested geom_starts carrying their own types, that
+/// recursion is the library's rather than ours - all this has to do is
+/// notice which level it is on.
+///
+/// Pieces go out as WKB, which is what lets one stream carry all of them.
+class MixedSplitter {
+public:
+  MixedSplitter(const grid::Grid &grid, bool bounded, WkbWriter &writer)
+      : grid(grid), bounded(bounded), writer(writer) {}
+
+  GeoArrowVisitor visitor() {
+    GeoArrowVisitor v;
+    GeoArrowVisitorInitVoid(&v);
+    v.feat_start = [](GeoArrowVisitor *v) { return self(v)->featStart(); };
+    v.null_feat = [](GeoArrowVisitor *v) { return self(v)->nullFeat(); };
+    v.geom_start = [](GeoArrowVisitor *v, enum GeoArrowGeometryType type,
+                      enum GeoArrowDimensions) {
+      return self(v)->geomStart(type);
+    };
+    v.ring_start = [](GeoArrowVisitor *v) { return self(v)->ringStart(); };
+    v.coords = [](GeoArrowVisitor *v, const GeoArrowCoordView *c) {
+      return self(v)->coords(c);
+    };
+    v.geom_end = [](GeoArrowVisitor *v) { return self(v)->geomEnd(); };
+    v.private_data = this;
+    return v;
+  }
+
+  void startRow(int64_t index) { row = index; }
+
+  /// How many pieces have been written
+  std::size_t pieces() const { return written; }
+
+  /// set when a callback refused a geometry, so the caller can raise it
+  std::string problem;
+
+private:
+  static MixedSplitter *self(GeoArrowVisitor *v) {
+    return static_cast<MixedSplitter *>(v->private_data);
+  }
+
+  int refuse(std::string what) {
+    problem = std::move(what);
+    return EINVAL;
+  }
+
+  /// One open geometry. Whether it held anything is what says an empty
+  /// geometry apart from a container: a MULTILINESTRING has no coordinates
+  /// of its own but does open children, while MULTILINESTRING EMPTY opens
+  /// neither.
+  struct Frame {
+    enum GeoArrowGeometryType type = GEOARROW_GEOMETRY_TYPE_GEOMETRY;
+    std::size_t coordinate_base = 0;
+    std::size_t ring_base = 0;
+    bool had_children = false;
+  };
+
+  int featStart() {
+    open.clear();
+    coordinates.clear();
+    ring_offsets.assign(1, 0);
+    return GEOARROW_OK;
+  }
+
+  int nullFeat() {
+    return refuse("Cannot split missing (null) geometries (row " +
+                  std::to_string(row) +
+                  "): drop or fill null geometries first");
+  }
+
+  int geomStart(enum GeoArrowGeometryType type) {
+    if (!open.empty()) {
+      open.back().had_children = true;
+    }
+    open.push_back({type, coordinates.size(), ring_offsets.size() - 1, false});
+    return GEOARROW_OK;
+  }
+
+  int ringStart() {
+    ring_offsets.push_back(static_cast<int32_t>(coordinates.size()));
+    if (!open.empty()) {
+      open.back().had_children = true;
+    }
+    return GEOARROW_OK;
+  }
+
+  int coords(const GeoArrowCoordView *c) {
+    return appendCoords(c, coordinates);
+  }
+
+  int geomEnd() {
+    Frame frame = open.back();
+    open.pop_back();
+    const geo::Coord *from = coordinates.data() + frame.coordinate_base;
+    const std::size_t count = coordinates.size() - frame.coordinate_base;
+
+    try {
+      if (!frame.had_children && count == 0) {
+        // an empty geometry goes back as itself, whatever it was
+        writer.writeEmpty(frame.type);
+        written++;
+      } else {
+        switch (frame.type) {
+        case GEOARROW_GEOMETRY_TYPE_POINT:
+          if (count > 0) {
+            writer.writePoint(from[0]);
+            written++;
+          }
+          break;
+        case GEOARROW_GEOMETRY_TYPE_LINESTRING:
+          splitLine(from, count);
+          break;
+        case GEOARROW_GEOMETRY_TYPE_POLYGON:
+          splitPolygon(frame);
+          break;
+        default:
+          // a container: its members have already been dealt with
+          break;
+        }
+      }
+    } catch (const std::exception &error) {
+      return refuse(std::string("Could not split the geometry at row ") +
+                    std::to_string(row) + ": " + error.what());
+    }
+
+    // the geometry's own coordinates are spent
+    coordinates.resize(frame.coordinate_base);
+    ring_offsets.resize(frame.ring_base + 1);
+    return GEOARROW_OK;
+  }
+
+  void splitLine(const geo::Coord *from, std::size_t count) {
+    pieces_scratch.offsets.assign(1, 0);
+    pieces_scratch.coordinates.clear();
+    operations::splitLineStringGrid({from, count}, grid, bounded,
+                                    pieces_scratch);
+    for (std::size_t p = 0; p + 1 < pieces_scratch.offsets.size(); p++) {
+      const int32_t begin = pieces_scratch.offsets[p];
+      const int32_t end = pieces_scratch.offsets[p + 1];
+      writer.writeLineString(pieces_scratch.coordinates.data() + begin,
+                             static_cast<std::size_t>(end - begin));
+      written++;
+    }
+  }
+
+  void splitPolygon(const Frame &frame) {
+    rings.clear();
+    for (std::size_t r = frame.ring_base; r + 1 < ring_offsets.size(); r++) {
+      const int32_t begin = ring_offsets[r + 1];
+      const int32_t end = r + 2 < ring_offsets.size()
+                              ? ring_offsets[r + 2]
+                              : static_cast<int32_t>(coordinates.size());
+      rings.push_back({coordinates.data() + begin,
+                       static_cast<std::size_t>(end - begin)});
+    }
+    polygon_scratch.coordinates.clear();
+    polygon_scratch.ring_offsets.assign(1, 0);
+    polygon_scratch.polygon_offsets.assign(1, 0);
+    operations::splitPolygonGridPieces(rings, grid, polygon_scratch);
+    for (std::size_t q = 0; q + 1 < polygon_scratch.polygon_offsets.size();
+         q++) {
+      const int32_t first = polygon_scratch.polygon_offsets[q];
+      const int32_t last = polygon_scratch.polygon_offsets[q + 1];
+      writer.writePolygon(polygon_scratch.coordinates.data(),
+                          polygon_scratch.ring_offsets.data() + first,
+                          static_cast<std::size_t>(last - first));
+      written++;
+    }
+  }
+
+  const grid::Grid &grid;
+  const bool bounded;
+  WkbWriter &writer;
+
+  int64_t row = 0;
+  std::size_t written = 0;
+  std::vector<Frame> open;
+  /// every coordinate of the geometry being read, rings and members end to
+  /// end; a frame owns the tail it added and drops it when it closes
+  std::vector<geo::Coord> coordinates;
+  std::vector<int32_t> ring_offsets{0};
+  std::vector<operations::CoordSpan> rings;
+  operations::LinePieces pieces_scratch;
+  operations::PolygonPieces polygon_scratch;
+};
+
+/// Split one batch of geometries of any type, writing the pieces as WKB
+static void splitMixedBatch(InputStream &input, const grid::Grid &grid,
+                            bool bounded, int64_t parent_base, BatchData &out) {
+  MixedSplitter splitter(grid, bounded, *out.wkb);
+  GeoArrowVisitor visitor = splitter.visitor();
+  for (int64_t i = 0; i < input.length(); i++) {
+    const std::size_t before = splitter.pieces();
+    splitter.startRow(i);
+    try {
+      input.wkbReader().visit(i, &visitor);
+    } catch (const std::invalid_argument &) {
+      if (!splitter.problem.empty()) {
+        throw std::invalid_argument(splitter.problem);
+      }
+      throw;
+    }
+    out.parents.insert(out.parents.end(), splitter.pieces() - before,
+                       parent_base + i);
+  }
+}
+
 /// Read one batch from the source and split it, returning nothing once the
 /// source is exhausted.
 ///
@@ -1189,7 +1601,12 @@ static std::optional<BatchData> nextSplitBatch(SplitState *state) {
     BatchData out;
     out.type = state->type;
     const int64_t count = state->input.length();
-    if (state->input.source() == Encoding::wkb) {
+    if (state->type == GeometryType::mixed) {
+      out.wkb = std::make_unique<WkbWriter>();
+      py::gil_scoped_release unlocked;
+      splitMixedBatch(state->input, state->grid, state->bounded,
+                      state->parent_base, out);
+    } else if (state->input.source() == Encoding::wkb) {
       py::gil_scoped_release unlocked;
       splitWkbBatch(state->input, state->type, state->grid, state->bounded,
                     state->parent_base, out);
@@ -1209,7 +1626,8 @@ static std::optional<BatchData> nextSplitBatch(SplitState *state) {
     }
     state->parent_base += count;
 
-    if (out.coordinates().size() >
+    if (out.type != GeometryType::mixed &&
+        out.coordinates().size() >
         static_cast<std::size_t>(std::numeric_limits<int32_t>::max())) {
       throw std::overflow_error(
           "One batch split to more coordinates than a GeoArrow array with "
@@ -1379,6 +1797,13 @@ static SplitStream splitPolygons(const py::object &polygons, int nrows,
           false};
 }
 
+static SplitStream splitGeometries(const py::object &geometries, int nrows,
+                                   int ncols, std::vector<double> transform,
+                                   bool bounded) {
+  return {geometries, GeometryType::mixed, makeGrid(nrows, ncols, transform),
+          bounded};
+}
+
 void register_module(py::module_ &m) {
   py::class_<SplitStream>(
       m, "SplitStream",
@@ -1407,6 +1832,30 @@ or a record batch stream with a GeoArrow geometry column.
 
 Returns a SplitStream of the LineString pieces. Nothing is split until
 the stream is read.)");
+
+  m.def("split_geometries", &splitGeometries, py::arg("geometries"),
+        py::arg("nrows"), py::arg("ncols"), py::arg("transform"),
+        py::arg("bounded") = false,
+        R"(Split geometries of any type along a grid.
+
+Takes geometries of any GeoArrow encoding, including geoarrow.wkb and
+multi-part types, from any object supporting the Arrow PyCapsule interface.
+Unlike split_linestrings and split_polygons it does not require the column to
+hold a single geometry type, so it can split a layer of mixed geometries -
+which only WKB can carry, since geopandas will not write a mixed frame as
+geoarrow-encoded at all.
+
+Each geometry is handled on its own terms: LineStrings and Polygons are
+split, Points pass through unchanged, multi-part geometries are split part by
+part, and a GeometryCollection is split member by member. Every piece is
+attributed to the row it came from, whatever it came out of. An empty
+geometry comes back as itself.
+
+Returns a SplitStream whose pieces are geoarrow.wkb, the one encoding that
+can carry every type in a single Arrow stream. The typed functions give back
+GeoArrow with the coordinates in Arrow buffers, and are cheaper where the
+column really does hold one type. Nothing is split until the stream is
+read.)");
 
   m.def("split_polygons", &splitPolygons, py::arg("polygons"),
         py::arg("nrows"), py::arg("ncols"), py::arg("transform"),

@@ -1,6 +1,7 @@
 from .intersections import (
     SplitStream,
     get_cell_indices,
+    split_geometries,
     split_linestring,
     split_linestrings,
     split_polygon,
@@ -10,6 +11,7 @@ from .intersections import (
 __all__ = [
     "SplitStream",
     "get_cell_indices",
+    "split_geometries",
     "split_linestring",
     "split_linestrings",
     "split_polygon",

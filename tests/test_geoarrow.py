@@ -14,6 +14,7 @@ import pyarrow.parquet as pq
 import pytest
 from numpy.testing import assert_array_equal
 from shapely.geometry import LineString, Point, Polygon
+from snail.core.intersections import split_geometries as core_split_geometries
 from snail.core.intersections import split_linestring as core_split_linestring
 from snail.core.intersections import split_linestrings as core_split_linestrings
 from snail.core.intersections import split_polygon as core_split_polygon
@@ -400,6 +401,168 @@ class TestSourceKinds:
             )
 
             assert_same_pieces(actual, expected)
+
+
+class TestMixed:
+    """split_geometries takes each geometry on its own terms, and gives the
+    pieces back as WKB - the one encoding an Arrow stream can carry every
+    type in"""
+
+    def test_result_is_wkb(self, linestrings):
+        stream = core_split_geometries(
+            linestrings.to_arrow(geometry_encoding="WKB"), NROWS, NCOLS, TRANSFORM
+        )
+        assert stream.geometry_type == "geoarrow.wkb"
+
+        reader = pa.RecordBatchReader._import_from_c_capsule(
+            stream.__arrow_c_stream__()
+        )
+        schema = reader.schema
+        assert schema.names == ["geometry", "parent"]
+        assert schema.field("geometry").type == pa.binary()
+        assert (
+            schema.field("geometry").metadata[b"ARROW:extension:name"]
+            == b"geoarrow.wkb"
+        )
+        assert schema.field("parent").type == pa.int64()
+        assert not schema.field("geometry").nullable
+        assert not schema.field("parent").nullable
+        list(reader)
+
+    def test_agrees_with_the_typed_splits(self, linestrings, polygons):
+        """A column that does hold one type must split to the same pieces
+        either way - the typed path is an optimisation, not a variant"""
+        for geometries, typed in (
+            (linestrings, core_split_linestrings),
+            (polygons, core_split_polygons),
+        ):
+            for source in (
+                geometries.to_arrow(geometry_encoding="WKB"),
+                to_geoarrow(geometries),
+            ):
+                actual = geometry_of(
+                    core_split_geometries(source, NROWS, NCOLS, TRANSFORM)
+                )
+                expected = geometry_of(
+                    typed(to_geoarrow(geometries), NROWS, NCOLS, TRANSFORM)
+                )
+                assert_same_pieces(actual, expected)
+
+    def test_splits_a_column_of_several_types(self):
+        """The case geopandas cannot even write as geoarrow-encoded:
+        ValueError('Geometry type combination is not supported')"""
+        mixed = gpd.GeoSeries(
+            [
+                Point(2.5, 2.5),
+                LineString([(0.5, 0.5), (3.5, 0.5)]),
+                Polygon([(0.5, 0.5), (2.5, 0.5), (2.5, 2.5), (0.5, 2.5)]),
+            ]
+        )
+        with pytest.raises(ValueError, match="not supported"):
+            mixed.to_arrow(geometry_encoding="geoarrow")
+
+        pieces, parents = read_split_stream(
+            core_split_geometries(
+                mixed.to_arrow(geometry_encoding="WKB"), NROWS, NCOLS, TRANSFORM
+            )
+        )
+
+        by_parent = {}
+        for piece, parent in zip(pieces, parents):
+            by_parent.setdefault(int(parent), []).append(piece)
+        # a point has nothing to split, so it comes back as itself
+        assert [p.wkt for p in by_parent[0]] == ["POINT (2.5 2.5)"]
+        assert {p.geom_type for p in by_parent[1]} == {"LineString"}
+        assert {p.geom_type for p in by_parent[2]} == {"Polygon"}
+        # every piece is attributed to the row it came from
+        assert sorted(by_parent) == [0, 1, 2]
+
+    def test_multi_part_geometries_split_part_by_part(self):
+        multi = gpd.GeoSeries.from_wkt(
+            ["MULTILINESTRING ((0.5 0.5, 3.5 0.5), (0.5 2.5, 3.5 2.5))"]
+        )
+        parts = gpd.GeoSeries.from_wkt(
+            ["LINESTRING (0.5 0.5, 3.5 0.5)", "LINESTRING (0.5 2.5, 3.5 2.5)"]
+        )
+
+        actual, parents = read_split_stream(
+            core_split_geometries(
+                multi.to_arrow(geometry_encoding="WKB"), NROWS, NCOLS, TRANSFORM
+            )
+        )
+        expected = geometry_of(
+            core_split_linestrings(to_geoarrow(parts), NROWS, NCOLS, TRANSFORM)
+        )
+
+        assert_same_pieces(actual, expected)
+        # both parts came out of the one row, so both are attributed to it
+        assert list(parents) == [0] * len(actual)
+
+    def test_geometry_collections_recurse(self):
+        """A collection's members are split on their own terms, however deep
+        they are nested"""
+        collections = gpd.GeoSeries.from_wkt(
+            [
+                "GEOMETRYCOLLECTION (POINT (1.5 1.5), LINESTRING (0.5 3.5, 3.5 3.5))",
+                (
+                    "GEOMETRYCOLLECTION (GEOMETRYCOLLECTION "
+                    "(LINESTRING (0.5 0.5, 2.5 0.5)))"
+                ),
+            ]
+        )
+
+        pieces, parents = read_split_stream(
+            core_split_geometries(
+                collections.to_arrow(geometry_encoding="WKB"),
+                NROWS,
+                NCOLS,
+                TRANSFORM,
+            )
+        )
+
+        # the point is not split; the line crosses x = 1, 2 and 3
+        first = [p for p, r in zip(pieces, parents) if r == 0]
+        assert [p.geom_type for p in first] == ["Point"] + ["LineString"] * 4
+        # nested two deep, and still split as an ordinary line: x = 1 and 2
+        nested = [p for p, r in zip(pieces, parents) if r == 1]
+        assert [p.geom_type for p in nested] == ["LineString"] * 3
+
+    @pytest.mark.parametrize(
+        "wkt",
+        [
+            "GEOMETRYCOLLECTION EMPTY",
+            "LINESTRING EMPTY",
+            "POLYGON EMPTY",
+            "MULTILINESTRING EMPTY",
+        ],
+    )
+    def test_empty_geometries_come_back_as_themselves(self, wkt):
+        """An empty geometry has nothing to split, and dropping it would lose
+        the row - so it goes back unchanged"""
+        empty = gpd.GeoSeries.from_wkt([wkt])
+
+        pieces, parents = read_split_stream(
+            core_split_geometries(
+                empty.to_arrow(geometry_encoding="WKB"), NROWS, NCOLS, TRANSFORM
+            )
+        )
+
+        assert len(pieces) == 1
+        assert pieces[0].is_empty
+        assert pieces[0].wkt == wkt
+        assert list(parents) == [0]
+
+    def test_rejects_null_geometries(self, linestrings):
+        with_null = gpd.GeoSeries([linestrings[0], None])
+        with pytest.raises(ValueError, match="null"):
+            batches_of(
+                core_split_geometries(
+                    with_null.to_arrow(geometry_encoding="WKB"),
+                    NROWS,
+                    NCOLS,
+                    TRANSFORM,
+                )
+            )
 
 
 class TestStream:
