@@ -39,6 +39,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -96,22 +97,6 @@ static std::string metadataValue(const char *metadata, const char *key) {
     return "";
   }
   return {value.data, static_cast<std::size_t>(value.size_bytes)};
-}
-
-/// Encode a single key/value pair as an ArrowSchema metadata blob, in the
-/// packed layout metadataValue describes
-static std::string encodeMetadata(const std::string &key,
-                                  const std::string &value) {
-  std::string blob;
-  auto append_int32 = [&blob](int32_t v) {
-    blob.append(reinterpret_cast<const char *>(&v), sizeof(int32_t));
-  };
-  append_int32(1); // one pair follows
-  append_int32(static_cast<int32_t>(key.size()));
-  blob.append(key);
-  append_int32(static_cast<int32_t>(value.size()));
-  blob.append(value);
-  return blob;
 }
 
 // -- Reading GeoArrow arrays -------------------------------------------------
@@ -638,56 +623,6 @@ struct BatchData {
   int64_t size() const { return static_cast<int64_t>(parents.size()); }
 };
 
-/// Backing store for one exported schema. Arrow's structs hold raw
-/// pointers to their children and to the arrays listing them, so every
-/// level of the tree is kept in one allocation that outlives the export
-/// and is freed when the top level is released.
-struct ExportedSchema {
-  std::string metadata;
-  ArrowSchema geometry;
-  ArrowSchema rings; // polygons only
-  ArrowSchema vertices;
-  ArrowSchema xy;
-  ArrowSchema parent;
-  ArrowSchema *top_children[2];
-  ArrowSchema *geometry_child[1];
-  ArrowSchema *rings_child[1];
-  ArrowSchema *vertices_child[1];
-};
-
-/// Releasing a struct means releasing its children and then nulling its own
-/// callback, which is how the interface marks it spent. The children here
-/// own nothing of their own - they are freed with the block - so this just
-/// walks the tree marking it, for a consumer that inspects it afterwards.
-static void releaseChildSchema(ArrowSchema *schema) {
-  for (int64_t i = 0; i < schema->n_children; i++) {
-    ArrowSchema *child = schema->children[i];
-    if (child->release != nullptr) {
-      child->release(child);
-    }
-  }
-  schema->release = nullptr;
-}
-
-static void releaseSchema(ArrowSchema *schema) {
-  releaseChildSchema(schema);
-  delete static_cast<ExportedSchema *>(schema->private_data);
-}
-
-static void initSchema(ArrowSchema *schema, const char *format,
-                       const char *name, ArrowSchema **children,
-                       int64_t n_children) {
-  schema->format = format;
-  schema->name = name;
-  schema->metadata = nullptr;
-  schema->flags = 0;
-  schema->n_children = n_children;
-  schema->children = children;
-  schema->dictionary = nullptr;
-  schema->release = releaseChildSchema;
-  schema->private_data = nullptr;
-}
-
 /// Build the schema of the split stream: record batches of a GeoArrow
 /// geometry column and the index of the geometry each piece came from.
 ///
@@ -700,146 +635,133 @@ static void initSchema(ArrowSchema *schema, const char *format,
 ///      |           |- xy                                  "g"   double
 ///      |- parent                                          "l"   int64
 ///
-/// Coordinates go back interleaved because that is what the split fills:
-/// a vector of Coord is already a run of x, y, x, y doubles.
+/// nanoarrow writes those format strings and owns the children, so the tree
+/// is described here by naming types rather than by hand-assembling structs.
+/// Setting a list type allocates its one child, which is then typed in turn.
+///
+/// Coordinates go back interleaved because that is what the split fills: a
+/// vector of Coord is already a run of x, y, x, y doubles.
+/// Mark a schema and everything under it as holding no nulls
+static void clearNullable(ArrowSchema *schema) {
+  schema->flags &= ~static_cast<int64_t>(ARROW_FLAG_NULLABLE);
+  for (int64_t i = 0; i < schema->n_children; i++) {
+    clearNullable(schema->children[i]);
+  }
+}
+
 static void exportSchema(GeometryType type, ArrowSchema *out) {
-  auto *owned = new ExportedSchema();
-  owned->metadata = encodeMetadata("ARROW:extension:name", extensionName(type));
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetTypeStruct(schema.get(), 2));
 
-  initSchema(&owned->xy, "g", "xy", nullptr, 0);
-  owned->vertices_child[0] = &owned->xy;
-  initSchema(&owned->vertices, "+w:2", "vertices", owned->vertices_child, 1);
+  ArrowSchema *geometry = schema->children[0];
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetType(geometry, NANOARROW_TYPE_LIST));
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(geometry, "geometry"));
 
+  // a polygon is a list of rings, so its coordinates sit one level deeper
+  ArrowSchema *vertices = geometry->children[0];
   if (type == GeometryType::polygon) {
-    owned->rings_child[0] = &owned->vertices;
-    initSchema(&owned->rings, "+l", "rings", owned->rings_child, 1);
-    owned->geometry_child[0] = &owned->rings;
-  } else {
-    owned->geometry_child[0] = &owned->vertices;
+    NANOARROW_THROW_NOT_OK(ArrowSchemaSetType(vertices, NANOARROW_TYPE_LIST));
+    NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(vertices, "rings"));
+    vertices = vertices->children[0];
   }
-  initSchema(&owned->geometry, "+l", "geometry", owned->geometry_child, 1);
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetTypeFixedSize(
+      vertices, NANOARROW_TYPE_FIXED_SIZE_LIST, 2));
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(vertices, "vertices"));
+  NANOARROW_THROW_NOT_OK(
+      ArrowSchemaSetType(vertices->children[0], NANOARROW_TYPE_DOUBLE));
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(vertices->children[0], "xy"));
+
   // the extension name rides on the geometry field, which is where a
-  // GeoArrow reader looks for it
-  owned->geometry.metadata = owned->metadata.data();
+  // GeoArrow reader looks for it. SetMetadata copies the blob, so the
+  // builder's buffer is free to go out of scope here.
+  nanoarrow::UniqueBuffer metadata;
+  NANOARROW_THROW_NOT_OK(ArrowMetadataBuilderInit(metadata.get(), nullptr));
+  NANOARROW_THROW_NOT_OK(ArrowMetadataBuilderAppend(
+      metadata.get(), ArrowCharView("ARROW:extension:name"),
+      ArrowCharView(extensionName(type))));
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetMetadata(
+      geometry, reinterpret_cast<const char *>(metadata->data)));
 
-  initSchema(&owned->parent, "l", "parent", nullptr, 0);
+  NANOARROW_THROW_NOT_OK(
+      ArrowSchemaSetType(schema->children[1], NANOARROW_TYPE_INT64));
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(schema->children[1], "parent"));
 
-  owned->top_children[0] = &owned->geometry;
-  owned->top_children[1] = &owned->parent;
-  initSchema(out, "+s", "", owned->top_children, 2);
-  out->flags = 0;
-  out->release = releaseSchema;
-  out->private_data = owned;
+  // A split never produces a null - not a null piece, ring, vertex or
+  // parent index - so say so. nanoarrow marks every field nullable by
+  // default; GeoArrow asks that a geometry's inner arrays contain no nulls,
+  // and declaring it lets a reader skip looking for validity bitmaps.
+  clearNullable(schema.get());
+
+  schema.move(out);
 }
 
-struct ExportedArray {
-  std::shared_ptr<BatchData> data;
-  ArrowArray geometry;
-  ArrowArray rings; // polygons only
-  ArrowArray vertices;
-  ArrowArray xy;
-  ArrowArray parent;
-  ArrowArray *top_children[2];
-  ArrowArray *geometry_child[1];
-  ArrowArray *rings_child[1];
-  ArrowArray *vertices_child[1];
-  const void *top_buffers[1];
-  const void *geometry_buffers[2];
-  const void *rings_buffers[2];
-  const void *vertices_buffers[1];
-  const void *xy_buffers[2];
-  const void *parent_buffers[2];
-};
-
-static void releaseChildArray(ArrowArray *array) {
-  for (int64_t i = 0; i < array->n_children; i++) {
-    ArrowArray *child = array->children[i];
-    if (child->release != nullptr) {
-      child->release(child);
-    }
-  }
-  array->release = nullptr;
-}
-
-static void releaseArray(ArrowArray *array) {
-  releaseChildArray(array);
-  delete static_cast<ExportedArray *>(array->private_data);
-}
-
-static void initArray(ArrowArray *array, int64_t length, const void **buffers,
-                      int64_t n_buffers, ArrowArray **children,
-                      int64_t n_children) {
-  array->length = length;
-  array->null_count = 0;
-  array->offset = 0;
-  array->n_buffers = n_buffers;
-  array->n_children = n_children;
-  array->buffers = buffers;
-  array->children = children;
-  array->dictionary = nullptr;
-  array->release = releaseChildArray;
-  array->private_data = nullptr;
+/// Hand a vector's storage to Arrow as buffer `i` of an array, without
+/// copying it: nanoarrow takes the vector over and frees it with the buffer.
+template <typename T>
+static void adoptBuffer(ArrowArray *array, int64_t i, std::vector<T> values) {
+  nanoarrow::UniqueBuffer buffer;
+  nanoarrow::BufferInitSequence(buffer.get(), std::move(values));
+  NANOARROW_THROW_NOT_OK(ArrowArraySetBuffer(array, i, buffer.get()));
 }
 
 /// Build a record batch over a batch of split pieces, mirroring the tree
-/// exportSchema describes and pointing Arrow at the split's own buffers
-/// rather than copying them out. The buffers stay alive with the shared
-/// data held in private_data, so the batch outlives the split that made it.
+/// exportSchema describes and giving Arrow the split's own buffers rather
+/// than copying them out. The batch takes the vectors over, so it outlives
+/// the split that made it.
 ///
-/// Buffer 0 is always the validity bitmap, left null here because nothing
-/// a split produces is null. What follows depends on the type: a list has
-/// its offsets in buffer 1, a primitive its values, and a struct or a
-/// fixed-size list has no second buffer at all - its children hold
-/// everything.
-static void exportArray(const std::shared_ptr<BatchData> &data,
-                        ArrowArray *out) {
-  auto *owned = new ExportedArray();
-  owned->data = data;
+/// Buffer 0 of every array is the validity bitmap, left null throughout
+/// because nothing a split produces is null. What follows depends on the
+/// type: a list has its offsets in buffer 1, a primitive its values, and a
+/// struct or fixed-size list has no second buffer at all - its children
+/// hold everything. Lengths are set per level, since the buffers arrive
+/// whole rather than being appended to element by element.
+static void exportArray(BatchData data, ArrowArray *out) {
+  nanoarrow::UniqueSchema schema;
+  exportSchema(data.type, schema.get());
+
+  nanoarrow::UniqueArray array;
+  NANOARROW_THROW_NOT_OK(
+      ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr));
+
+  const int64_t pieces = data.size();
+  const int64_t n_vertices = static_cast<int64_t>(data.coordinates.size());
+
+  ArrowArray *geometry = array->children[0];
+  ArrowArray *vertices = geometry->children[0];
+  if (data.type == GeometryType::polygon) {
+    // polygons over rings, then rings over vertices
+    ArrowArray *rings = vertices;
+    vertices = rings->children[0];
+    rings->length = static_cast<int64_t>(data.vertex_offsets.size()) - 1;
+    adoptBuffer(rings, 1, std::move(data.vertex_offsets));
+    adoptBuffer(geometry, 1, std::move(data.ring_offsets));
+  } else {
+    // a linestring is a plain run of vertices, so one level of offsets does
+    adoptBuffer(geometry, 1, std::move(data.vertex_offsets));
+  }
+  geometry->length = pieces;
+  vertices->length = n_vertices;
 
   // the coordinates as bare doubles: two per vertex, hence the length
-  owned->xy_buffers[0] = nullptr;
-  owned->xy_buffers[1] = data->coordinates.data();
-  initArray(&owned->xy, static_cast<int64_t>(2 * data->coordinates.size()),
-            owned->xy_buffers, 2, nullptr, 0);
+  ArrowArray *xy = vertices->children[0];
+  xy->length = 2 * n_vertices;
+  adoptBuffer(xy, 1, std::move(data.coordinates));
 
-  // pairs them up into vertices; a fixed-size list needs no offsets
-  owned->vertices_buffers[0] = nullptr;
-  owned->vertices_child[0] = &owned->xy;
-  initArray(&owned->vertices, static_cast<int64_t>(data->coordinates.size()),
-            owned->vertices_buffers, 1, owned->vertices_child, 1);
-
-  if (data->type == GeometryType::polygon) {
-    // a polygon is a list of rings, so the offsets nest twice: rings over
-    // vertices, then polygons over rings
-    owned->rings_buffers[0] = nullptr;
-    owned->rings_buffers[1] = data->vertex_offsets.data();
-    owned->rings_child[0] = &owned->vertices;
-    initArray(&owned->rings,
-              static_cast<int64_t>(data->vertex_offsets.size()) - 1,
-              owned->rings_buffers, 2, owned->rings_child, 1);
-    owned->geometry_buffers[1] = data->ring_offsets.data();
-    owned->geometry_child[0] = &owned->rings;
-  } else {
-    // a linestring is a run of vertices, so one level of offsets does
-    owned->geometry_buffers[1] = data->vertex_offsets.data();
-    owned->geometry_child[0] = &owned->vertices;
-  }
-  owned->geometry_buffers[0] = nullptr;
-  initArray(&owned->geometry, data->size(), owned->geometry_buffers, 2,
-            owned->geometry_child, 1);
-
-  owned->parent_buffers[0] = nullptr;
-  owned->parent_buffers[1] = data->parents.data();
-  initArray(&owned->parent, data->size(), owned->parent_buffers, 2, nullptr, 0);
+  ArrowArray *parent = array->children[1];
+  parent->length = pieces;
+  adoptBuffer(parent, 1, std::move(data.parents));
 
   // the record batch itself: a struct of the two columns, whose own length
   // is the number of pieces
-  owned->top_buffers[0] = nullptr;
-  owned->top_children[0] = &owned->geometry;
-  owned->top_children[1] = &owned->parent;
-  initArray(out, data->size(), owned->top_buffers, 1, owned->top_children, 2);
-  out->release = releaseArray;
-  out->private_data = owned;
+  array->length = pieces;
+  // MINIMAL checks every buffer against the length we just set, which is
+  // exactly the mistake this hand-nested layout could make; it stops short
+  // of the level that would try to reallocate the buffers we just adopted
+  NANOARROW_THROW_NOT_OK(ArrowArrayFinishBuilding(
+      array.get(), NANOARROW_VALIDATION_LEVEL_MINIMAL, nullptr));
+
+  array.move(out);
 }
 
 // -- Splitting a stream ------------------------------------------------------
@@ -915,39 +837,39 @@ static void splitPolygonBatch(const PolygonReader &reader,
 /// with bounded splitting, say - and the loop reads on rather than emitting
 /// it, both to spare consumers a batch with nothing in it and because
 /// geopandas cannot read a zero-length GeoArrow array.
-static std::shared_ptr<BatchData> nextSplitBatch(SplitState *state) {
+static std::optional<BatchData> nextSplitBatch(SplitState *state) {
   while (true) {
     nanoarrow::UniqueArray batch;
     if (!state->input.next(batch)) {
-      return nullptr;
+      return std::nullopt;
     }
     const ArrowArray *geometries = state->input.geometryArray(batch.get());
     const ArrowSchema *schema = state->input.geometrySchema();
 
-    auto out = std::make_shared<BatchData>();
-    out->type = state->type;
+    BatchData out;
+    out.type = state->type;
     int64_t count = 0;
     if (state->type == GeometryType::polygon) {
       PolygonReader reader(schema, geometries);
       count = reader.size();
       py::gil_scoped_release unlocked;
-      splitPolygonBatch(reader, state->grid, state->parent_base, *out);
+      splitPolygonBatch(reader, state->grid, state->parent_base, out);
     } else {
       LineStringReader reader(schema, geometries);
       count = reader.size();
       py::gil_scoped_release unlocked;
       splitLineStringBatch(reader, state->grid, state->bounded,
-                           state->parent_base, *out);
+                           state->parent_base, out);
     }
     state->parent_base += count;
 
-    if (out->coordinates.size() >
+    if (out.coordinates.size() >
         static_cast<std::size_t>(std::numeric_limits<int32_t>::max())) {
       throw std::overflow_error(
           "One batch split to more coordinates than a GeoArrow array with "
           "32-bit offsets can hold: read the source in smaller batches");
     }
-    if (out->size() > 0) {
+    if (out.size() > 0) {
       return out;
     }
   }
@@ -996,14 +918,14 @@ static int streamGetNext(ArrowArrayStream *stream, ArrowArray *out) {
   // give it back around the splitting itself.
   py::gil_scoped_acquire locked;
   try {
-    std::shared_ptr<BatchData> batch = nextSplitBatch(state);
-    if (batch == nullptr) {
+    std::optional<BatchData> batch = nextSplitBatch(state);
+    if (!batch.has_value()) {
       // the end of a stream is a success returning a released array, not
       // an error - the same convention the source uses with us
       out->release = nullptr;
       return 0;
     }
-    exportArray(batch, out);
+    exportArray(std::move(*batch), out);
   } catch (const std::invalid_argument &error) {
     return streamFailed(state, error, EINVAL);
   } catch (const std::overflow_error &error) {

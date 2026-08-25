@@ -64,6 +64,15 @@ def large_list_polygon_type():
     )
 
 
+def assert_not_nullable(data_type):
+    """No field anywhere below this type admits a null. Nested types report
+    their children through num_fields/field(i); leaves report none."""
+    for i in range(data_type.num_fields):
+        field = data_type.field(i)
+        assert not field.nullable, f"{field.name} should not be nullable"
+        assert_not_nullable(field.type)
+
+
 def as_nested_lists(geometries):
     """Geometries as the plain nested lists pyarrow.array builds from, so that
     an array of any list type can be constructed from them"""
@@ -411,6 +420,12 @@ class TestStream:
                 schema.field("geometry").metadata[b"ARROW:extension:name"] == extension
             )
             assert schema.field("parent").type == pa.int64()
+            # A split never produces a null piece, and GeoArrow asks that the
+            # arrays under a geometry hold no nulls either, so nothing in the
+            # exported schema is nullable
+            assert not schema.field("geometry").nullable
+            assert not schema.field("parent").nullable
+            assert_not_nullable(schema.field("geometry").type)
             list(reader)
 
     def test_pieces_outlive_the_stream(self, linestrings):
