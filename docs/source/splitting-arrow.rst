@@ -23,16 +23,34 @@ split by a consumer that takes the results as they come, without loading
 the whole thing first.
 
 :func:`snail.core.intersections.split_linestrings` and
-:func:`~snail.core.intersections.split_polygons` accept *any* object
-implementing the Arrow PyCapsule stream interface (``__arrow_c_stream__``)
-or the single-array interface (``__arrow_c_array__``, read as a stream of
-one batch) - a :class:`pyarrow.ChunkedArray`, :class:`~pyarrow.Table` or
+:func:`~snail.core.intersections.split_polygons` accept the geometries from
+*any* object implementing the Arrow PyCapsule stream interface
+(``__arrow_c_stream__``) or the single-array interface
+(``__arrow_c_array__``, read as a stream of one batch) - a
+:class:`pyarrow.ChunkedArray`, :class:`~pyarrow.Table` or
 :class:`~pyarrow.RecordBatchReader`, a GeoParquet or
 :class:`pyarrow.dataset.Dataset` reader, or
-:meth:`GeoSeries.to_arrow() <geopandas.GeoSeries.to_arrow>`. Coordinates
-may be interleaved (as geopandas exports them) or separated into x and y
-arrays (as GeoParquet stores them) - both are read directly, with no
-per-feature Python object built on either side of the interface.
+:meth:`GeoSeries.to_arrow() <geopandas.GeoSeries.to_arrow>`.
+
+The geometries themselves must be **GeoArrow-encoded** -
+``geoarrow.linestring`` or ``geoarrow.polygon``. Coordinates may be
+interleaved (as geopandas exports them) or separated into x and y arrays
+(as GeoParquet stores them), in two or more dimensions; all are read
+directly, with no per-feature Python object built on either side of the
+interface. Well-known binary (``geoarrow.wkb``) is **not** read, and nor
+are multi-part geometries - both are rejected with an explanatory error.
+
+.. note::
+
+   This is the catch when reading a file. :meth:`GeoDataFrame.to_parquet()
+   <geopandas.GeoDataFrame.to_parquet>` writes ``geoarrow.wkb`` **by
+   default**, and such a file cannot be split. Pass
+   ``geometry_encoding="geoarrow"`` when writing, as the example below
+   does. To split a WKB-encoded file, read it with
+   :func:`geopandas.read_parquet` and use
+   :func:`snail.intersection.split_linestrings` instead - that path goes
+   through shapely and has no such restriction, at the cost of holding the
+   geometries in memory.
 
 Splitting a file directly
 --------------------------
