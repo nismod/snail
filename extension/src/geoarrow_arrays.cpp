@@ -62,6 +62,20 @@ static enum GeoArrowGeometryType wanted(GeometryType type) {
                                        : GEOARROW_GEOMETRY_TYPE_LINESTRING;
 }
 
+/// How the pieces of a split of this type are written back out. Coordinates
+/// go back interleaved because that is what the split fills: a vector of
+/// Coord is already a run of x, y, x, y doubles.
+static enum GeoArrowType writtenAs(GeometryType type) {
+  switch (type) {
+  case GeometryType::polygon:
+    return GEOARROW_TYPE_INTERLEAVED_POLYGON;
+  case GeometryType::mixed:
+    return GEOARROW_TYPE_WKB;
+  default:
+    return GEOARROW_TYPE_INTERLEAVED_LINESTRING;
+  }
+}
+
 // -- Arrow schema metadata ---------------------------------------------------
 
 /// Read a value out of an ArrowSchema metadata blob. GeoArrow declares a
@@ -525,11 +539,6 @@ std::vector<int32_t> &vertexOffsetsOf(BatchData &data) {
                                             : data.lines.offsets;
 }
 
-/// Where each polygon's run of rings begins; unused for linestrings
-std::vector<int32_t> &ringOffsetsOf(BatchData &data) {
-  return data.polygons.polygon_offsets;
-}
-
 } // namespace
 
 /// Mark a schema and everything under it as holding no nulls
@@ -552,73 +561,40 @@ static void clearNullable(ArrowSchema *schema) {
 ///      |           |- xy                                  "g"   double
 ///      |- parent                                          "l"   int64
 ///
-/// nanoarrow writes those format strings and owns the children, so the tree
-/// is described here by naming types rather than by hand-assembling structs.
-/// Setting a list type allocates its one child, which is then typed in turn.
-///
-/// Coordinates go back interleaved because that is what the split fills: a
-/// vector of Coord is already a run of x, y, x, y doubles.
-/// The part of the output schema every encoding shares: the extension name
-/// on the geometry field, the parent index alongside it, and the promise
-/// that none of it is nullable.
-static void exportSchemaTail(GeometryType type, nanoarrow::UniqueSchema &schema,
-                             ArrowSchema *out) {
-  // the extension name rides on the geometry field, which is where a
-  // GeoArrow reader looks for it. SetMetadata copies the blob, so the
-  // builder's buffer is free to go out of scope here.
-  nanoarrow::UniqueBuffer metadata;
-  NANOARROW_THROW_NOT_OK(ArrowMetadataBuilderInit(metadata.get(), nullptr));
-  NANOARROW_THROW_NOT_OK(ArrowMetadataBuilderAppend(
-      metadata.get(), ArrowCharView("ARROW:extension:name"),
-      ArrowCharView(extensionName(type))));
-  NANOARROW_THROW_NOT_OK(ArrowSchemaSetMetadata(
-      schema->children[0], reinterpret_cast<const char *>(metadata->data)));
+/// Everything from "geometry" down is geoarrow-c's to describe - the nesting,
+/// the child names, the coordinate layout, and the extension metadata a
+/// GeoArrow reader looks for. WKB comes out of the same call as a binary
+/// column carrying the same kind of metadata, so all three encodings are one
+/// line apart. nanoarrow puts the field beside the parent index in a struct.
+void exportSchema(GeometryType type, ArrowSchema *out) {
+  nanoarrow::UniqueSchema geometry;
+  if (GeoArrowSchemaInitExtension(geometry.get(), writtenAs(type)) !=
+      GEOARROW_OK) {
+    throw std::runtime_error(std::string("Could not describe a column of ") +
+                             extensionName(type));
+  }
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(geometry.get(), "geometry"));
+
+  nanoarrow::UniqueSchema schema;
+  ArrowSchemaInit(schema.get());
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetTypeStruct(schema.get(), 2));
+  // SetTypeStruct leaves each child initialised but untyped, so the one
+  // geoarrow-c filled in replaces it rather than being written over
+  ArrowSchemaRelease(schema->children[0]);
+  geometry.move(schema->children[0]);
 
   NANOARROW_THROW_NOT_OK(
       ArrowSchemaSetType(schema->children[1], NANOARROW_TYPE_INT64));
   NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(schema->children[1], "parent"));
 
   // A split never produces a null - not a null piece, ring, vertex or
-  // parent index - so say so. nanoarrow marks every field nullable by
-  // default; GeoArrow asks that a geometry's inner arrays contain no nulls,
-  // and declaring it lets a reader skip looking for validity bitmaps.
+  // parent index - so say so. Both libraries mark the outermost field
+  // nullable by default; GeoArrow asks that a geometry's inner arrays
+  // contain no nulls, and declaring it lets a reader skip looking for
+  // validity bitmaps.
   clearNullable(schema.get());
 
   schema.move(out);
-}
-
-void exportSchema(GeometryType type, ArrowSchema *out) {
-  nanoarrow::UniqueSchema schema;
-  ArrowSchemaInit(schema.get());
-  NANOARROW_THROW_NOT_OK(ArrowSchemaSetTypeStruct(schema.get(), 2));
-
-  ArrowSchema *geometry = schema->children[0];
-  if (type == GeometryType::mixed) {
-    // WKB is one binary blob per piece: no nesting, and no coordinates Arrow
-    // can see. The extension name is still what tells a reader these are
-    // geometries, so the tail of this function does the rest.
-    NANOARROW_THROW_NOT_OK(ArrowSchemaSetType(geometry, NANOARROW_TYPE_BINARY));
-    NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(geometry, "geometry"));
-    return exportSchemaTail(type, schema, out);
-  }
-  NANOARROW_THROW_NOT_OK(ArrowSchemaSetType(geometry, NANOARROW_TYPE_LIST));
-  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(geometry, "geometry"));
-
-  // a polygon is a list of rings, so its coordinates sit one level deeper
-  ArrowSchema *vertices = geometry->children[0];
-  if (type == GeometryType::polygon) {
-    NANOARROW_THROW_NOT_OK(ArrowSchemaSetType(vertices, NANOARROW_TYPE_LIST));
-    NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(vertices, "rings"));
-    vertices = vertices->children[0];
-  }
-  NANOARROW_THROW_NOT_OK(ArrowSchemaSetTypeFixedSize(
-      vertices, NANOARROW_TYPE_FIXED_SIZE_LIST, 2));
-  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(vertices, "vertices"));
-  NANOARROW_THROW_NOT_OK(
-      ArrowSchemaSetType(vertices->children[0], NANOARROW_TYPE_DOUBLE));
-  NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(vertices->children[0], "xy"));
-
-  exportSchemaTail(type, schema, out);
 }
 
 /// Hand a vector's storage to Arrow as buffer `i` of an array, without
@@ -630,22 +606,86 @@ static void adoptBuffer(ArrowArray *array, int64_t i, std::vector<T> values) {
   NANOARROW_THROW_NOT_OK(ArrowArraySetBuffer(array, i, buffer.get()));
 }
 
-/// Build a record batch over a batch of WKB pieces.
-///
-/// The writer has already produced the geometry column as an Arrow array of
-/// its own, so this only has to put it beside a parent column in a struct.
-/// The geometry column is *moved* in - a bitwise copy, then the source's
-/// release callback nulled without calling it, which is how Arrow says a
-/// struct changes hands - so the blobs are not copied either.
-static void exportWkbArray(BatchData data, ArrowArray *out) {
-  const int64_t pieces = data.size();
+/// Hand a vector's storage to geoarrow-c as buffer `i` of the geometry
+/// column, without copying it: the builder takes the vector over and frees
+/// it when the array it becomes is released.
+template <typename T>
+static void adoptGeoBuffer(GeoArrowBuilder *builder, int64_t i,
+                           std::vector<T> values) {
+  auto *owned = new std::vector<T>(std::move(values));
+  GeoArrowBufferView view;
+  view.data = reinterpret_cast<const uint8_t *>(owned->data());
+  view.size_bytes = static_cast<int64_t>(owned->size() * sizeof(T));
+  const auto release = [](uint8_t *, int64_t, void *held) {
+    delete static_cast<std::vector<T> *>(held);
+  };
+  if (GeoArrowBuilderSetOwnedBuffer(builder, i, view, release, owned) !=
+      GEOARROW_OK) {
+    delete owned;
+    throw std::runtime_error("Could not hand a buffer to the geometry column");
+  }
+}
 
+/// Build the geometry column of a native batch, giving geoarrow-c the
+/// split's own buffers rather than copying them out. The column takes the
+/// vectors over, so it outlives the split that made it.
+///
+/// The builder numbers buffers from the outside in: buffer 0 is the
+/// validity bitmap, left unset because nothing a split produces is null,
+/// then one offsets buffer per level of nesting, then the coordinates -
+/// which is the shape LinePieces and PolygonPieces already hold. Every
+/// array's length is worked out from the buffer sizes, so none is set here.
+static void exportGeometryColumn(BatchData &data, ArrowArray *out) {
+  GeoArrowBuilder builder{};
+  if (GeoArrowBuilderInitFromType(&builder, writtenAs(data.type)) !=
+      GEOARROW_OK) {
+    throw std::runtime_error(std::string("Could not start a column of ") +
+                             extensionName(data.type));
+  }
+  // adopting a buffer can throw, and the builder owns those already handed to
+  // it, so it is reset however this returns
+  std::unique_ptr<GeoArrowBuilder, void (*)(GeoArrowBuilder *)> owned(
+      &builder, GeoArrowBuilderReset);
+
+  int64_t buffer = 1;
+  if (data.type == GeometryType::polygon) {
+    // polygons over rings, then rings over vertices
+    adoptGeoBuffer(&builder, buffer++,
+                   std::move(data.polygons.polygon_offsets));
+  }
+  adoptGeoBuffer(&builder, buffer++, std::move(vertexOffsetsOf(data)));
+  adoptGeoBuffer(&builder, buffer, std::move(coordinatesOf(data)));
+
+  GeoArrowError error;
+  if (GeoArrowBuilderFinish(&builder, out, &error) != GEOARROW_OK) {
+    throw std::runtime_error(std::string("Could not finish a column of ") +
+                             extensionName(data.type) + ": " + error.message);
+  }
+}
+
+/// Build a record batch over a batch of split pieces: the geometry column
+/// beside the index of the geometry each piece came from.
+///
+/// The geometry column arrives finished - built by geoarrow-c from the
+/// split's buffers, or written by the WKB writer - and is *moved* into the
+/// struct, a bitwise copy then the source's release callback nulled without
+/// calling it, which is how Arrow says an array changes hands. So nothing is
+/// copied here either.
+void exportArray(BatchData data, ArrowArray *out) {
   nanoarrow::UniqueArray geometry;
-  data.wkb->finish(geometry.get());
+  if (data.type == GeometryType::mixed) {
+    data.wkb->finish(geometry.get());
+  } else {
+    exportGeometryColumn(data, geometry.get());
+  }
+
+  // the two columns are filled independently - the pieces by the split, the
+  // parent indices beside them - so this is where a disagreement would show
+  const int64_t pieces = data.size();
   if (geometry->length != pieces) {
-    throw std::runtime_error(
-        "Wrote " + std::to_string(geometry->length) +
-        " WKB pieces but recorded " + std::to_string(pieces) + " parents");
+    throw std::runtime_error("Wrote " + std::to_string(geometry->length) +
+                             " pieces but recorded " + std::to_string(pieces) +
+                             " parents");
   }
 
   nanoarrow::UniqueArray array;
@@ -655,75 +695,13 @@ static void exportWkbArray(BatchData data, ArrowArray *out) {
   geometry.move(array->children[0]);
 
   ArrowArray *parent = array->children[1];
-  NANOARROW_THROW_NOT_OK(
-      ArrowArrayInitFromType(parent, NANOARROW_TYPE_INT64));
+  NANOARROW_THROW_NOT_OK(ArrowArrayInitFromType(parent, NANOARROW_TYPE_INT64));
   parent->length = pieces;
   adoptBuffer(parent, 1, std::move(data.parents));
 
   array->length = pieces;
-  NANOARROW_THROW_NOT_OK(ArrowArrayFinishBuilding(
-      array.get(), NANOARROW_VALIDATION_LEVEL_MINIMAL, nullptr));
-
-  array.move(out);
-}
-
-/// Build a record batch over a batch of split pieces, mirroring the tree
-/// exportSchema describes and giving Arrow the split's own buffers rather
-/// than copying them out. The batch takes the vectors over, so it outlives
-/// the split that made it.
-///
-/// Buffer 0 of every array is the validity bitmap, left null throughout
-/// because nothing a split produces is null. What follows depends on the
-/// type: a list has its offsets in buffer 1, a primitive its values, and a
-/// struct or fixed-size list has no second buffer at all - its children
-/// hold everything. Lengths are set per level, since the buffers arrive
-/// whole rather than being appended to element by element.
-void exportArray(BatchData data, ArrowArray *out) {
-  if (data.type == GeometryType::mixed) {
-    return exportWkbArray(std::move(data), out);
-  }
-
-  nanoarrow::UniqueSchema schema;
-  exportSchema(data.type, schema.get());
-
-  nanoarrow::UniqueArray array;
-  NANOARROW_THROW_NOT_OK(
-      ArrowArrayInitFromSchema(array.get(), schema.get(), nullptr));
-
-  const int64_t pieces = data.size();
-  const int64_t n_vertices = static_cast<int64_t>(coordinatesOf(data).size());
-
-  ArrowArray *geometry = array->children[0];
-  ArrowArray *vertices = geometry->children[0];
-  if (data.type == GeometryType::polygon) {
-    // polygons over rings, then rings over vertices
-    ArrowArray *rings = vertices;
-    vertices = rings->children[0];
-    rings->length = static_cast<int64_t>(vertexOffsetsOf(data).size()) - 1;
-    adoptBuffer(rings, 1, std::move(vertexOffsetsOf(data)));
-    adoptBuffer(geometry, 1, std::move(ringOffsetsOf(data)));
-  } else {
-    // a linestring is a plain run of vertices, so one level of offsets does
-    adoptBuffer(geometry, 1, std::move(vertexOffsetsOf(data)));
-  }
-  geometry->length = pieces;
-  vertices->length = n_vertices;
-
-  // the coordinates as bare doubles: two per vertex, hence the length
-  ArrowArray *xy = vertices->children[0];
-  xy->length = 2 * n_vertices;
-  adoptBuffer(xy, 1, std::move(coordinatesOf(data)));
-
-  ArrowArray *parent = array->children[1];
-  parent->length = pieces;
-  adoptBuffer(parent, 1, std::move(data.parents));
-
-  // the record batch itself: a struct of the two columns, whose own length
-  // is the number of pieces
-  array->length = pieces;
-  // MINIMAL checks every buffer against the length we just set, which is
-  // exactly the mistake this hand-nested layout could make; it stops short
-  // of the level that would try to reallocate the buffers we just adopted
+  // MINIMAL checks every buffer against the length we just set; it stops
+  // short of the level that would try to reallocate the buffers adopted here
   NANOARROW_THROW_NOT_OK(ArrowArrayFinishBuilding(
       array.get(), NANOARROW_VALIDATION_LEVEL_MINIMAL, nullptr));
 

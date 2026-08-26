@@ -7,6 +7,8 @@ pieces come back. That the splits themselves are right is covered in
 test_intersection.py.
 """
 
+import json
+
 import geopandas as gpd
 import numpy as np
 import pyarrow as pa
@@ -667,9 +669,12 @@ class TestStream:
             )
             schema = reader.schema
             assert schema.names == ["geometry", "parent"]
-            assert (
-                schema.field("geometry").metadata[b"ARROW:extension:name"] == extension
-            )
+            metadata = schema.field("geometry").metadata
+            assert metadata[b"ARROW:extension:name"] == extension
+            # GeoArrow carries a geometry's CRS and edge type in a JSON object
+            # beside its name. A split says nothing about either - the pieces
+            # are in whatever the source's CRS was - so the object is empty.
+            assert json.loads(metadata[b"ARROW:extension:metadata"]) == {}
             assert schema.field("parent").type == pa.int64()
             # A split never produces a null piece, and GeoArrow asks that the
             # arrays under a geometry hold no nulls either, so nothing in the
