@@ -397,15 +397,107 @@ private:
   ArrowArray *array_children[1]{}, *vertices_children[1]{};
 };
 
+/// A geoarrow.polygon array built by hand, so that a test can put a slice
+/// offset on the *rings* array - a level pyarrow will not slice on its own
+class NativePolygonColumn {
+public:
+  /// `pad` decoy rings of two vertices each are written at the front and
+  /// then sliced off by giving the ring list an offset. The polygon offsets
+  /// count from the ring array's own logical start, so they still begin at
+  /// 0, and a reader that forgets the offset lands on the decoys.
+  NativePolygonColumn(
+      const std::vector<std::vector<std::pair<double, double>>> &rings_in,
+      int64_t pad) {
+    ArrowSchemaInit(schema.get());
+    REQUIRE(ArrowSchemaSetType(schema.get(), NANOARROW_TYPE_LIST) ==
+            NANOARROW_OK);
+    ArrowSchema *ring_field = schema->children[0];
+    REQUIRE(ArrowSchemaSetType(ring_field, NANOARROW_TYPE_LIST) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetName(ring_field, "rings") == NANOARROW_OK);
+    ArrowSchema *vertex_field = ring_field->children[0];
+    REQUIRE(ArrowSchemaSetTypeFixedSize(
+                vertex_field, NANOARROW_TYPE_FIXED_SIZE_LIST, 2) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetName(vertex_field, "vertices") == NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetType(vertex_field->children[0],
+                               NANOARROW_TYPE_DOUBLE) == NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetName(vertex_field->children[0], "xy") ==
+            NANOARROW_OK);
+
+    ring_offsets.push_back(0);
+    for (int64_t i = 0; i < pad; i++) {
+      xy.insert(xy.end(), {-999.0, -999.0, -999.0, -999.0});
+      ring_offsets.push_back(static_cast<int32_t>(ring_offsets.back() + 2));
+    }
+    for (const auto &ring : rings_in) {
+      for (const auto &point : ring) {
+        xy.push_back(point.first);
+        xy.push_back(point.second);
+      }
+      ring_offsets.push_back(
+          static_cast<int32_t>(ring_offsets.back() + ring.size()));
+    }
+    // one polygon holding every real ring, counted from the slice's start
+    polygon_offsets = {0, static_cast<int32_t>(rings_in.size())};
+
+    xy_child.length = static_cast<int64_t>(xy.size());
+    xy_child.n_buffers = 2;
+    xy_buffers[1] = xy.data();
+    xy_child.buffers = xy_buffers;
+    xy_child.null_count = 0;
+
+    vertices.length = static_cast<int64_t>(xy.size() / 2);
+    vertices.n_buffers = 1;
+    vertices.buffers = vertices_buffers;
+    vertices.n_children = 1;
+    vertices_children[0] = &xy_child;
+    vertices.children = vertices_children;
+    vertices.null_count = 0;
+
+    rings.length = static_cast<int64_t>(rings_in.size());
+    rings.offset = pad;
+    rings.n_buffers = 2;
+    rings_buffers[1] = ring_offsets.data();
+    rings.buffers = rings_buffers;
+    rings.n_children = 1;
+    rings_children[0] = &vertices;
+    rings.children = rings_children;
+    rings.null_count = 0;
+
+    array.length = 1;
+    array.n_buffers = 2;
+    array_buffers[1] = polygon_offsets.data();
+    array.buffers = array_buffers;
+    array.n_children = 1;
+    array_children[0] = &rings;
+    array.children = array_children;
+    array.null_count = 0;
+  }
+
+  const ArrowSchema *arrowSchema() const { return schema.get(); }
+  const ArrowArray *arrowArray() const { return &array; }
+
+private:
+  nanoarrow::UniqueSchema schema;
+  std::vector<double> xy;
+  std::vector<int32_t> ring_offsets, polygon_offsets;
+  ArrowArray array{}, rings{}, vertices{}, xy_child{};
+  const void *array_buffers[2]{}, *rings_buffers[2]{}, *vertices_buffers[1]{},
+      *xy_buffers[2]{};
+  ArrowArray *array_children[1]{}, *rings_children[1]{},
+      *vertices_children[1]{};
+};
+
 } // namespace
 
 TEST_CASE("A sliced coordinate array is read from the right place",
           "[geoarrow]") {
-  // The list's offsets count from the coordinate array's own start, so a
-  // fixed-size list carrying a slice offset of its own has to be accounted
-  // for. geoarrow-c's array view applies only the innermost double child's
-  // offset, not the fixed-size list's, so this is compensated on our side -
-  // and this is the case that says whether it still is.
+  // A list's offsets are logical indices into its child, so the child's own
+  // slice offset has to be added to them. geoarrow-c records each level's
+  // offset in the array view and leaves its coordinate pointers unshifted
+  // for the consumer to apply; NativeReader::setArray applies the innermost
+  // one to the pointers themselves, and this is the case that says so.
   NativeReader reader;
   NativeColumn column({{{0.5, 0.5}, {1.5, 1.5}, {2.5, 2.5}}}, /*pad=*/2);
   reader.init(column.arrowSchema(), GeometryType::linestring);
@@ -418,4 +510,26 @@ TEST_CASE("A sliced coordinate array is read from the right place",
   REQUIRE(vertices[0].y == 0.5);
   REQUIRE(vertices[2].x == 2.5);
   REQUIRE(vertices[2].y == 2.5);
+}
+
+TEST_CASE("A sliced ring array is read from the right rings", "[geoarrow]") {
+  // The same rule one level up: a polygon's offsets index the ring array
+  // logically, so the ring array's own slice offset has to be added before
+  // its offsets buffer is read. Forgetting it lands on the decoy rings.
+  NativeReader reader;
+  NativePolygonColumn column({{{0.5, 0.5}, {2.5, 0.5}, {2.5, 2.5}}}, /*pad=*/1);
+  reader.init(column.arrowSchema(), GeometryType::polygon);
+  reader.setArray(column.arrowArray());
+
+  REQUIRE(reader.length() == 1);
+  std::vector<snail::operations::CoordSpan> rings;
+  std::vector<snail::geoarrow::linestr> scratch;
+  reader.rings(0, rings, scratch);
+
+  REQUIRE(rings.size() == 1);
+  REQUIRE(rings[0].size() == 3);
+  REQUIRE(rings[0][0].x == 0.5);
+  REQUIRE(rings[0][0].y == 0.5);
+  REQUIRE(rings[0][2].x == 2.5);
+  REQUIRE(rings[0][2].y == 2.5);
 }

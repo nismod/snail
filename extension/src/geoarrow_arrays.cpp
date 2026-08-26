@@ -187,11 +187,13 @@ void NativeReader::setArray(const ArrowArray *array) {
         std::string("Could not read a batch of geometries: ") + error.message);
   }
 
-  // geoarrow-c points its coordinate pointers past the innermost child's
-  // slice offset but not past the coordinate array's own - the fixed-size
-  // list's, or the struct's for separated coordinates - so an array sliced
-  // there would be read from the wrong place. A list's offsets count from
-  // the coordinate array's start, so that offset has to be applied.
+  // The innermost level needs the same shift offsetAt applies to the list
+  // levels, and geoarrow-c leaves it to the consumer in the same way: its
+  // coordinate pointers stop at the innermost double child's offset, and
+  // the coordinate array's own - the fixed-size list's, or the struct's for
+  // separated coordinates - is recorded in the array view for us to add.
+  // Its own visitors add it per geometry; applying it once to the base
+  // pointers here comes to the same thing and costs nothing per piece.
   const ArrowArray *coordinates = array;
   for (int32_t level = 0; level < view.n_offsets; level++) {
     coordinates = coordinates->children[0];
@@ -206,8 +208,13 @@ void NativeReader::setArray(const ArrowArray *array) {
 
 int64_t NativeReader::length() const { return view.length[0]; }
 
-/// Where element i of the list at `level` begins. geoarrow-c leaves the
-/// offsets buffer unshifted, so a slice's own start is added here.
+/// Where element i of the list at `level` begins.
+///
+/// An Arrow list's offsets are logical indices into its child, so the
+/// child's own slice offset has to be added before its offsets buffer is
+/// read in turn. geoarrow-c records each level's offset in the array view
+/// for exactly this, and every index into `offsets[level]` goes through
+/// here so that no level can be forgotten.
 int64_t NativeReader::offsetAt(int level, int64_t i) const {
   return view.offsets[level][view.offset[level] + i];
 }
@@ -262,8 +269,7 @@ void NativeReader::rings(int64_t i, std::vector<operations::CoordSpan> &out,
   const int64_t last = offsetAt(0, i + 1);
   if (contiguous()) {
     for (int64_t r = first; r < last; r++) {
-      // the polygon offsets already count from the ring array's own start
-      out.push_back(run(view.offsets[1][r], view.offsets[1][r + 1]));
+      out.push_back(run(offsetAt(1, r), offsetAt(1, r + 1)));
     }
     return;
   }
@@ -275,8 +281,8 @@ void NativeReader::rings(int64_t i, std::vector<operations::CoordSpan> &out,
     // the ring buffers keep their capacity from the previous polygon
     linestr &ring = scratch[used++];
     ring.clear();
-    const int64_t begin = view.offsets[1][r];
-    const int64_t end = view.offsets[1][r + 1];
+    const int64_t begin = offsetAt(1, r);
+    const int64_t end = offsetAt(1, r + 1);
     ring.reserve(static_cast<std::size_t>(end - begin));
     for (int64_t v = begin; v < end; v++) {
       ring.push_back(at(v));

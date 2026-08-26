@@ -406,6 +406,32 @@ class TestSourceKinds:
 
             assert_same_pieces(actual, expected)
 
+    def test_polygon_over_a_sliced_ring_array(self):
+        """The slice can sit on an inner level too. A polygon's offsets index
+        its ring array logically, so a ring array that is itself a slice
+        shifts which rings a polygon is made of - and nothing in the outer
+        array says so."""
+
+        def polygon_of(xy, ring_offsets, decoy_rings):
+            rings = pa.ListArray.from_arrays(
+                pa.array(ring_offsets, type=pa.int32()),
+                pa.FixedSizeListArray.from_arrays(pa.array(xy, type=pa.float64()), 2),
+            ).slice(decoy_rings)
+            return pa.ListArray.from_arrays(
+                pa.array([0, len(rings)], type=pa.int32()), rings
+            )
+
+        ring = [0.5, 0.5, 2.5, 0.5, 2.5, 2.5]
+        sliced = polygon_of([-9.0, -9.0, -9.0, -9.0] + ring, [0, 2, 5], 1)
+        assert sliced.values.offset == 1
+        plain = polygon_of(ring, [0, 3], 0)
+
+        actual = geometry_of(core_split_polygons(sliced, NROWS, NCOLS, TRANSFORM))
+        expected = geometry_of(core_split_polygons(plain, NROWS, NCOLS, TRANSFORM))
+
+        assert len(actual) > 0
+        assert_same_pieces(actual, expected)
+
 
 class TestMixed:
     """split_geometries takes each geometry on its own terms, and gives the
