@@ -20,6 +20,7 @@ using snail::geoarrow::Encoding;
 using snail::geoarrow::exportArray;
 using snail::geoarrow::exportSchema;
 using snail::geoarrow::GeometryType;
+using snail::geoarrow::NativeReader;
 using snail::geoarrow::splitMixedBatch;
 using snail::geoarrow::splitWkbBatch;
 using snail::geoarrow::WkbReader;
@@ -317,4 +318,104 @@ TEST_CASE("A null geometry is refused rather than dropped", "[geoarrow]") {
   REQUIRE_THROWS_WITH(
       splitMixedBatch(column.get(), column.size(), unitGrid(), false, 0, out),
       Catch::Contains("null") && Catch::Contains("row 1"));
+}
+
+namespace {
+
+/// A geoarrow.linestring array built by hand, so that a test can put the
+/// coordinate array's own slice offset where pyarrow would not
+class NativeColumn {
+public:
+  /// `pad` leading vertices are written into the coordinate buffer and then
+  /// sliced off by giving the fixed-size list an offset - an array Arrow
+  /// permits and a reader has to account for
+  NativeColumn(const std::vector<std::vector<std::pair<double, double>>> &lines,
+               int64_t pad = 0) {
+    ArrowSchemaInit(schema.get());
+    REQUIRE(ArrowSchemaSetType(schema.get(), NANOARROW_TYPE_LIST) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetTypeFixedSize(schema->children[0],
+                                        NANOARROW_TYPE_FIXED_SIZE_LIST, 2) ==
+            NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetName(schema->children[0], "vertices") ==
+            NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetType(schema->children[0]->children[0],
+                               NANOARROW_TYPE_DOUBLE) == NANOARROW_OK);
+    REQUIRE(ArrowSchemaSetName(schema->children[0]->children[0], "xy") ==
+            NANOARROW_OK);
+
+    for (int64_t i = 0; i < pad; i++) {
+      xy.push_back(-999.0);
+      xy.push_back(-999.0);
+    }
+    offsets.push_back(0);
+    for (const auto &line : lines) {
+      for (const auto &point : line) {
+        xy.push_back(point.first);
+        xy.push_back(point.second);
+      }
+      offsets.push_back(static_cast<int32_t>(offsets.back() + line.size()));
+    }
+
+    xy_child.length = static_cast<int64_t>(xy.size());
+    xy_child.n_buffers = 2;
+    xy_buffers[0] = nullptr;
+    xy_buffers[1] = xy.data();
+    xy_child.buffers = xy_buffers;
+    xy_child.null_count = 0;
+
+    vertices.length = static_cast<int64_t>(xy.size() / 2) - pad;
+    vertices.offset = pad;
+    vertices.n_buffers = 1;
+    vertices_buffers[0] = nullptr;
+    vertices.buffers = vertices_buffers;
+    vertices.n_children = 1;
+    vertices_children[0] = &xy_child;
+    vertices.children = vertices_children;
+    vertices.null_count = 0;
+
+    array.length = static_cast<int64_t>(offsets.size()) - 1;
+    array.n_buffers = 2;
+    array_buffers[0] = nullptr;
+    array_buffers[1] = offsets.data();
+    array.buffers = array_buffers;
+    array.n_children = 1;
+    array_children[0] = &vertices;
+    array.children = array_children;
+    array.null_count = 0;
+  }
+
+  const ArrowSchema *arrowSchema() const { return schema.get(); }
+  const ArrowArray *arrowArray() const { return &array; }
+
+private:
+  nanoarrow::UniqueSchema schema;
+  std::vector<double> xy;
+  std::vector<int32_t> offsets;
+  ArrowArray array{}, vertices{}, xy_child{};
+  const void *array_buffers[2]{}, *vertices_buffers[1]{}, *xy_buffers[2]{};
+  ArrowArray *array_children[1]{}, *vertices_children[1]{};
+};
+
+} // namespace
+
+TEST_CASE("A sliced coordinate array is read from the right place",
+          "[geoarrow]") {
+  // The list's offsets count from the coordinate array's own start, so a
+  // fixed-size list carrying a slice offset of its own has to be accounted
+  // for. geoarrow-c's array view applies only the innermost double child's
+  // offset, not the fixed-size list's, so this is compensated on our side -
+  // and this is the case that says whether it still is.
+  NativeReader reader;
+  NativeColumn column({{{0.5, 0.5}, {1.5, 1.5}, {2.5, 2.5}}}, /*pad=*/2);
+  reader.init(column.arrowSchema(), GeometryType::linestring);
+  reader.setArray(column.arrowArray());
+
+  REQUIRE(reader.length() == 1);
+  auto vertices = reader.vertices(0);
+  REQUIRE(vertices.size() == 3);
+  REQUIRE(vertices[0].x == 0.5);
+  REQUIRE(vertices[0].y == 0.5);
+  REQUIRE(vertices[2].x == 2.5);
+  REQUIRE(vertices[2].y == 2.5);
 }

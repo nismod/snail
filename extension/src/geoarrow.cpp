@@ -127,13 +127,7 @@ public:
       wkb.init(geometrySchema());
       return;
     }
-    ArrowError error;
-    ArrowErrorInit(&error);
-    if (ArrowArrayViewInitFromSchema(view.get(), geometrySchema(), &error) !=
-        NANOARROW_OK) {
-      throw std::invalid_argument(
-          std::string("Could not read the geometry column: ") + error.message);
-    }
+    native.init(geometrySchema(), type);
   }
 
   /// The source stream, its schema and any batch still held may all be
@@ -156,8 +150,8 @@ public:
   /// How this source holds its geometries
   Encoding source() const { return encoding; }
 
-  /// The Arrow view of the current batch's geometries; native encodings only
-  const ArrowArrayView *geometryView() { return view.get(); }
+  /// The reader positioned on the current batch; native encodings only
+  NativeReader &nativeReader() { return native; }
 
   /// The WKB reader positioned on the current batch; WKB sources only
   WkbReader &wkbReader() { return wkb; }
@@ -192,18 +186,10 @@ public:
     batch_length = geometries->length;
     if (encoding == Encoding::wkb) {
       wkb.setArray(geometries);
-      return true;
-    }
-    // Pointing the view at the batch also checks it over: that its children
-    // and buffers are the shape the schema promised, and that its offsets
-    // stay inside the arrays they index. Reading below can then trust it.
-    ArrowError error;
-    ArrowErrorInit(&error);
-    if (ArrowArrayViewSetArray(view.get(), geometries, &error) !=
-        NANOARROW_OK) {
-      throw std::invalid_argument(
-          std::string("Could not read a batch of geometries: ") +
-          error.message);
+    } else {
+      // Pointing the reader at the batch also checks it over, so the reading
+      // below can trust its shape.
+      native.setArray(geometries);
     }
     return true;
   }
@@ -261,7 +247,7 @@ private:
 
   nanoarrow::UniqueArrayStream stream;
   nanoarrow::UniqueArray single;
-  nanoarrow::UniqueArrayView view;
+  NativeReader native;
   WkbReader wkb;
   Encoding encoding = Encoding::native;
   int64_t batch_length = 0;
@@ -316,11 +302,9 @@ static std::optional<BatchData> nextSplitBatch(SplitState *state) {
       splitWkbBatch(state->input.wkbReader(), count, state->type, state->grid,
                     state->bounded, state->parent_base, out);
     } else {
-      const ArrowArrayView *geometries = state->input.geometryView();
-      const ArrowSchema *schema = state->input.geometrySchema();
       py::gil_scoped_release unlocked;
-      splitNativeBatch(geometries, schema, state->type, state->grid,
-                       state->bounded, state->parent_base, out);
+      splitNativeBatch(state->input.nativeReader(), count, state->type,
+                       state->grid, state->bounded, state->parent_base, out);
     }
     state->parent_base += count;
 

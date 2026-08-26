@@ -351,33 +351,35 @@ class TestSourceKinds:
 
             assert_same_pieces(actual, expected)
 
-    def test_large_list_offsets_linestrings(self, many_linestrings):
-        """Arrow lists may carry 64-bit offsets ("+L") instead of 32-bit.
-        geopandas never emits them, but an array built with pyarrow can, and
-        the reader dispatches on both."""
+    def test_rejects_large_list_offsets(self, many_linestrings, polygons):
+        """Arrow lists may carry 64-bit offsets ("+L") instead of 32-bit. The
+        GeoArrow spec asks a reader to accept them, but geoarrow-c - which
+        reads the coordinates here - does not, and working around that cost
+        more code than it saved. geopandas never emits one; an array built
+        with pyarrow can be one, and casting it is a single call."""
+        cases = (
+            (many_linestrings, large_list_linestring_type(), core_split_linestrings),
+            (polygons, large_list_polygon_type(), core_split_polygons),
+        )
+        for geometries, large_type, split in cases:
+            arrow = pa.array(as_nested_lists(geometries), type=large_type)
+            assert pa.types.is_large_list(arrow.type)
+
+            with pytest.raises(ValueError, match=r"cast the geometry column"):
+                batches_of(split(arrow, NROWS, NCOLS, TRANSFORM))
+
+    def test_large_list_offsets_split_once_cast(self, many_linestrings):
+        """...and casting really is all it takes"""
         arrow = pa.array(
             as_nested_lists(many_linestrings), type=large_list_linestring_type()
         )
-        assert pa.types.is_large_list(arrow.type)
+        cast = arrow.cast(pa.list_(arrow.type.field(0)))
 
-        actual = geometry_of(core_split_linestrings(arrow, NROWS, NCOLS, TRANSFORM))
+        actual = geometry_of(core_split_linestrings(cast, NROWS, NCOLS, TRANSFORM))
         expected = geometry_of(
             core_split_linestrings(
                 to_geoarrow(many_linestrings), NROWS, NCOLS, TRANSFORM
             )
-        )
-
-        assert_same_pieces(actual, expected)
-
-    def test_large_list_offsets_polygons(self, polygons):
-        """64-bit offsets at both levels of a polygon's nesting"""
-        arrow = pa.array(as_nested_lists(polygons), type=large_list_polygon_type())
-        assert pa.types.is_large_list(arrow.type)
-        assert pa.types.is_large_list(arrow.type.value_type)
-
-        actual = geometry_of(core_split_polygons(arrow, NROWS, NCOLS, TRANSFORM))
-        expected = geometry_of(
-            core_split_polygons(to_geoarrow(polygons), NROWS, NCOLS, TRANSFORM)
         )
 
         assert_same_pieces(actual, expected)

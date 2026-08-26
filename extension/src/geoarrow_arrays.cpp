@@ -2,6 +2,7 @@
 /// See geoarrow_arrays.hpp for why this is a file of its own.
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -81,194 +82,196 @@ std::string metadataValue(const char *metadata, const char *key) {
   return {value.data, static_cast<std::size_t>(value.size_bytes)};
 }
 
-// -- Reading GeoArrow arrays -------------------------------------------------
+// -- Reading native GeoArrow arrays ------------------------------------------
 
-/// Does any slot of an array hold a null? A producer may leave null_count
-/// at -1 rather than count them, in which case nanoarrow counts the bits of
-/// the validity bitmap itself.
-static bool hasNulls(const ArrowArrayView *view) {
-  return ArrowArrayViewComputeNullCount(view) > 0;
-}
-
-/// Where element i of a list array's run of children begins, in the units
-/// of the child array.
+/// Does any slot of an array, or of anything below it, hold a null?
 ///
-/// nanoarrow reads the offsets buffer as 32-bit for a list ("+l") or 64-bit
-/// for a large list ("+L") from the view's storage type, so the two need no
-/// distinguishing here. It indexes that buffer directly, though, and a
-/// sliced array carries a slot offset of its own that shifts where in the
-/// buffer element i is described - hence the view's offset added here.
-static int64_t listBegin(const ArrowArrayView *view, int64_t i) {
-  return ArrowArrayViewListChildOffset(view, view->offset + i);
+/// GeoArrow asks that the arrays under a geometry hold no nulls, and a split
+/// has nothing sensible to do with one, so this refuses rather than guesses.
+/// geoarrow-c tracks a validity bitmap for the outermost array only, so the
+/// inner levels are checked here. A producer may leave null_count at -1
+/// rather than count them, hence the fall back to counting the bitmap.
+static bool hasNulls(const ArrowArray *array) {
+  if (array->null_count > 0) {
+    return true;
+  }
+  if (array->null_count < 0 && array->n_buffers > 0) {
+    const auto *validity = static_cast<const uint8_t *>(array->buffers[0]);
+    if (validity != nullptr &&
+        ArrowBitCountSet(validity, array->offset, array->length) !=
+            array->length) {
+      return true;
+    }
+  }
+  for (int64_t i = 0; i < array->n_children; i++) {
+    if (hasNulls(array->children[i])) {
+      return true;
+    }
+  }
+  return false;
 }
 
-static int64_t listEnd(const ArrowArrayView *view, int64_t i) {
-  return listBegin(view, i + 1);
-}
-
-/// GeoArrow coordinates, in either of the layouts the format allows:
-/// interleaved as a fixed_size_list<double>[2], which is how geopandas
-/// hands over a geometry column, or separated as a struct of an x and a y
-/// array, which is how GeoParquet stores them. Any further dimensions (z,
-/// m) are ignored - splitting is planar.
-class Coordinates {
-public:
-  Coordinates() = default;
-
-  /// Read from a view of coordinates whose schema checkSchema has already
-  /// passed, so the layout here is one of the two it allows. The schema
-  /// comes along because a view carries no field names, and the separated
-  /// layout finds its x and y by name.
-  Coordinates(const ArrowArrayView *view, const ArrowSchema *schema) {
-    if (hasNulls(view)) {
-      throw std::invalid_argument("Cannot split geometries with missing "
-                                  "(null) coordinates");
-    }
-    if (view->storage_type == NANOARROW_TYPE_FIXED_SIZE_LIST) {
-      // A fixed-size list lays its elements end to end in one child buffer,
-      // so vertex v starts at stride * v - shifted by the list's own slot
-      // offset, and again by the child's.
-      stride = view->layout.child_size_elements;
-      const ArrowArrayView *values = view->children[0];
-      if (hasNulls(values)) {
-        throw std::invalid_argument("Cannot split geometries with missing "
-                                    "(null) coordinates");
-      }
-      xy = values->buffer_views[1].data.as_double;
-      xy_base = values->offset + stride * view->offset;
-      return;
-    }
-    // Separated: one child array per dimension, each with its own offset
-    const ArrowArrayView *x_view = view->children[dimension(schema, "x", 0)];
-    const ArrowArrayView *y_view = view->children[dimension(schema, "y", 1)];
-    if (hasNulls(x_view) || hasNulls(y_view)) {
-      throw std::invalid_argument("Cannot split geometries with missing "
-                                  "(null) coordinates");
-    }
-    x = x_view->buffer_views[1].data.as_double;
-    y = y_view->buffer_views[1].data.as_double;
-    x_base = x_view->offset + view->offset;
-    y_base = y_view->offset + view->offset;
-  }
-
-  /// Validate the coordinate layout without needing any data
-  static void checkSchema(const ArrowSchema *schema) {
-    int64_t width = interleavedStride(schema);
-    if (width > 0) {
-      if (width < 2) {
-        throw std::invalid_argument(
-            std::string("Expected interleaved coordinates of at least two "
-                        "dimensions, got Arrow format '") +
-            schema->format + "'");
-      }
-      if (schema->n_children != 1) {
-        throw std::invalid_argument("Malformed Arrow fixed-size-list array: "
-                                    "expected exactly one child");
-      }
-      checkDouble(schema->children[0]);
-      return;
-    }
-    if (std::strcmp(schema->format, "+s") == 0) {
-      checkDouble(schema->children[dimension(schema, "x", 0)]);
-      checkDouble(schema->children[dimension(schema, "y", 1)]);
-      return;
-    }
-    throw std::invalid_argument(
-        std::string("Expected GeoArrow coordinates, either interleaved "
-                    "(Arrow format '+w:2') or separated (a struct of x and "
-                    "y), got '") +
-        schema->format + "'");
-  }
-
-  geo::Coord at(int64_t vertex) const {
-    if (xy != nullptr) {
-      int64_t at = xy_base + stride * vertex;
-      return {xy[at], xy[at + 1]};
-    }
-    return {x[x_base + vertex], y[y_base + vertex]};
-  }
-
-  /// Vertices [begin, end) as a run the split kernels can read.
-  ///
-  /// Interleaved 2D coordinates already *are* a run of Coord - that is what
-  /// the static_assert on sizeof(Coord) at the top of this file pins down -
-  /// so the span points straight into the Arrow buffer and nothing is
-  /// copied. Every other layout has a gap between one vertex's y and the
-  /// next's x, or holds x and y apart altogether, so those are gathered into
-  /// a buffer that is reused from one geometry to the next.
-  /// Are the coordinates laid out exactly as a run of Coord? Interleaved
-  /// with nothing but x and y is, provided the slice this view starts at
-  /// lands on a vertex boundary rather than between a vertex's two doubles.
-  bool contiguous() const {
-    return xy != nullptr && stride == 2 && xy_base % 2 == 0;
-  }
-
-  operations::CoordSpan run(int64_t begin, int64_t end) {
-    const std::size_t count = static_cast<std::size_t>(end - begin);
-    if (contiguous()) {
-      const auto *first =
-          reinterpret_cast<const geo::Coord *>(xy + xy_base) + begin;
-      return {first, count};
-    }
-    gathered.clear();
-    gathered.reserve(count);
-    for (int64_t v = begin; v < end; v++) {
-      gathered.push_back(at(v));
-    }
-    return gathered;
-  }
-
-private:
-  /// Doubles per vertex in an interleaved layout, read out of Arrow's
-  /// fixed-size-list format string "+w:<width>": 2 for xy, 3 for xyz or
-  /// xym, 4 for xyzm. Returns 0 for any other layout. Only x and y are
-  /// read - splitting is planar - but every dimension counts towards the
-  /// step from one vertex to the next.
-  static int64_t interleavedStride(const ArrowSchema *schema) {
-    if (std::strncmp(schema->format, "+w:", 3) != 0) {
-      return 0;
-    }
-    return std::strtoll(schema->format + 3, nullptr, 10);
-  }
-
-  /// Index of a named dimension among a struct's children, by name where
-  /// the producer gives one, else by position
-  static int64_t dimension(const ArrowSchema *schema, const char *name,
-                           int64_t fallback) {
-    for (int64_t i = 0; i < schema->n_children; i++) {
-      const char *child = schema->children[i]->name;
-      if (child != nullptr && std::strcmp(child, name) == 0) {
-        return i;
-      }
-    }
-    if (fallback < schema->n_children) {
-      return fallback;
-    }
-    throw std::invalid_argument(
-        std::string("Expected a '") + name +
-        "' coordinate among the separated GeoArrow coordinates");
-  }
-
-  /// "g" is Arrow's format string for a double
-  static void checkDouble(const ArrowSchema *schema) {
-    if (std::strcmp(schema->format, "g") != 0) {
+/// Refuse a column whose list offsets are 64 bits wide.
+///
+/// The GeoArrow specification asks a reader to take either width - "
+/// Implementations SHOULD accept LargeList int64 offset buffers but MAY
+/// produce only List int32 offset buffers" - and geoarrow-c does not: its
+/// schema parser rejects any list that is not "+l" and its array view holds
+/// int32 offsets. Narrowing them here was tried and cost more code than the
+/// hand-written reader it replaced, so this says so plainly instead. Nothing
+/// geopandas writes is affected; an array built directly with pyarrow can be
+/// a large list, and casting it is one call.
+static void refuseLargeOffsets(const ArrowSchema *schema) {
+  for (const ArrowSchema *at = schema; at != nullptr; at = at->n_children == 1
+                                                              ? at->children[0]
+                                                              : nullptr) {
+    if (std::strcmp(at->format, "+L") == 0) {
       throw std::invalid_argument(
-          std::string("Expected coordinates of type double (Arrow format "
-                      "'g'), got '") +
-          schema->format + "'");
+          "Expected 32-bit Arrow list offsets (\"+l\"), got 64-bit "
+          "(\"+L\"): cast the geometry column before splitting");
     }
   }
+}
 
-  const double *xy = nullptr; // interleaved, stride doubles per vertex
-  int64_t stride = 0;
-  int64_t xy_base = 0;
-  const double *x = nullptr; // separated, one array per dimension
-  const double *y = nullptr;
-  int64_t x_base = 0;
-  int64_t y_base = 0;
-  /// where a layout that is not already a run of Coord is gathered into
-  std::vector<geo::Coord> gathered;
-};
+NativeReader::NativeReader() = default;
+NativeReader::~NativeReader() = default;
+
+void NativeReader::init(const ArrowSchema *schema, GeometryType type) {
+  // geoarrow-c insists on an extension name, where an array built directly
+  // with pyarrow may carry none - hence InitFromStorage with the name we are
+  // looking for, rather than InitFromSchema. Passing the name we want is
+  // also the shape check: a column nested the wrong number of levels deep
+  // for that name does not parse.
+  refuseLargeOffsets(schema);
+  const char *declared = extensionName(type);
+  GeoArrowStringView name;
+  name.data = declared;
+  name.size_bytes = static_cast<int64_t>(std::strlen(declared));
+
+  GeoArrowSchemaView schema_view;
+  GeoArrowError error;
+  if (GeoArrowSchemaViewInitFromStorage(&schema_view, schema, name, &error) !=
+      GEOARROW_OK) {
+    throw std::invalid_argument(std::string("Expected a ") + declared +
+                                " array: " + error.message);
+  }
+  if (GeoArrowArrayViewInitFromType(&view, schema_view.type) != GEOARROW_OK) {
+    throw std::invalid_argument(std::string("Could not read the ") + declared +
+                                " column");
+  }
+}
+
+void NativeReader::setArray(const ArrowArray *array) {
+  if (hasNulls(array)) {
+    throw std::invalid_argument(
+        "Cannot split missing (null) geometries: drop or fill null "
+        "geometries first");
+  }
+  GeoArrowError error;
+  if (GeoArrowArrayViewSetArray(&view, array, &error) != GEOARROW_OK) {
+    throw std::invalid_argument(
+        std::string("Could not read a batch of geometries: ") + error.message);
+  }
+
+  // geoarrow-c points its coordinate pointers past the innermost child's
+  // slice offset but not past the coordinate array's own - the fixed-size
+  // list's, or the struct's for separated coordinates - so an array sliced
+  // there would be read from the wrong place. A list's offsets count from
+  // the coordinate array's start, so that offset has to be applied.
+  const ArrowArray *coordinates = array;
+  for (int32_t level = 0; level < view.n_offsets; level++) {
+    coordinates = coordinates->children[0];
+  }
+  if (coordinates->offset != 0) {
+    for (int32_t i = 0; i < view.coords.n_values; i++) {
+      view.coords.values[i] +=
+          view.coords.coords_stride * coordinates->offset;
+    }
+  }
+}
+
+int64_t NativeReader::length() const { return view.length[0]; }
+
+/// Where element i of the list at `level` begins. geoarrow-c leaves the
+/// offsets buffer unshifted, so a slice's own start is added here.
+int64_t NativeReader::offsetAt(int level, int64_t i) const {
+  return view.offsets[level][view.offset[level] + i];
+}
+
+/// Are the coordinates laid out exactly as a run of Coord? Interleaved with
+/// nothing but x and y is, which the static_assert on sizeof(Coord) pins
+/// down.
+bool NativeReader::contiguous() const {
+  return view.coords.coords_stride == 2 &&
+         view.coords.values[1] == view.coords.values[0] + 1;
+}
+
+geo::Coord NativeReader::at(int64_t vertex) const {
+  const int32_t stride = view.coords.coords_stride;
+  return {view.coords.values[0][vertex * stride],
+          view.coords.values[1][vertex * stride]};
+}
+
+/// Vertices [begin, end) as a run the split kernels can read, pointing
+/// straight into the Arrow buffer where the layout allows it and gathering
+/// into a reused buffer where it does not.
+operations::CoordSpan NativeReader::run(int64_t begin, int64_t end) {
+  const std::size_t count = static_cast<std::size_t>(end - begin);
+  if (contiguous()) {
+    const auto *first =
+        reinterpret_cast<const geo::Coord *>(view.coords.values[0]) + begin;
+    return {first, count};
+  }
+  gathered.clear();
+  gathered.reserve(count);
+  for (int64_t v = begin; v < end; v++) {
+    gathered.push_back(at(v));
+  }
+  return gathered;
+}
+
+operations::CoordSpan NativeReader::vertices(int64_t i) {
+  return run(offsetAt(0, i), offsetAt(0, i + 1));
+}
+
+/// The ring structure is explicit in the offsets, so rings are recovered
+/// exactly rather than inferred from where coordinates close back on
+/// themselves.
+///
+/// Only one gathered ring's span is valid at a time, since they share a
+/// buffer - so a polygon whose coordinates need gathering is materialised
+/// ring by ring into `scratch` first, and spans taken over that.
+void NativeReader::rings(int64_t i, std::vector<operations::CoordSpan> &out,
+                         std::vector<linestr> &scratch) {
+  out.clear();
+  const int64_t first = offsetAt(0, i);
+  const int64_t last = offsetAt(0, i + 1);
+  if (contiguous()) {
+    for (int64_t r = first; r < last; r++) {
+      // the polygon offsets already count from the ring array's own start
+      out.push_back(run(view.offsets[1][r], view.offsets[1][r + 1]));
+    }
+    return;
+  }
+  std::size_t used = 0;
+  for (int64_t r = first; r < last; r++) {
+    if (used == scratch.size()) {
+      scratch.emplace_back();
+    }
+    // the ring buffers keep their capacity from the previous polygon
+    linestr &ring = scratch[used++];
+    ring.clear();
+    const int64_t begin = view.offsets[1][r];
+    const int64_t end = view.offsets[1][r + 1];
+    ring.reserve(static_cast<std::size_t>(end - begin));
+    for (int64_t v = begin; v < end; v++) {
+      ring.push_back(at(v));
+    }
+  }
+  for (std::size_t r = 0; r < used; r++) {
+    out.push_back(scratch[r]);
+  }
+}
 
 /// Check the GeoArrow extension name, when the producer declares one. A
 /// plain nested list array of the right shape is accepted too, so that
@@ -298,8 +301,7 @@ static Encoding checkExtensionName(const ArrowSchema *schema,
 /// Only the native encodings can be checked this far ahead: a WKB column
 /// says nothing about what its geometries are until they are decoded, so
 /// the type check for those happens per feature as they are read.
-Encoding checkGeometrySchema(const ArrowSchema *schema,
-                                    GeometryType type) {
+Encoding checkGeometrySchema(const ArrowSchema *schema, GeometryType type) {
   if (type == GeometryType::mixed) {
     // A mixed split takes each geometry on its own terms, so the column may
     // be anything geoarrow-c can walk - any native encoding, or WKB. Asking
@@ -314,122 +316,8 @@ Encoding checkGeometrySchema(const ArrowSchema *schema,
     // geometry's own type
     return Encoding::wkb;
   }
-  const Encoding encoding = checkExtensionName(schema, type);
-  if (encoding == Encoding::wkb) {
-    return encoding;
-  }
-  if (std::strcmp(schema->format, "+l") != 0 &&
-      std::strcmp(schema->format, "+L") != 0) {
-    throw std::invalid_argument(
-        std::string("Expected a ") + extensionName(type) +
-        " array (an Arrow list), got format '" + schema->format + "'");
-  }
-  if (schema->n_children != 1) {
-    throw std::invalid_argument(
-        "Malformed Arrow list array: expected exactly one child");
-  }
-  if (type == GeometryType::polygon) {
-    const ArrowSchema *rings = schema->children[0];
-    if (std::strcmp(rings->format, "+l") != 0 &&
-        std::strcmp(rings->format, "+L") != 0) {
-      throw std::invalid_argument(
-          "Expected a geoarrow.polygon array (a list of rings of "
-          "coordinates)");
-    }
-    if (rings->n_children != 1) {
-      throw std::invalid_argument(
-          "Malformed Arrow list array: expected exactly one child");
-    }
-    Coordinates::checkSchema(rings->children[0]);
-  } else {
-    Coordinates::checkSchema(schema->children[0]);
-  }
-  return encoding;
+  return checkExtensionName(schema, type);
 }
-
-/// A geoarrow.linestring batch: a list of coordinates per linestring,
-/// list<vertices: coordinates> in either coordinate layout
-struct LineStringReader {
-  const ArrowArrayView *lines;
-  Coordinates coordinates;
-
-  LineStringReader(const ArrowArrayView *view, const ArrowSchema *schema)
-      : lines(view) {
-    if (hasNulls(view)) {
-      throw std::invalid_argument(
-          "Cannot split missing (null) geometries: drop or fill null "
-          "geometries first");
-    }
-    coordinates = Coordinates(view->children[0], schema->children[0]);
-  }
-
-  int64_t size() const { return lines->length; }
-
-  /// The vertices of linestring i
-  operations::CoordSpan read(int64_t i) {
-    return coordinates.run(listBegin(lines, i), listEnd(lines, i));
-  }
-};
-
-/// A geoarrow.polygon batch: a list of rings per polygon, each ring a list
-/// of coordinates - list<rings: list<vertices: coordinates>>
-struct PolygonReader {
-  const ArrowArrayView *polygons;
-  const ArrowArrayView *rings;
-  Coordinates coordinates;
-
-  PolygonReader(const ArrowArrayView *view, const ArrowSchema *schema)
-      : polygons(view), rings(view->children[0]) {
-    if (hasNulls(polygons) || hasNulls(rings)) {
-      throw std::invalid_argument(
-          "Cannot split missing (null) geometries or rings: drop or fill "
-          "null geometries first");
-    }
-    const ArrowSchema *rings_schema = schema->children[0];
-    coordinates = Coordinates(rings->children[0], rings_schema->children[0]);
-  }
-
-  int64_t size() const { return polygons->length; }
-
-  /// The rings of polygon i, exterior first. The ring structure is explicit
-  /// in the offsets, so rings are recovered exactly rather than inferred
-  /// from where coordinates close back on themselves.
-  ///
-  /// Only one ring's span is valid at a time unless the coordinates are
-  /// contiguous, since a gathered ring reuses the same buffer - so a
-  /// polygon whose coordinates need gathering is materialised ring by ring
-  /// into `out` first, and spans taken over that.
-  void read(int64_t i, std::vector<operations::CoordSpan> &out,
-            std::vector<linestr> &scratch) {
-    out.clear();
-    const int64_t first = listBegin(polygons, i);
-    const int64_t last = listEnd(polygons, i);
-    if (coordinates.contiguous()) {
-      for (int64_t r = first; r < last; r++) {
-        out.push_back(coordinates.run(listBegin(rings, r), listEnd(rings, r)));
-      }
-      return;
-    }
-    std::size_t used = 0;
-    for (int64_t r = first; r < last; r++) {
-      if (used == scratch.size()) {
-        scratch.emplace_back();
-      }
-      // the ring buffers keep their capacity from the previous polygon
-      linestr &ring = scratch[used++];
-      ring.clear();
-      const int64_t begin = listBegin(rings, r);
-      const int64_t end = listEnd(rings, r);
-      ring.reserve(static_cast<std::size_t>(end - begin));
-      for (int64_t v = begin; v < end; v++) {
-        ring.push_back(coordinates.at(v));
-      }
-    }
-    for (std::size_t r = 0; r < used; r++) {
-      out.push_back(scratch[r]);
-    }
-  }
-};
 
 // -- Reading WKB -------------------------------------------------------------
 
@@ -845,12 +733,13 @@ void exportArray(BatchData data, ArrowArray *out) {
 // -- Splitting a stream ------------------------------------------------------
 
 /// Split one batch of linestrings into pieces
-static void splitLineStringBatch(LineStringReader &reader,
+static void splitLineStringBatch(NativeReader &reader, int64_t count,
                                  const grid::Grid &grid, bool bounded,
                                  int64_t parent_base, BatchData &out) {
-  for (int64_t l = 0; l < reader.size(); l++) {
+  for (int64_t l = 0; l < count; l++) {
     const std::size_t before = out.lines.size();
-    operations::splitLineStringGrid(reader.read(l), grid, bounded, out.lines);
+    operations::splitLineStringGrid(reader.vertices(l), grid, bounded,
+                                    out.lines);
     // one parent per piece this line produced; a line that fell apart into
     // nothing produces none
     out.parents.insert(out.parents.end(), out.lines.size() - before,
@@ -859,12 +748,13 @@ static void splitLineStringBatch(LineStringReader &reader,
 }
 
 /// Split one batch of polygons into pieces
-static void splitPolygonBatch(PolygonReader &reader, const grid::Grid &grid,
-                              int64_t parent_base, BatchData &out) {
+static void splitPolygonBatch(NativeReader &reader, int64_t count,
+                              const grid::Grid &grid, int64_t parent_base,
+                              BatchData &out) {
   std::vector<operations::CoordSpan> rings;
   std::vector<linestr> scratch;
-  for (int64_t p = 0; p < reader.size(); p++) {
-    reader.read(p, rings, scratch);
+  for (int64_t p = 0; p < count; p++) {
+    reader.rings(p, rings, scratch);
     const std::size_t before = out.polygons.size();
     operations::splitPolygonGridPieces(rings, grid, out.polygons);
     out.parents.insert(out.parents.end(), out.polygons.size() - before,
@@ -1264,17 +1154,13 @@ void splitMixedBatch(WkbReader &reader, int64_t count, const grid::Grid &grid,
 }
 
 
-/// Split one batch of geometries held in Arrow buffers, of the one type
-void splitNativeBatch(const ArrowArrayView *geometries,
-                      const ArrowSchema *schema, GeometryType type,
+void splitNativeBatch(NativeReader &reader, int64_t count, GeometryType type,
                       const grid::Grid &grid, bool bounded,
                       int64_t parent_base, BatchData &out) {
   if (type == GeometryType::polygon) {
-    PolygonReader reader(geometries, schema);
-    splitPolygonBatch(reader, grid, parent_base, out);
+    splitPolygonBatch(reader, count, grid, parent_base, out);
   } else {
-    LineStringReader reader(geometries, schema);
-    splitLineStringBatch(reader, grid, bounded, parent_base, out);
+    splitLineStringBatch(reader, count, grid, bounded, parent_base, out);
   }
 }
 

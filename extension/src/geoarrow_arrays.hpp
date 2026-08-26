@@ -97,6 +97,49 @@ private:
   bool ready = false;
 };
 
+/// A batch of native GeoArrow geometries - the coordinates in Arrow buffers
+/// rather than serialised - read through geoarrow-c.
+///
+/// Its array view collapses the layouts the format allows: interleaved
+/// coordinates and separated x and y arrays, over any number of dimensions.
+/// Splitting is planar, so a z or m ordinate is stepped over rather than
+/// refused. It cannot read 64-bit ("+L") list offsets - see
+/// refuseLargeOffsets in the implementation for why those are turned away.
+class NativeReader {
+public:
+  NativeReader();
+  NativeReader(const NativeReader &) = delete;
+  NativeReader &operator=(const NativeReader &) = delete;
+  ~NativeReader();
+
+  /// Lay the reader out from the column's schema, once, reading it as the
+  /// given geometry type - an array built directly with pyarrow may declare
+  /// no extension name of its own, so it is told which to expect.
+  void init(const ArrowSchema *schema, GeometryType type);
+
+  /// Point it at a batch
+  void setArray(const ArrowArray *array);
+
+  /// How many geometries the current batch holds
+  int64_t length() const;
+
+  /// The vertices of linestring i
+  operations::CoordSpan vertices(int64_t i);
+
+  /// The rings of polygon i, exterior first
+  void rings(int64_t i, std::vector<operations::CoordSpan> &out,
+             std::vector<linestr> &scratch);
+
+private:
+  int64_t offsetAt(int level, int64_t i) const;
+  bool contiguous() const;
+  geo::Coord at(int64_t vertex) const;
+  operations::CoordSpan run(int64_t begin, int64_t end);
+
+  GeoArrowArrayView view{};
+  std::vector<geo::Coord> gathered;
+};
+
 class WkbWriter;
 
 /// One batch of split pieces: the geometries, and for each piece the index
@@ -138,8 +181,7 @@ void exportSchema(GeometryType type, ArrowSchema *out);
 void exportArray(BatchData data, ArrowArray *out);
 
 /// Split one batch of geometries held in Arrow buffers, of the one type
-void splitNativeBatch(const ArrowArrayView *geometries,
-                      const ArrowSchema *schema, GeometryType type,
+void splitNativeBatch(NativeReader &reader, int64_t count, GeometryType type,
                       const grid::Grid &grid, bool bounded,
                       int64_t parent_base, BatchData &out);
 

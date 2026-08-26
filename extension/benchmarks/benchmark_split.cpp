@@ -100,13 +100,15 @@ int main() {
   {
     std::size_t pieces = 0;
     for (const linestr &ring : buildings) {
-      pieces += snail::operations::splitPolygonGridPieces({ring}, building_grid)
+      std::vector<linestr> rings{ring};
+      pieces += snail::operations::splitPolygonGridPieces(rings, building_grid)
                     .size();
     }
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < 400; i++) {
       for (const linestr &ring : buildings) {
-        snail::operations::splitPolygonGridPieces({ring}, building_grid);
+        std::vector<linestr> rings{ring};
+        snail::operations::splitPolygonGridPieces(rings, building_grid);
       }
     }
     auto end = std::chrono::steady_clock::now();
