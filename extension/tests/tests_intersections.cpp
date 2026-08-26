@@ -237,12 +237,12 @@ TEST_CASE("LineStrings are decomposed", "[decomposition]") {
   // Test that we're getting the expected number of splits
   REQUIRE(splits.size() == expected_splits.size());
   // Test that each one of the splits have the expected size
-  for (int i = 0; i < splits.size(); i++) {
+  for (size_t i = 0; i < splits.size(); i++) {
     REQUIRE(splits[i].size() == expected_splits[i].size());
   }
   // Test that each one of the splits are made of the expected points
-  for (int i = 0; i < splits.size(); i++) {
-    for (int j = 0; j < splits[i].size(); j++) {
+  for (size_t i = 0; i < splits.size(); i++) {
+    for (size_t j = 0; j < splits[i].size(); j++) {
       snail::geometry::Coord point = splits[i][j];
       snail::geometry::Coord expected_point = expected_splits[i][j];
 
@@ -637,12 +637,12 @@ TEST_CASE("Split with different grid", "[decomposition]") {
   // Test that we're getting the expected number of splits
   REQUIRE(splits.size() == expected_splits.size());
   // Test that each one of the splits have the expected size
-  for (int i = 0; i < splits.size(); i++) {
+  for (size_t i = 0; i < splits.size(); i++) {
     REQUIRE(splits[i].size() == expected_splits[i].size());
   }
   // Test that each one of the splits are made of the expected points
-  for (int i = 0; i < splits.size(); i++) {
-    for (int j = 0; j < splits[i].size(); j++) {
+  for (size_t i = 0; i < splits.size(); i++) {
+    for (size_t j = 0; j < splits[i].size(); j++) {
       snail::geometry::Coord point = splits[i][j];
       snail::geometry::Coord expected_point = expected_splits[i][j];
 
@@ -672,15 +672,6 @@ static double ring_area2(const linestr &ring) {
              (ring[i + 1].x - x0) * (ring[i].y - y0);
   }
   return area2;
-}
-
-static double polygon_area(const snail::geometry::Polygon &polygon) {
-  // holes are wound clockwise, so their signed area is negative
-  double area2 = ring_area2(polygon.exterior);
-  for (const linestr &interior : polygon.interiors) {
-    area2 += ring_area2(interior);
-  }
-  return area2 / 2.0;
 }
 
 TEST_CASE("Square is split into cell pieces", "[polygon]") {
