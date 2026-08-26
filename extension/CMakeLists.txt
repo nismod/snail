@@ -14,7 +14,24 @@ set(CPP_TESTS_DIR tests)
 # not while that code sat beside the bindings.
 set(VENDOR_DIR vendor)
 
+# The warnings we hold our own code to. Not MSVC - the flags are GCC/Clang
+# syntax - and not the vendored C below: -isystem only quiets warnings from
+# a header reached through it, not from a .c file compiled directly out of
+# that directory, so the vendored sources are kept in a target of their own
+# that this is never applied to.
+if(NOT MSVC)
+  set(SNAIL_WARNING_FLAGS -Wall -Wextra -Wpedantic)
+endif()
+
 add_subdirectory(extern/Catch2)
+
+add_library(vendor_arrow OBJECT
+  ${VENDOR_DIR}/nanoarrow/nanoarrow.c
+  ${VENDOR_DIR}/geoarrow/geoarrow.c
+)
+set_target_properties(vendor_arrow PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
+target_include_directories(vendor_arrow PRIVATE ${VENDOR_DIR} ${VENDOR_DIR}/nanoarrow)
+
 add_executable(run_tests
   ${CPP_TESTS_DIR}/run_tests.cpp
   ${CPP_TESTS_DIR}/tests_intersections.cpp
@@ -24,10 +41,9 @@ add_executable(run_tests
   ${CPP_SRC_DIR}/geoarrow_arrays.cpp
   ${CPP_SRC_DIR}/geometry.cpp
   ${CPP_SRC_DIR}/operations.cpp
-  ${VENDOR_DIR}/nanoarrow/nanoarrow.c
-  ${VENDOR_DIR}/geoarrow/geoarrow.c
+  $<TARGET_OBJECTS:vendor_arrow>
 )
-set_target_properties(run_tests PROPERTIES C_STANDARD 99 C_STANDARD_REQUIRED ON)
+target_compile_options(run_tests PRIVATE ${SNAIL_WARNING_FLAGS})
 target_include_directories(run_tests PUBLIC ${CPP_SRC_DIR})
 # SYSTEM: vendored code is not ours to keep warning-free
 target_include_directories(run_tests SYSTEM PRIVATE
@@ -38,6 +54,7 @@ add_executable(run_benchmarks
   benchmarks/benchmark_split.cpp
   ${CPP_SRC_DIR}/operations.cpp
 )
+target_compile_options(run_benchmarks PRIVATE ${SNAIL_WARNING_FLAGS})
 target_include_directories(run_benchmarks PUBLIC ${CPP_SRC_DIR})
 if(NOT MSVC)
   target_compile_options(run_benchmarks PRIVATE -O2)
