@@ -149,6 +149,11 @@ Contents
     Tutorials <tutorials>
 
 .. toctree::
+    :maxdepth: 1
+
+    Splitting large datasets <splitting-arrow>
+
+.. toctree::
     :maxdepth: 3
 
     Reference <api/modules>

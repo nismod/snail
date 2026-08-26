@@ -21,10 +21,13 @@ jobs:
       - name: Build C++
         run: |
           cmake -Bbuild ./extension
-          cmake --build build/ --target run_tests
+          cmake --build build/ --target run_tests run_benchmarks
 
       - name: Test C++
         run: ./build/run_tests
+
+      - name: Run benchmarks
+        run: ./build/run_benchmarks
 
   build-cpp-windows:
     runs-on: windows-latest
@@ -39,10 +42,13 @@ jobs:
       - name: Build C++
         run: |
           cmake -Bbuild ./extension
-          cmake --build build/ --target run_tests
+          cmake --build build/ --target run_tests run_benchmarks
 
       - name: Test C++
         run: ./build/Debug/run_tests.exe
+
+      - name: Run benchmarks
+        run: ./build/Debug/run_benchmarks.exe
 
   build:
     strategy:

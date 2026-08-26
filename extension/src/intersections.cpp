@@ -11,6 +11,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include "geoarrow.hpp"
 #include "geometry.hpp"
 #include "grid.hpp"
 #include "transform.hpp"
@@ -30,8 +31,9 @@ geometryCoordinates(py::object geometry) {
       py::module_::import("shapely").attr("get_coordinates")(geometry));
 }
 
-/// Copy an offset array out as the int64 numpy array shapely expects
-py::array_t<std::int64_t> offsetArray(const std::vector<std::size_t> &offsets) {
+/// Copy an offset array out as the int64 numpy array shapely expects.
+/// The pieces hold theirs as int32, the width an Arrow list takes.
+py::array_t<std::int64_t> offsetArray(const std::vector<std::int32_t> &offsets) {
   py::array_t<std::int64_t> array((py::ssize_t)offsets.size());
   std::int64_t *out = array.mutable_data();
   for (std::size_t i = 0; i < offsets.size(); i++) {
@@ -100,68 +102,6 @@ py::object splitLineString(py::object linestring_py, int nrows, int ncols,
   return lineStringsFromPieces(splits);
 }
 
-py::object splitLineStrings(py::object linestrings, int nrows, int ncols,
-                            std::vector<double> transform, bool bounded = false) {
-  // Read every linestring in one call, as flat coordinate and offset
-  // arrays, so that splitting a whole table crosses into Python twice
-  // rather than twice per feature
-  py::module_ shapely = py::module_::import("shapely");
-  py::tuple ragged = shapely.attr("to_ragged_array")(linestrings);
-  int geometry_type = py::cast<int>(ragged[0].attr("value"));
-  int linestring_type = py::cast<int>(
-      shapely.attr("GeometryType").attr("LINESTRING").attr("value"));
-  if (geometry_type != linestring_type) {
-    throw py::type_error("split_linestrings expects LineString geometries; "
-                         "merge or explode MultiLineStrings before splitting");
-  }
-
-  using OffsetArray =
-      py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>;
-  auto coords =
-      py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(
-          ragged[1]);
-  py::tuple offsets = ragged[2];
-  auto line_offsets = OffsetArray::ensure(offsets[0]);
-
-  auto xy = coords.unchecked<2>();
-  auto line_at = line_offsets.unchecked<1>();
-
-  transform::Affine affine(transform[0], transform[1], transform[2],
-                           transform[3], transform[4], transform[5]);
-  grid::Grid grid(ncols, nrows, affine);
-
-  operations::LinePieces all_pieces;
-  std::vector<std::int64_t> parent;
-  linestr line;
-  py::ssize_t n_lines = line_at.shape(0) - 1;
-  for (py::ssize_t l = 0; l < n_lines; l++) {
-    line.clear();
-    line.reserve(line_at(l + 1) - line_at(l));
-    for (std::int64_t i = line_at(l); i < line_at(l + 1); i++) {
-      line.push_back(geo::Coord(xy(i, 0), xy(i, 1)));
-    }
-
-    operations::LinePieces pieces =
-        operations::splitLineStringGrid(line, grid, bounded);
-
-    std::size_t base = all_pieces.coordinates.size();
-    all_pieces.coordinates.insert(all_pieces.coordinates.end(),
-                                  pieces.coordinates.begin(),
-                                  pieces.coordinates.end());
-    for (std::size_t p = 1; p < pieces.offsets.size(); p++) {
-      all_pieces.offsets.push_back(base + pieces.offsets[p]);
-      parent.push_back((std::int64_t)l);
-    }
-  }
-
-  py::array_t<std::int64_t> parent_out((py::ssize_t)parent.size());
-  if (!parent.empty()) {
-    std::memcpy(parent_out.mutable_data(), parent.data(),
-                parent.size() * sizeof(std::int64_t));
-  }
-  return py::make_tuple(lineStringsFromPieces(all_pieces), parent_out);
-}
-
 py::object splitPolygon(py::object polygon, int nrows, int ncols,
                         std::vector<double> transform) {
   // All rings of the polygon (exterior first, then any interior rings), in
@@ -206,82 +146,6 @@ py::object splitPolygon(py::object polygon, int nrows, int ncols,
   return polygonsFromPieces(splits);
 }
 
-py::object splitPolygons(py::object polygons, int nrows, int ncols,
-                         std::vector<double> transform) {
-  // Read every polygon in one call, as flat coordinate and offset arrays
-  // (the same layout the results are returned in), so that splitting a
-  // whole table of features crosses into Python twice rather than twice
-  // per feature
-  py::module_ shapely = py::module_::import("shapely");
-  py::tuple ragged = shapely.attr("to_ragged_array")(polygons);
-  int geometry_type = py::cast<int>(ragged[0].attr("value"));
-  int polygon_type =
-      py::cast<int>(shapely.attr("GeometryType").attr("POLYGON").attr("value"));
-  if (geometry_type != polygon_type) {
-    throw py::type_error("split_polygons expects Polygon geometries; explode "
-                         "MultiPolygons before splitting");
-  }
-
-  using OffsetArray =
-      py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>;
-  auto coords =
-      py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(
-          ragged[1]);
-  py::tuple offsets = ragged[2];
-  auto ring_offsets = OffsetArray::ensure(offsets[0]);
-  auto polygon_offsets = OffsetArray::ensure(offsets[1]);
-
-  auto xy = coords.unchecked<2>();
-  auto ring_at = ring_offsets.unchecked<1>();
-  auto polygon_at = polygon_offsets.unchecked<1>();
-
-  transform::Affine affine(transform[0], transform[1], transform[2],
-                           transform[3], transform[4], transform[5]);
-  grid::Grid grid(ncols, nrows, affine);
-
-  operations::PolygonPieces all_pieces;
-  std::vector<std::int64_t> parent;
-  std::vector<linestr> rings;
-  py::ssize_t n_polygons = polygon_at.shape(0) - 1;
-  for (py::ssize_t p = 0; p < n_polygons; p++) {
-    rings.clear();
-    for (std::int64_t r = polygon_at(p); r < polygon_at(p + 1); r++) {
-      linestr ring;
-      ring.reserve(ring_at(r + 1) - ring_at(r));
-      for (std::int64_t i = ring_at(r); i < ring_at(r + 1); i++) {
-        ring.push_back(geo::Coord(xy(i, 0), xy(i, 1)));
-      }
-      rings.push_back(std::move(ring));
-    }
-
-    operations::PolygonPieces pieces =
-        operations::splitPolygonGridPieces(rings, grid);
-
-    // concatenate onto the combined result, shifting the offsets
-    std::size_t coordinate_base = all_pieces.coordinates.size();
-    std::size_t ring_base = all_pieces.ring_offsets.size() - 1;
-    all_pieces.coordinates.insert(all_pieces.coordinates.end(),
-                                  pieces.coordinates.begin(),
-                                  pieces.coordinates.end());
-    for (std::size_t r = 1; r < pieces.ring_offsets.size(); r++) {
-      all_pieces.ring_offsets.push_back(coordinate_base +
-                                        pieces.ring_offsets[r]);
-    }
-    for (std::size_t q = 1; q < pieces.polygon_offsets.size(); q++) {
-      all_pieces.polygon_offsets.push_back(ring_base +
-                                           pieces.polygon_offsets[q]);
-      parent.push_back((std::int64_t)p);
-    }
-  }
-
-  py::array_t<std::int64_t> parent_out((py::ssize_t)parent.size());
-  if (!parent.empty()) {
-    std::memcpy(parent_out.mutable_data(), parent.data(),
-                parent.size() * sizeof(std::int64_t));
-  }
-  return py::make_tuple(polygonsFromPieces(all_pieces), parent_out);
-}
-
 std::tuple<int, int> get_cell_indices(py::object linestring, int nrows, int ncols,
                                       std::vector<double> transform) {
   py::tuple bounds = linestring.attr("bounds");
@@ -309,17 +173,16 @@ PYBIND11_MODULE(intersections, m) {
         pybind11::arg("ncols"), pybind11::arg("transform"),
         pybind11::arg("bounded") = false,
         "Split LineString along a grid, returning LineString pieces");
-  m.def("split_linestrings", &snail::splitLineStrings,
-        pybind11::arg("linestrings"), pybind11::arg("nrows"),
-        pybind11::arg("ncols"), pybind11::arg("transform"),
-        pybind11::arg("bounded") = false,
-        "Split LineStrings along a grid, returning LineString pieces and the "
-        "index of the linestring each piece came from");
   m.def("get_cell_indices", &snail::get_cell_indices,
+        pybind11::arg("linestring"), pybind11::arg("nrows"),
+        pybind11::arg("ncols"), pybind11::arg("transform"),
         "Get LineString cell indices in a grid");
-  m.def("split_polygon", &snail::splitPolygon,
+  m.def("split_polygon", &snail::splitPolygon, pybind11::arg("polygon"),
+        pybind11::arg("nrows"), pybind11::arg("ncols"),
+        pybind11::arg("transform"),
         "Split Polygon along a grid, returning Polygon pieces");
-  m.def("split_polygons", &snail::splitPolygons,
-        "Split Polygons along a grid, returning Polygon pieces and the index "
-        "of the polygon each piece came from");
+
+  // Whole geometry columns are exchanged as GeoArrow arrays: this
+  // registers split_linestrings, split_polygons and GeoArrowArray
+  snail::geoarrow::register_module(m);
 }

@@ -9,6 +9,7 @@ import dask.array
 import geopandas
 import numpy
 import pandas
+import pyarrow
 import rasterio
 import xarray
 from shapely import box
@@ -16,6 +17,9 @@ from shapely.ops import linemerge
 
 from snail.core.intersections import (  # type: ignore
     get_cell_indices,
+)
+from snail.core.intersections import (
+    split_geometries as split_geometries_core,
 )
 from snail.core.intersections import (
     split_linestrings as split_linestrings_core,
@@ -37,38 +41,167 @@ else:
     from snail.tqdm_standin import tqdm_standin as tqdm
 
 
-# Features are split in chunks rather than all at once: a single call would
-# give no sign of progress on a long job, and would hold every piece of
-# every feature in memory at once.
-SPLIT_CHUNK_SIZE = 1000
+#: Batch size for splitting an in-memory geometry column.
+#:
+#: The extension splits one Arrow batch at a time, so an in-memory geometry
+#: column is presented to it in batches of this many features: splitting a
+#: whole table at once would give no sign of progress on a long job, and
+#: would hold every piece of every feature in memory at once. A source that
+#: brings its own batching - a GeoParquet reader, a Dataset scan - can be
+#: split directly, and keeps whatever batch size it was read with; this only
+#: governs the batches :func:`to_geoarrow` slices an in-memory column into.
+#:
+#: Each batch costs something fixed to set up and read back, so batches much
+#: smaller than this measurably slow a large split down; much larger ones buy
+#: no more speed and only raise the peak memory.
+SPLIT_BATCH_SIZE = 5000
 
 
-def _split_in_chunks(split_core, geometries, grid, *split_args):
-    """Split geometries with a batch splitter, a chunk at a time
+def to_geoarrow(
+    geometries: geopandas.GeoSeries,
+    batch_size: int = SPLIT_BATCH_SIZE,
+    encoding: str = "geoarrow",
+):
+    """Geometry column as a stream of GeoArrow batches, for the extension
 
-    Returns the pieces, and for each piece the index of the geometry it came
-    from.
+    GeoArrow holds the geometries as flat coordinate and offset buffers,
+    which the extension reads directly - no geometry object is built per
+    feature on either side of the interface. Batches are zero-copy slices
+    of the one Arrow array, and the geometry type travels with them.
+
+    This is what :func:`split_linestrings` and :func:`split_polygons_experimental`
+    use to feed a geometry column to :func:`snail.core.intersections.split_linestrings`
+    or :func:`snail.core.intersections.split_polygons`; call it directly
+    only if you are working with those lower-level, Arrow-native functions
+    yourself.
+
+    Parameters
+    ----------
+    geometries: geopandas.GeoSeries
+        Column of LineString or Polygon geometries to split.
+    batch_size: int
+        Number of features per batch. See :data:`SPLIT_BATCH_SIZE`.
+    encoding: str
+        ``"geoarrow"`` (the default) holds the coordinates in Arrow buffers,
+        which the extension reads in place. It requires every geometry in the
+        column to be the same, single-part type - geopandas raises
+        ``ValueError: Geometry type combination is not supported`` otherwise.
+        ``"WKB"`` serialises each geometry to a blob instead, which is slower
+        to read but can carry a column of mixed or multi-part geometries;
+        that is what :func:`split_geometries` uses.
+
+    Returns
+    -------
+    pyarrow.Table
+        A single-column ``"geometry"`` table, chunked into batches of
+        ``batch_size`` features, implementing the Arrow PyCapsule stream
+        interface (``__arrow_c_stream__``) that the extension consumes.
     """
+    # Import the geometry column through its capsules rather than with
+    # pyarrow.array, which would keep the values but drop the GeoArrow
+    # extension name: that lives on the Arrow *field*, not on its type, and
+    # is what tells the extension - and any later reader - which geometry
+    # type these are.
+    exported = (
+        geometries.to_arrow(geometry_encoding="geoarrow", interleaved=True)
+        if encoding == "geoarrow"
+        else geometries.to_arrow(geometry_encoding=encoding)
+    )
+    schema_capsule, array_capsule = exported.__arrow_c_array__()
+    field = pyarrow.Field._import_from_c_capsule(schema_capsule).with_name("geometry")
+    array = pyarrow.Array._import_from_c_capsule(
+        field.__arrow_c_schema__(), array_capsule
+    )
+    # A table of one column, chunked: only a table carries the field, and so
+    # the extension name, through __arrow_c_stream__ to the extension.
+    batches = [array.slice(at, batch_size) for at in range(0, len(array), batch_size)]
+    return pyarrow.Table.from_arrays(
+        [pyarrow.chunked_array(batches, type=array.type)],
+        schema=pyarrow.schema([field]),
+    )
+
+
+def read_split_stream(stream) -> tuple[numpy.ndarray, numpy.ndarray]:
+    """Read a stream of split pieces from the extension into memory
+
+    The split runs as the stream is read, a batch at a time, but this
+    drains the stream fully and concatenates every batch: use it when you
+    want the pieces as shapely geometries and are content to hold them all
+    at once, which is what :func:`split_linestrings` and
+    :func:`split_polygons_experimental` do. To keep the streaming memory
+    benefit - splitting a source larger than memory, for example - iterate
+    the stream yourself instead, e.g. with
+    ``pyarrow.RecordBatchReader._import_from_c_capsule(stream.__arrow_c_stream__())``,
+    and consume each record batch as it arrives.
+
+    Parameters
+    ----------
+    stream
+        A :class:`snail.core.intersections.SplitStream`, or any object
+        implementing the Arrow PyCapsule stream interface
+        (``__arrow_c_stream__``) with a ``"geometry"`` and a ``"parent"``
+        column, such as the result of
+        :func:`snail.core.intersections.split_linestrings` or
+        :func:`snail.core.intersections.split_polygons`.
+
+    Returns
+    -------
+    geometry: numpy.ndarray
+        The split pieces, as shapely geometries.
+    parent: numpy.ndarray
+        For each piece, the index of the geometry it was split from.
+    """
+    reader = pyarrow.RecordBatchReader._import_from_c_capsule(
+        stream.__arrow_c_stream__()
+    )
+    geometry = []
+    parent = []
+    for batch in tqdm(reader):
+        # read the batch as a frame rather than picking the geometry column
+        # out first: the GeoArrow extension name is on the schema field, and
+        # a column taken off a batch no longer carries it
+        geometry.append(geopandas.GeoDataFrame.from_arrow(batch).geometry.to_numpy())
+        parent.append(batch.column("parent").to_numpy())
+    if not geometry:
+        return numpy.empty(0, dtype=object), numpy.empty(0, dtype=numpy.int64)
+    return numpy.concatenate(geometry), numpy.concatenate(parent)
+
+
+def _splits_frame(features, geometry, parent, grid):
+    """Assemble split pieces back into a frame beside their parent features
+
+    Each piece carries the attributes of the feature it came from, and a
+    "split" column numbering that feature's pieces from zero.
+    """
+    # repeat each parent feature's attributes for each of its pieces
+    splits_df = geopandas.GeoDataFrame(features.iloc[parent])
+    # number each parent's pieces from zero
+    piece_counts = numpy.bincount(parent, minlength=len(features))
+    splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
+        numpy.cumsum(piece_counts) - piece_counts, piece_counts
+    )
+    splits_df.geometry = geometry
+    splits_df.crs = grid.crs
+    return splits_df
+
+
+def _split(split_core, geometries, grid, encoding="geoarrow", **split_kwargs):
+    """Split a geometry column, streaming batches through the extension"""
     if len(geometries) == 0:
         return numpy.empty(0, dtype=object), numpy.empty(0, dtype=numpy.int64)
-    if len(geometries) <= SPLIT_CHUNK_SIZE:
-        return split_core(
-            geometries, grid.width, grid.height, grid.transform, *split_args
+    # The extension counts rows and columns: nrows spans the grid in y and
+    # ncols in x, so they are the grid's height and width respectively.
+    # Passed by name - transposing them silently moves the grid bounds,
+    # which only shows up on a grid that is not square.
+    return read_split_stream(
+        split_core(
+            to_geoarrow(geometries, encoding=encoding),
+            nrows=grid.height,
+            ncols=grid.width,
+            transform=grid.transform,
+            **split_kwargs,
         )
-
-    pieces = []
-    parents = []
-    for start in tqdm(range(0, len(geometries), SPLIT_CHUNK_SIZE)):
-        geometry, parent = split_core(
-            geometries[start : start + SPLIT_CHUNK_SIZE],
-            grid.width,
-            grid.height,
-            grid.transform,
-            *split_args,
-        )
-        pieces.append(geometry)
-        parents.append(parent + start)
-    return numpy.concatenate(pieces), numpy.concatenate(parents)
+    )
 
 
 # Module-level logger
@@ -290,6 +423,18 @@ def split_linestrings(
     contiguous, then exploded to one row per part, resetting the index) with
     a warning. Call :func:`prepare_linestrings` beforehand to opt in to this
     explicitly and keep control of the row index.
+
+    Parameters
+    ----------
+    linestring_features: geopandas.GeoDataFrame
+        Features to split; other columns are carried over onto each piece.
+    grid: GridDefinition
+        Grid to split along.
+    bounded: bool
+        If False (the default), a feature is split for its whole length,
+        including any part that falls outside the grid. If True, splitting
+        stops at the grid's edge: pieces outside the grid are left whole
+        rather than cut at every gridline they would otherwise cross.
     """
     if (linestring_features.geometry.geom_type == "MultiLineString").any():
         logger.warning(
@@ -298,23 +443,14 @@ def split_linestrings(
         )
         linestring_features = prepare_linestrings(linestring_features.copy())
     # split every feature in one call
-    geometry, parent = _split_in_chunks(
+    geometry, parent = _split(
         split_linestrings_core,
-        linestring_features.geometry.to_numpy(),
+        linestring_features.geometry,
         grid,
-        bounded,
+        bounded=bounded,
     )
     logger.info(f"Split {len(linestring_features)} edges into {len(geometry)} pieces")
-    # repeat each parent feature's attributes for each of its pieces
-    splits_df = geopandas.GeoDataFrame(linestring_features.iloc[parent])
-    # number each parent's pieces from zero
-    piece_counts = numpy.bincount(parent, minlength=len(linestring_features))
-    splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
-        numpy.cumsum(piece_counts) - piece_counts, piece_counts
-    )
-    splits_df.geometry = geometry
-    splits_df.crs = grid.crs
-    return splits_df
+    return _splits_frame(linestring_features, geometry, parent, grid)
 
 
 def split_polygons(
@@ -361,20 +497,56 @@ def split_polygons_experimental(
     """
     # split every feature in one call: crossing into the extension per
     # feature costs far more than the splitting itself
-    geometry, parent = _split_in_chunks(
-        split_polygons_core, polygon_features.geometry.to_numpy(), grid
-    )
+    geometry, parent = _split(split_polygons_core, polygon_features.geometry, grid)
     logger.info(f"  Split {len(polygon_features)} areas into {len(geometry)} pieces")
-    # repeat each parent feature's attributes for each of its pieces
-    splits_df = geopandas.GeoDataFrame(polygon_features.iloc[parent])
-    # number each parent's pieces from zero
-    piece_counts = numpy.bincount(parent, minlength=len(polygon_features))
-    splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
-        numpy.cumsum(piece_counts) - piece_counts, piece_counts
+    return _splits_frame(polygon_features, geometry, parent, grid)
+
+
+def split_geometries(
+    features: geopandas.GeoDataFrame,
+    grid: GridDefinition,
+    bounded=False,
+) -> geopandas.GeoDataFrame:
+    """Split features of any geometry type along a grid
+
+    Unlike :func:`split_linestrings` and :func:`split_polygons_experimental`,
+    this does not require every feature to be the same type. Each is handled
+    on its own terms: LineStrings and Polygons are split, Points pass through
+    unchanged, multi-part geometries are split part by part, and a
+    GeometryCollection is split member by member. Every piece carries the
+    attributes of the feature it came from, whatever that feature was, and an
+    empty geometry comes back as itself rather than dropping its row.
+
+    This is what to reach for when a layer holds more than one geometry type.
+    For a layer that holds only one, the typed functions are cheaper: they
+    read and write the coordinates as Arrow buffers, where this serialises
+    every geometry through WKB in both directions.
+
+    Parameters
+    ----------
+    features: geopandas.GeoDataFrame
+        Features to split; other columns are carried over onto each piece.
+    grid: GridDefinition
+        Grid to split along.
+    bounded: bool
+        As :func:`split_linestrings`. Applies to the LineStrings among the
+        features; Polygons are always split for their whole extent.
+
+    Returns
+    -------
+    geopandas.GeoDataFrame
+        One row per piece, with a ``"split"`` column numbering each feature's
+        pieces from zero.
+    """
+    geometry, parent = _split(
+        split_geometries_core,
+        features.geometry,
+        grid,
+        encoding="WKB",
+        bounded=bounded,
     )
-    splits_df.geometry = geometry
-    splits_df.crs = grid.crs
-    return splits_df
+    logger.info(f"Split {len(features)} features into {len(geometry)} pieces")
+    return _splits_frame(features, geometry, parent, grid)
 
 
 def _try_merge(geom):
@@ -499,7 +671,9 @@ def get_indices(
 
     N.B. There is no checking whether a geometry spans more than one cell.
     """
-    i, j = get_cell_indices(geom, grid.height, grid.width, grid.transform)
+    i, j = get_cell_indices(
+        geom, nrows=grid.height, ncols=grid.width, transform=grid.transform
+    )
 
     # Raise error if cell index would be out of bounds
     # assert 0 <= i < t.width

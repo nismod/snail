@@ -24,13 +24,15 @@ keywords = []
 requires-python = ">=3.11"
 dependencies = [
     "dask[array]",
-    "geopandas",
+    # GeoSeries.to_arrow / from_arrow, for GeoArrow exchange with the extension
+    "geopandas>=1.0",
     "igraph",
     "matplotlib",
     "numpy",
     "openpyxl",
     "pandera",
-    "pyarrow",
+    # GeoSeries.to_arrow / from_arrow require pyarrow >= 14
+    "pyarrow>=14",
     "pyogrio",
     "rasterio",
     "rioxarray",
@@ -43,7 +45,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "affine",
-    "ruff",
+    # Pinned to a minor series: CI runs `ruff check` as a gate, so an
+    # unpinned ruff turns any new default rule into a red build on code
+    # nobody touched.
+    "ruff>=0.16,<0.17",
     "hilbertcurve",
     "nbstripout",
     "pytest-cov",
