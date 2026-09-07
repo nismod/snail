@@ -902,8 +902,27 @@ Workspace &splitWorkspace() {
 }
 } // namespace
 
+PolygonPieces splitPolygonGridPieces(const std::vector<CoordSpan> &rings_in,
+                                     const grid::Grid &grid) {
+  PolygonPieces pieces;
+  splitPolygonGridPieces(rings_in, grid, pieces);
+  return pieces;
+}
+
 PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
                                      const grid::Grid &grid) {
+  std::vector<CoordSpan> spans(rings_in.begin(), rings_in.end());
+  return splitPolygonGridPieces(spans, grid);
+}
+
+void splitPolygonGridPieces(const std::vector<CoordSpan> &rings_in,
+                            const grid::Grid &grid, PolygonPieces &results) {
+  // Pieces are appended, so the passes at the end of this function - back to
+  // world coordinates, and the mirror correction - must touch only what this
+  // call adds, not what a previous polygon left behind.
+  const std::size_t coordinate_base = results.coordinates.size();
+  const std::size_t ring_base = results.ring_offsets.size() - 1;
+
   Workspace &work = splitWorkspace();
   std::vector<linestr> &rings = work.rings;
   std::vector<Piece> &bucketed = work.bucketed;
@@ -943,7 +962,7 @@ PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
     if (area2 == 0.0) {
       if (is_exterior) {
         // degenerate polygon
-        return PolygonPieces();
+        return;
       }
       // degenerate hole
       ring.clear();
@@ -955,7 +974,7 @@ PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
     used_rings++;
   }
   if (used_rings == 0) {
-    return PolygonPieces();
+    return;
   }
 
   // Split each ring at every grid line crossing and bucket the resulting
@@ -1025,7 +1044,6 @@ PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
   // the cell centre an odd number of times: a chain does so exactly when
   // its endpoints lie on opposite sides of that line, and a closed piece
   // never does.
-  PolygonPieces results;
   for (std::size_t start = 0; start < bucketed.size();) {
     const CellIndex cell = bucketed[start].cell;
     const double level = cell.row + 0.5;
@@ -1070,9 +1088,19 @@ PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
     }
     start = at;
   }
-  results.coordinates.reserve(results.coordinates.size() + interior * 5);
-  results.ring_offsets.reserve(results.ring_offsets.size() + interior);
-  results.polygon_offsets.reserve(results.polygon_offsets.size() + interior);
+  // reserve() takes an exact capacity rather than growing geometrically, so
+  // asking for just what this polygon needs would recopy the whole of an
+  // accumulator that already holds other polygons - once per polygon, which
+  // is quadratic over a batch. Ask for at least double what is there.
+  auto reserveAtLeast = [](auto &vec, std::size_t needed) {
+    if (needed > vec.capacity()) {
+      vec.reserve(std::max(needed, vec.capacity() * 2));
+    }
+  };
+  reserveAtLeast(results.coordinates, results.coordinates.size() + interior * 5);
+  reserveAtLeast(results.ring_offsets, results.ring_offsets.size() + interior);
+  reserveAtLeast(results.polygon_offsets,
+                 results.polygon_offsets.size() + interior);
 
   for (std::size_t start = 0; start < boundary.size();) {
     const long row = boundary[start].cell.row;
@@ -1103,17 +1131,17 @@ PolygonPieces splitPolygonGridPieces(const std::vector<linestr> &rings_in,
   const double cx = grid.grid_to_world.c;
   const double ey = grid.grid_to_world.e;
   const double fy = grid.grid_to_world.f;
-  for (Coord &point : results.coordinates) {
+  for (std::size_t i = coordinate_base; i < results.coordinates.size(); i++) {
+    Coord &point = results.coordinates[i];
     point.x = point.x * ax + cx;
     point.y = point.y * ey + fy;
   }
   if (mirrored) {
-    for (std::size_t r = 0; r + 1 < results.ring_offsets.size(); r++) {
+    for (std::size_t r = ring_base; r + 1 < results.ring_offsets.size(); r++) {
       std::reverse(results.coordinates.begin() + results.ring_offsets[r],
                    results.coordinates.begin() + results.ring_offsets[r + 1]);
     }
   }
-  return results;
 }
 
 std::vector<geometry::Polygon>
@@ -1150,10 +1178,15 @@ static CellIndex segmentCell(const Coord a, const Coord b) {
                    static_cast<long>(std::floor(my))};
 }
 
-LinePieces splitLineStringGrid(const linestr &coordinates,
-                               const grid::Grid &grid, bool bounded) {
+LinePieces splitLineStringGrid(CoordSpan coordinates, const grid::Grid &grid,
+                               bool bounded) {
   LinePieces pieces;
+  splitLineStringGrid(coordinates, grid, bounded, pieces);
+  return pieces;
+}
 
+void splitLineStringGrid(CoordSpan coordinates, const grid::Grid &grid,
+                         bool bounded, LinePieces &pieces) {
   // Into grid coordinates once, snapping vertices onto grid lines where
   // they lie within tolerance, and dropping points repeated in place. Each
   // is remembered against the input vertex it came from, so that the
@@ -1173,7 +1206,7 @@ LinePieces splitLineStringGrid(const linestr &coordinates,
     }
   }
   if (line.size() < 2) {
-    return pieces;
+    return;
   }
 
   // Every point at which the line may change cell: its own vertices, and
@@ -1209,7 +1242,7 @@ LinePieces splitLineStringGrid(const linestr &coordinates,
     }
   }
   if (nodes.size() < 2) {
-    return pieces;
+    return;
   }
 
   // Run of consecutive spans sharing a cell becomes one piece. Taking the
@@ -1235,8 +1268,6 @@ LinePieces splitLineStringGrid(const linestr &coordinates,
     current = cell;
   }
   emit(start, nodes.size() - 1);
-
-  return pieces;
 }
 
 } // namespace snail::operations
