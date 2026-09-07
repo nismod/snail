@@ -1,0 +1,49 @@
+snail
+Copyright (c) 2020 Tom Russell and snail contributors
+
+snail itself is distributed under the MIT License; see LICENSE.
+
+This product bundles the following third-party software, whose own licence
+and notice files are kept alongside the bundled source:
+
+--------------------------------------------------------------------------
+
+Apache Arrow nanoarrow
+Copyright 2023 The Apache Software Foundation
+
+Licensed under the Apache License, Version 2.0.
+
+Bundled at extension/extern/nanoarrow, generated from the upstream source
+release by scripts/vendor_nanoarrow.py.
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+--------------------------------------------------------------------------
+
+geoarrow-c
+Copyright 2023 Dewey Dunnington and geoarrow-c contributors
+
+Licensed under the Apache License, Version 2.0.
+
+Bundled at extension/extern/geoarrow, generated from a pinned upstream
+revision by scripts/vendor_geoarrow.py.
+
+--------------------------------------------------------------------------
+
+Catch2
+
+Boost Software License - Version 1.0 - August 17th, 2003
+
+Submodule at extension/extern/Catch2
+
+--------------------------------------------------------------------------
+
+pybind11
+Copyright (c) 2016 Wenzel Jakob <wenzel.jakob@epfl.ch>, All rights reserved.
+
+pybind11 is provided under a BSD-style license that can be found in the
+`LICENSE <https://github.com/pybind/pybind11/blob/master/LICENSE>`_
+file.
+
+Submodule at extension/extern/pybind11
