@@ -133,7 +133,7 @@ def read_split_stream(stream) -> tuple[numpy.ndarray, numpy.ndarray]:
     :func:`split_polygons_experimental` do. To keep the streaming memory
     benefit - splitting a source larger than memory, for example - iterate
     the stream yourself instead, e.g. with
-    ``pyarrow.RecordBatchReader._import_from_c_capsule(stream.__arrow_c_stream__())``,
+        ``pyarrow.RecordBatchReader.from_stream(stream)``,
     and consume each record batch as it arrives.
 
     Parameters
@@ -153,9 +153,7 @@ def read_split_stream(stream) -> tuple[numpy.ndarray, numpy.ndarray]:
     parent: numpy.ndarray
         For each piece, the index of the geometry it was split from.
     """
-    reader = pyarrow.RecordBatchReader._import_from_c_capsule(
-        stream.__arrow_c_stream__()
-    )
+    reader = pyarrow.RecordBatchReader.from_stream(stream)
     geometry = []
     parent = []
     for batch in tqdm(reader):
