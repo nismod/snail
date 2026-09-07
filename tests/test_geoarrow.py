@@ -30,7 +30,7 @@ TRANSFORM = (1, 0, 0, 0, 1, 0)
 
 def batches_of(stream):
     """Every record batch of a split stream"""
-    reader = pa.RecordBatchReader._import_from_c_capsule(stream.__arrow_c_stream__())
+    reader = pa.RecordBatchReader.from_stream(stream)
     return list(reader)
 
 
@@ -444,9 +444,7 @@ class TestMixed:
         )
         assert stream.geometry_type == "geoarrow.wkb"
 
-        reader = pa.RecordBatchReader._import_from_c_capsule(
-            stream.__arrow_c_stream__()
-        )
+        reader = pa.RecordBatchReader.from_stream(stream)
         schema = reader.schema
         assert schema.names == ["geometry", "parent"]
         assert schema.field("geometry").type == pa.binary()
@@ -616,9 +614,7 @@ class TestStream:
         )
         assert pulled == []
 
-        reader = pa.RecordBatchReader._import_from_c_capsule(
-            stream.__arrow_c_stream__()
-        )
+        reader = pa.RecordBatchReader.from_stream(stream)
         assert pulled == []
 
         pieces = iter(reader)
@@ -690,9 +686,7 @@ class TestStream:
             stream = split(to_geoarrow(geometries), NROWS, NCOLS, TRANSFORM)
             assert stream.geometry_type == extension.decode()
 
-            reader = pa.RecordBatchReader._import_from_c_capsule(
-                stream.__arrow_c_stream__()
-            )
+            reader = pa.RecordBatchReader.from_stream(stream)
             schema = reader.schema
             assert schema.names == ["geometry", "parent"]
             metadata = schema.field("geometry").metadata
