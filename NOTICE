@@ -35,7 +35,8 @@ Catch2
 
 Boost Software License - Version 1.0 - August 17th, 2003
 
-Submodule at extension/extern/Catch2
+Bundled at extension/extern/Catch2, downloaded from a pinned upstream
+revision by scripts/vendor_catch2.py.
 
 --------------------------------------------------------------------------
 

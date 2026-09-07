@@ -60,6 +60,7 @@ Geometries of more than one type
 
 :func:`snail.core.intersections.split_geometries` can handle a stream of mixed
 geometry types:
+
 - LineStrings and Polygons are split
 - Points pass through
 - multi-part geometries are split part by part
