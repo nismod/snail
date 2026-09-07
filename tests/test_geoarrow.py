@@ -724,6 +724,21 @@ class TestStream:
 
         assert result.crs == source.crs
 
+    def test_rejects_non_planar_edges(self, linestrings):
+        source = linestrings.to_arrow(geometry_encoding="geoarrow")
+        schema_capsule, array_capsule = source.__arrow_c_array__()
+        field = pa.Field._import_from_c_capsule(schema_capsule)
+        array = pa.Array._import_from_c_capsule(
+            field.__arrow_c_schema__(), array_capsule
+        )
+        metadata = dict(field.metadata or {})
+        metadata[b"ARROW:extension:metadata"] = b'{"edges":"spherical"}'
+        field = field.with_metadata(metadata)
+        table = pa.Table.from_arrays([array], schema=pa.schema([field]))
+
+        with pytest.raises(ValueError, match="non-planar"):
+            core_split_linestrings(table, NROWS, NCOLS, TRANSFORM)
+
     def test_pieces_outlive_the_stream(self, linestrings):
         """A batch owns its buffers, so it survives the stream closing"""
         batches = batches_of(

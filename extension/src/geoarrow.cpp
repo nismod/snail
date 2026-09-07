@@ -116,6 +116,7 @@ public:
     } else {
       encoding = checkGeometrySchema(schema.get(), type);
     }
+    checkPlanarEdges(geometrySchema());
 
     // One reader over the geometry column, laid out from its schema now and
     // pointed at each batch as it arrives. Which reader depends on how the
