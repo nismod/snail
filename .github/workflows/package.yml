@@ -3,6 +3,10 @@ name: package
 on:
   release:
     types: [published]
+  # lets a maintainer build the sdist and wheels on demand, from any branch,
+  # without cutting a release - upload_all's condition below only ever
+  # passes for an actual release, so this can never publish to PyPI
+  workflow_dispatch:
 
 jobs:
   build_sdist:
