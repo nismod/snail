@@ -170,6 +170,15 @@ class TestSplitFeatures:
         assert "index_i" in splits.columns
         assert "index_j" in splits.columns
 
+    def test_split_geometry_collection_layer(self, geometry_collection_features):
+        grid = GridDefinition(crs=None, width=4, height=4, transform=(1, 0, 0, 0, 1, 0))
+
+        splits = split_features(geometry_collection_features, grid)
+
+        assert len(splits) == 5
+        assert list(splits.geometry.geom_type) == ["Point"] + ["LineString"] * 4
+        assert set(splits.name) == {"collection"}
+
 
 def test_split_linestrings_coerces_multilinestring(caplog):
     grid = GridDefinition(crs=None, width=4, height=4, transform=(1, 0, 0, 0, 1, 0))
