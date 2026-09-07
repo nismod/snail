@@ -72,7 +72,7 @@ int main() {
   snail::grid::Grid unit_grid(100, 100, snail::transform::Affine());
   linestr small_circle = circle(50.5, 50.5, 2.2, 32);
   linestr medium_circle = circle(50.5, 50.5, 10.2, 64);
-  linestr large_circle = circle(50.0, 50.0, 45.0, 256);
+  linestr large_circle = circle(50.0, 50.0, 500.0, 1000);
 
   // A large circle with a large hole: boundary-heavy, few interior cells
   std::vector<linestr> annulus = {large_circle, circle(50.0, 50.0, 42.0, 256)};
@@ -92,7 +92,7 @@ int main() {
   benchmark("building (2 cells)", {building}, building_grid, 200000);
   benchmark("small circle (~5x5 cells)", {small_circle}, unit_grid, 50000);
   benchmark("medium circle (~20x20 cells)", {medium_circle}, unit_grid, 20000);
-  benchmark("large circle (~90x90 cells)", {large_circle}, unit_grid, 2000);
+  benchmark("large circle (~1000x1000 cells)", {large_circle}, unit_grid, 2000);
   benchmark("annulus (~90x90, wide hole)", annulus, unit_grid, 2000);
 
   // 500 small polygons, split one after another as the batch entry point
@@ -100,13 +100,15 @@ int main() {
   {
     std::size_t pieces = 0;
     for (const linestr &ring : buildings) {
-      pieces += snail::operations::splitPolygonGridPieces({ring}, building_grid)
+      std::vector<linestr> rings{ring};
+      pieces += snail::operations::splitPolygonGridPieces(rings, building_grid)
                     .size();
     }
     auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < 400; i++) {
       for (const linestr &ring : buildings) {
-        snail::operations::splitPolygonGridPieces({ring}, building_grid);
+        std::vector<linestr> rings{ring};
+        snail::operations::splitPolygonGridPieces(rings, building_grid);
       }
     }
     auto end = std::chrono::steady_clock::now();
