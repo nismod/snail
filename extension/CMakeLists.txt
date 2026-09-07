@@ -15,7 +15,10 @@ if(NOT MSVC)
   set(SNAIL_WARNING_FLAGS -Wall -Wextra -Wpedantic)
 endif()
 
-add_subdirectory(extern/Catch2)
+add_library(Catch2 INTERFACE)
+add_library(Catch2::Catch2 ALIAS Catch2)
+target_sources(Catch2 INTERFACE ${VENDOR_DIR}/Catch2/catch.hpp)
+target_include_directories(Catch2 SYSTEM INTERFACE ${VENDOR_DIR}/Catch2)
 
 add_library(vendor_arrow OBJECT
   ${VENDOR_DIR}/nanoarrow/nanoarrow.c

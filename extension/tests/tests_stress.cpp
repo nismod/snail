@@ -6,7 +6,7 @@
 // and the rings that come out are well formed. Shapes are drawn from a
 // deterministic generator, so a failure here reproduces everywhere.
 
-#include <catch2/catch.hpp>
+#include <catch.hpp>
 #include <cmath>
 #include <cstdint>
 #include <limits>

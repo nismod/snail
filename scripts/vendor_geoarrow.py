@@ -6,10 +6,9 @@ which is what lets the extension read a GeoParquet file written with
 geopandas' defaults and split a layer holding more than one geometry type.
 Like nanoarrow it has no amalgamation to download - the two-file bundle is
 generated from a source tree by its own CMake - so this wraps that, and the
-vendored copy in ``extension/vendor/geoarrow`` can be reproduced or moved to a
-new revision without anyone having to remember the incantation.
+vendored copy in ``extension/extern/geoarrow`` can be reproduced.
 
-Run from anywhere::
+Run::
 
     python scripts/vendor_geoarrow.py
 
@@ -35,7 +34,7 @@ Three build options matter and none of them is cosmetic:
     them off the bundle needs nothing beyond nanoarrow and libc.
 
 The bundle deliberately excludes nanoarrow, so the generated ``geoarrow.c``
-compiles against the copy already vendored at ``extension/vendor/nanoarrow``
+compiles against the copy already vendored at ``extension/extern/nanoarrow``
 and there is exactly one nanoarrow in the build.
 """
 
