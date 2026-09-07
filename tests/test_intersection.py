@@ -592,9 +592,9 @@ def _random_test_polygons(seed, count):
         centre = Point(rng.uniform(1, 9), rng.uniform(1, 9))
         radius = rng.uniform(0.05, 3.0)
         resolution = rng.choice([1, 2, 4, 8])
-        geom = centre.buffer(radius, resolution=resolution)
+        geom = centre.buffer(radius, quad_segs=resolution)
         if rng.random() < 0.4:
-            geom = geom.difference(centre.buffer(radius * 0.4, resolution=resolution))
+            geom = geom.difference(centre.buffer(radius * 0.4, quad_segs=resolution))
         if rng.random() < 0.5:
             # snap coordinates onto a coarse grid, to land vertices and
             # edges exactly on cell borders, then drop the precision model

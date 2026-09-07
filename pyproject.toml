@@ -50,6 +50,7 @@ dev = [
     "hilbertcurve",
     "nbstripout",
     "pytest-cov",
+    "pytest-xdist",
     "pytest",
 ]
 docs = ["sphinx", "nbsphinx", "sphinx_gallery", "numpydoc"]
@@ -88,6 +89,11 @@ include = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    # These dependencies still use Affine's deprecated multiplication syntax.
+    # The warnings are emitted inside the dependencies, not by snail code.
+    "ignore::PendingDeprecationWarning",
+]
 
 [tool.ruff]
 exclude = [

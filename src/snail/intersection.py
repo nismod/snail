@@ -174,14 +174,15 @@ def _splits_frame(features, geometry, parent, grid):
     "split" column numbering that feature's pieces from zero.
     """
     # repeat each parent feature's attributes for each of its pieces
-    splits_df = geopandas.GeoDataFrame(features.iloc[parent])
+    splits_df = geopandas.GeoDataFrame(features.iloc[parent]).set_crs(
+        grid.crs, allow_override=True
+    )
     # number each parent's pieces from zero
     piece_counts = numpy.bincount(parent, minlength=len(features))
     splits_df["split"] = numpy.arange(len(parent)) - numpy.repeat(
         numpy.cumsum(piece_counts) - piece_counts, piece_counts
     )
     splits_df.geometry = geometry
-    splits_df.crs = grid.crs
     return splits_df
 
 
