@@ -1,7 +1,3 @@
-[submodule "extension/extern/Catch2"]
-	path = extension/extern/Catch2
-	url = https://github.com/catchorg/Catch2.git
-	branch = v2.x
 [submodule "extension/extern/pybind11"]
 	path = extension/extern/pybind11
 	url = ../../pybind/pybind11
