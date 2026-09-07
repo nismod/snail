@@ -698,8 +698,8 @@ class TestStream:
             metadata = schema.field("geometry").metadata
             assert metadata[b"ARROW:extension:name"] == extension
             # GeoArrow carries a geometry's CRS and edge type in a JSON object
-            # beside its name. A split says nothing about either - the pieces
-            # are in whatever the source's CRS was - so the object is empty.
+            # beside its name. This fixture has no CRS or edge metadata, so
+            # the preserved object is empty.
             assert json.loads(metadata[b"ARROW:extension:metadata"]) == {}
             assert schema.field("parent").type == pa.int64()
             # A split never produces a null piece, and GeoArrow asks that the
@@ -709,6 +709,20 @@ class TestStream:
             assert not schema.field("parent").nullable
             assert_not_nullable(schema.field("geometry").type)
             list(reader)
+
+    @pytest.mark.parametrize("encoding", ["geoarrow", "WKB"])
+    def test_result_preserves_crs(self, linestrings, encoding):
+        source = linestrings.set_crs("EPSG:4326")
+        stream = core_split_linestrings(
+            source.to_arrow(geometry_encoding=encoding),
+            NROWS,
+            NCOLS,
+            TRANSFORM,
+        )
+        batch = batches_of(stream)[0]
+        result = gpd.GeoDataFrame.from_arrow(batch)
+
+        assert result.crs == source.crs
 
     def test_pieces_outlive_the_stream(self, linestrings):
         """A batch owns its buffers, so it survives the stream closing"""

@@ -174,7 +174,7 @@ struct BatchData {
 
 /// Build the schema of the split stream: record batches of a geometry
 /// column and the index of the geometry each piece came from
-void exportSchema(GeometryType type, ArrowSchema *out);
+void exportSchema(GeometryType type, const ArrowSchema *source, ArrowSchema *out);
 
 /// Build a record batch over a batch of split pieces, giving Arrow the
 /// split's own buffers rather than copying them out

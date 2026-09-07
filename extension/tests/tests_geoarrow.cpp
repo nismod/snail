@@ -288,7 +288,7 @@ TEST_CASE("The exported schema declares its encoding and no nulls",
 
   for (const Expected &expected : cases) {
     nanoarrow::UniqueSchema schema;
-    exportSchema(expected.type, schema.get());
+    exportSchema(expected.type, nullptr, schema.get());
 
     REQUIRE(std::string(schema->format) == "+s");
     REQUIRE(schema->n_children == 2);
