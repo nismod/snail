@@ -69,6 +69,10 @@ std::string metadataValue(const char *metadata, const char *key);
 /// the type check for those happens per feature as they are read.
 Encoding checkGeometrySchema(const ArrowSchema *schema, GeometryType type);
 
+/// Validate the GeoArrow extension metadata supported by the planar splitter.
+/// A missing metadata object means the default planar edge type.
+void checkPlanarEdges(const ArrowSchema *schema);
+
 /// A geoarrow.wkb batch, read through geoarrow-c.
 ///
 /// WKB is a serialised encoding: the coordinates sit inside each blob, so

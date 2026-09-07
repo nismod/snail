@@ -334,6 +334,25 @@ Encoding checkGeometrySchema(const ArrowSchema *schema, GeometryType type) {
   return checkExtensionName(schema, type);
 }
 
+void checkPlanarEdges(const ArrowSchema *schema) {
+  const std::string serialized =
+      metadataValue(schema->metadata, "ARROW:extension:metadata");
+  const GeoArrowStringView extension_metadata{
+      serialized.data(), static_cast<int64_t>(serialized.size())};
+  GeoArrowMetadataView metadata;
+  GeoArrowError error;
+  if (GeoArrowMetadataViewInit(&metadata, extension_metadata, &error) !=
+      GEOARROW_OK) {
+    throw std::invalid_argument(
+        std::string("Could not read GeoArrow extension metadata: ") +
+        error.message);
+  }
+  if (metadata.edge_type != GEOARROW_EDGE_TYPE_PLANAR) {
+    throw std::invalid_argument(
+        "Cannot split GeoArrow geometries with non-planar edges");
+  }
+}
+
 // -- Reading WKB -------------------------------------------------------------
 
 WkbReader::~WkbReader() {
