@@ -20,6 +20,7 @@ from snail.intersection import (
     prepare_points,
     prepare_polygons,
     split_features_for_rasters,
+    split_geometries,
     split_linestrings,
     split_points,
     split_polygons,
@@ -227,6 +228,14 @@ def split_features(
 
 def _prepare_and_split_funcs(features: geopandas.GeoDataFrame, experimental: bool):
     """Pick prepare and split functions for the features' geometry type"""
+    kinds = _geom_kinds(features)
+    if len(kinds) > 1:
+        # No typed split can take a layer of several kinds at once, and the
+        # first feature's type is no guide to the rest of them
+        logger.info("Splitting mixed geometries (%s)", ", ".join(sorted(kinds)))
+        # split_geometries explodes multi-part geometries itself, so there is
+        # no separate preparation step
+        return lambda f: f, split_geometries
     geom_type = _sample_geom_type(features)
     if "Point" in geom_type:
         return prepare_points, split_points
@@ -243,6 +252,21 @@ def _sample_geom_type(features: geopandas.GeoDataFrame) -> str:
     if features.empty:
         raise ValueError("Expected features, got an empty GeoDataFrame")
     return features.iloc[0].geometry.geom_type
+
+
+def _geom_kinds(features: geopandas.GeoDataFrame) -> set:
+    """What kinds of geometry a layer holds.
+
+    Multi-part types count as their single-part kind, because that is what
+    decides how a layer is split: LineStrings and MultiLineStrings together
+    are one kind of thing, and prepare_linestrings turns the second into the
+    first. LineStrings and Polygons together are two, and no single typed
+    split can take them.
+    """
+    return {
+        kind.replace("Multi", "")
+        for kind in features.geometry.geom_type.dropna().unique()
+    }
 
 
 def _crs_equal(a, b) -> bool:
