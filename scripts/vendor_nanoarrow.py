@@ -4,10 +4,9 @@
 nanoarrow is not distributed as a system library and has no pre-built
 amalgamation to download - the two-file (plus C++ header) bundle is generated
 from a source release by a script that ships with it. This wraps that, so the
-vendored copy in ``extension/vendor/nanoarrow`` can be reproduced or moved to a
-new release without anyone having to remember the incantation.
+vendored copy in ``extension/extern/nanoarrow`` can be reproduced.
 
-Run from anywhere::
+Run::
 
     python scripts/vendor_nanoarrow.py
 
