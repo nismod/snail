@@ -344,7 +344,7 @@ private:
 
   int GetSchema(ArrowSchema *out) {
     try {
-      exportSchema(state->type, out);
+      exportSchema(state->type, state->input.geometrySchema(), out);
     } catch (const std::exception &error) {
       return failed(error, EIO);
     }

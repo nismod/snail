@@ -565,12 +565,22 @@ static void clearNullable(ArrowSchema *schema) {
 /// GeoArrow reader looks for. WKB comes out of the same call as a binary
 /// column carrying the same kind of metadata, so all three encodings are one
 /// line apart. nanoarrow puts the field beside the parent index in a struct.
-void exportSchema(GeometryType type, ArrowSchema *out) {
+void exportSchema(GeometryType type, const ArrowSchema *source,
+                  ArrowSchema *out) {
   nanoarrow::UniqueSchema geometry;
   if (GeoArrowSchemaInitExtension(geometry.get(), writtenAs(type)) !=
       GEOARROW_OK) {
     throw std::runtime_error(std::string("Could not describe a column of ") +
                              extensionName(type));
+  }
+  // The split changes storage encoding/type but not the coordinate reference
+  // system. Keep the source's GeoArrow extension metadata when it has one;
+  // GeoArrowSchemaInitExtension already supplies the canonical empty object
+  // for plain Arrow arrays without metadata.
+  if (source != nullptr &&
+      !metadataValue(source->metadata, "ARROW:extension:metadata").empty() &&
+      GeoArrowSchemaSetMetadataFrom(geometry.get(), source) != GEOARROW_OK) {
+    throw std::runtime_error("Could not preserve GeoArrow extension metadata");
   }
   NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(geometry.get(), "geometry"));
 
