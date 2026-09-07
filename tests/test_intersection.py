@@ -22,6 +22,7 @@ from snail.intersection import (
     apply_indices,
     generate_grid_boxes,
     get_raster_values_for_splits,
+    split_geometries,
     split_linestrings,
     split_polygons,
     split_polygons_experimental,
@@ -236,6 +237,62 @@ class TestSnailIntersections:
             assert actual_geom.equals(expected_geom)
         assert_array_equal(actual["col1"].values, expected["col1"].values)
 
+    def test_split_geometries_matches_the_typed_splits(self, grid, linestrings):
+        """A layer of one type must split the same way through either
+        entry point - the typed ones are cheaper, not different"""
+        typed = split_linestrings(linestrings, grid)
+        mixed = split_geometries(linestrings, grid)
+
+        assert len(mixed) == len(typed)
+        for actual, expected in zip(mixed.geometry, typed.geometry):
+            assert actual.equals_exact(expected, 1e-12)
+        assert_array_equal(mixed["split"].values, typed["split"].values)
+        assert_array_equal(mixed["col1"].values, typed["col1"].values)
+
+    def test_split_geometries_carries_attributes_across_types(self, grid):
+        """Every piece keeps its feature's attributes, whatever the feature
+        was, and each feature's pieces are numbered from zero"""
+        features = gpd.GeoDataFrame(
+            {"name": ["point", "line", "area"]},
+            geometry=[
+                Point(2.5, 2.5),
+                LineString([(0.5, 0.5), (3.5, 0.5)]),
+                Polygon([(0.5, 0.5), (2.5, 0.5), (2.5, 2.5), (0.5, 2.5)]),
+            ],
+        )
+
+        splits = split_geometries(features, grid)
+
+        counts = splits.groupby("name").size()
+        # a point is not split; the line crosses x = 1, 2 and 3; the polygon
+        # covers nine whole cells
+        assert counts["point"] == 1
+        assert counts["line"] == 4
+        assert counts["area"] == 9
+        for name, group in splits.groupby("name"):
+            assert sorted(group["split"]) == list(range(len(group))), name
+        assert list(splits[splits.name == "area"].geometry.geom_type) == (
+            ["Polygon"] * 9
+        )
+
+    def test_split_geometries_keeps_empty_geometries(self, grid):
+        """An empty geometry has nothing to split, and dropping it would take
+        its row's attributes with it"""
+        features = gpd.GeoDataFrame(
+            {"name": ["line", "nothing"]},
+            geometry=[
+                LineString([(0.5, 0.5), (3.5, 0.5)]),
+                shapely.from_wkt("GEOMETRYCOLLECTION EMPTY"),
+            ],
+        )
+
+        splits = split_geometries(features, grid)
+
+        assert list(splits[splits.name == "nothing"].geometry.geom_type) == [
+            "GeometryCollection"
+        ]
+        assert splits[splits.name == "nothing"].geometry.iloc[0].is_empty
+
     def test_split_polygons_experimental_with_hole(self, grid):
         polygon_with_hole = Polygon(
             [(0.5, 0.5), (2.5, 0.5), (2.5, 2.5), (0.5, 2.5)],
@@ -397,6 +454,45 @@ def test_split_linestrings_collinear_with_grid_edge(grid):
         [(0.0, 4.0), (0.0, 7.0)],
     ]
     assert coords == expected_coords
+
+
+def test_split_linestrings_bounded_on_non_square_grid():
+    # regression test: the extension counts rows (y) and columns (x), so a
+    # grid's height and width must reach it that way round. Transposing them
+    # moves the bounds used by bounded=True, which a square grid cannot show.
+    # This grid is 8 cells wide and 2 high, so x runs 0..8 and y runs 0..2.
+    grid = GridDefinition(crs=None, width=8, height=2, transform=(1, 0, 0, 0, 1, 0))
+
+    # runs the width of the grid, overhanging its western edge: splits at
+    # every gridline up to x = 8, not merely up to x = 2
+    along_x = gpd.GeoDataFrame(
+        {"id": [1]}, geometry=[LineString([(-2.0, 0.5), (7.5, 0.5)])]
+    )
+    splits = split_linestrings(along_x, grid, bounded=True)
+    assert [list(geom.coords) for geom in splits.geometry] == [
+        [(-2.0, 0.5), (0.0, 0.5)],
+        [(0.0, 0.5), (1.0, 0.5)],
+        [(1.0, 0.5), (2.0, 0.5)],
+        [(2.0, 0.5), (3.0, 0.5)],
+        [(3.0, 0.5), (4.0, 0.5)],
+        [(4.0, 0.5), (5.0, 0.5)],
+        [(5.0, 0.5), (6.0, 0.5)],
+        [(6.0, 0.5), (7.0, 0.5)],
+        [(7.0, 0.5), (7.5, 0.5)],
+    ]
+
+    # the same the other way about: the grid is only 2 cells high, so the
+    # part of the line above y = 2 is outside it and stays unsplit
+    along_y = gpd.GeoDataFrame(
+        {"id": [1]}, geometry=[LineString([(0.5, -2.0), (0.5, 7.5)])]
+    )
+    splits = split_linestrings(along_y, grid, bounded=True)
+    assert [list(geom.coords) for geom in splits.geometry] == [
+        [(0.5, -2.0), (0.5, 0.0)],
+        [(0.5, 0.0), (0.5, 1.0)],
+        [(0.5, 1.0), (0.5, 2.0)],
+        [(0.5, 2.0), (0.5, 7.5)],
+    ]
 
 
 def test_box_geom_bounds():
