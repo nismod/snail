@@ -254,3 +254,16 @@ def test_split_of_a_single_kind_layer_is_unchanged(tmp_path):
     splits = gpd.read_file(output)
     assert set(splits.geometry.geom_type) == {"LineString"}
     assert len(splits) == 8
+
+
+def test_split_of_a_geometry_collection_layer(geometry_collection_features, tmp_path):
+    path = tmp_path / "collections.gpkg"
+    geometry_collection_features.to_file(path)
+    output = tmp_path / "split.gpkg"
+
+    run_split(path, output)
+
+    splits = gpd.read_file(output)
+    assert len(splits) == 5
+    assert list(splits.geometry.geom_type) == ["Point"] + ["LineString"] * 4
+    assert set(splits.name) == {"collection"}

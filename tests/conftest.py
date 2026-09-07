@@ -4,7 +4,7 @@ import pytest
 import rasterio
 from rasterio.crs import CRS
 from rasterio.transform import Affine, from_origin
-from shapely.geometry import LineString
+from shapely.geometry import GeometryCollection, LineString, Point
 
 
 @pytest.fixture
@@ -73,6 +73,18 @@ def lines_over_raster():
                 LineString([(2.25, 1.5), (2.75, 1.5)]),
             ],
         },
+        crs="EPSG:4326",
+    )
+
+
+@pytest.fixture
+def geometry_collection_features():
+    """One GeometryCollection containing a point and a grid-crossing line."""
+    return gpd.GeoDataFrame(
+        {"name": ["collection"]},
+        geometry=[
+            GeometryCollection([Point(2.5, 2.5), LineString([(0.5, 0.5), (3.5, 0.5)])])
+        ],
         crs="EPSG:4326",
     )
 
