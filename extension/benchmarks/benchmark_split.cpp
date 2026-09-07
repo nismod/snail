@@ -75,7 +75,8 @@ int main() {
   linestr large_circle = circle(50.0, 50.0, 100.0, 1000);
 
   // A large circle with a large hole: boundary-heavy, few interior cells
-  std::vector<linestr> annulus = {large_circle, circle(50.0, 50.0, 42.0, 256)};
+  std::vector<linestr> annulus = {circle(50.0, 50.0, 45.0, 256),
+                                  circle(50.0, 50.0, 42.0, 256)};
 
   // Many small buildings split in one batch: the realistic workload, and
   // the one where per-polygon setup shows up

@@ -114,6 +114,8 @@ def to_geoarrow(
     )
     # A table of one column, chunked: only a table carries the field, and so
     # the extension name, through __arrow_c_stream__ to the extension.
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than zero")
     batches = [array.slice(at, batch_size) for at in range(0, len(array), batch_size)]
     return pyarrow.Table.from_arrays(
         [pyarrow.chunked_array(batches, type=array.type)],

@@ -451,6 +451,9 @@ private:
 
 static grid::Grid makeGrid(int nrows, int ncols,
                            const std::vector<double> &transform) {
+  if (transform.size() != 6) {
+    throw std::invalid_argument("transform must contain exactly six values");
+  }
   transform::Affine affine(transform[0], transform[1], transform[2],
                            transform[3], transform[4], transform[5]);
   return {static_cast<std::size_t>(ncols), static_cast<std::size_t>(nrows),

@@ -229,7 +229,7 @@ def split_features(
 def _prepare_and_split_funcs(features: geopandas.GeoDataFrame, experimental: bool):
     """Pick prepare and split functions for the features' geometry type"""
     kinds = _geom_kinds(features)
-    if len(kinds) > 1:
+    if len(kinds) > 1 or "GeometryCollection" in kinds:
         # No typed split can take a layer of several kinds at once, and the
         # first feature's type is no guide to the rest of them
         logger.info("Splitting mixed geometries (%s)", ", ".join(sorted(kinds)))
