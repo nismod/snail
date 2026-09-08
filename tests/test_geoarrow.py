@@ -677,6 +677,97 @@ class TestStream:
         with pytest.raises(ValueError, match="already been read"):
             stream.__arrow_c_stream__()
 
+    def test_requested_schema_compatibility(self, linestrings):
+        reference = pa.RecordBatchReader.from_stream(
+            core_split_linestrings(
+                to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM
+            )
+        )
+        requested = reference.schema.set(
+            0, reference.schema.field("geometry").with_name("requested_geometry")
+        )
+        reader = pa.RecordBatchReader.from_stream(
+            core_split_linestrings(
+                to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM
+            ),
+            requested,
+        )
+        assert reader.schema.names == ["geometry", "parent"]
+        list(reader)
+
+    @pytest.mark.parametrize(
+        "requested",
+        [
+            pa.schema([pa.field("geometry", pa.binary())]),
+            pa.schema([pa.field("geometry", pa.int64()), pa.field("parent", pa.int64())]),
+        ],
+    )
+    def test_requested_schema_incompatible(self, linestrings, requested):
+        stream = core_split_linestrings(
+            to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM
+        )
+        with pytest.raises(ValueError, match="incompatible"):
+            pa.RecordBatchReader.from_stream(stream, requested)
+        # Validation happens before the one-shot stream is handed off.
+        assert stream.__arrow_c_stream__() is not None
+
+    def test_empty_result_batch_is_skipped(self):
+        geometries = gpd.GeoSeries([LineString([(0.5, 0.5), (3.5, 0.5)])])
+        table = to_geoarrow(geometries)
+        array = table.column("geometry").chunk(0)
+        schema = table.schema
+        source = pa.RecordBatchReader.from_batches(
+            schema,
+            [
+                pa.RecordBatch.from_arrays([array.slice(0, 0)], schema=schema),
+                pa.RecordBatch.from_arrays([array], schema=schema),
+            ],
+        )
+        batches = batches_of(
+            core_split_linestrings(
+                source, NROWS, NCOLS, TRANSFORM, bounded=True
+            )
+        )
+        assert len(batches) == 1
+        assert batches[0].column("parent").to_pylist() == [0, 0, 0, 0]
+
+    def test_geometry_column_can_follow_attributes(self, linestrings):
+        source = pa.table(
+            gpd.GeoDataFrame(
+                {"name": ["a", "b"], "geometry": linestrings}
+            ).to_arrow(geometry_encoding="geoarrow")
+        )
+        assert len(batches_of(core_split_linestrings(source, NROWS, NCOLS, TRANSFORM)))
+
+    def test_multiple_geometry_columns_are_rejected(self, linestrings):
+        source = pa.table(
+            gpd.GeoDataFrame(
+                {"left": linestrings, "right": linestrings}
+            ).to_arrow(geometry_encoding="geoarrow")
+        )
+        with pytest.raises(ValueError, match="several"):
+            core_split_linestrings(source, NROWS, NCOLS, TRANSFORM)
+        selected = source.select(["left"])
+        assert batches_of(
+            core_split_linestrings(selected, NROWS, NCOLS, TRANSFORM)
+        )
+
+    def test_abandoned_and_partially_consumed_streams(self, many_linestrings):
+        stream = core_split_linestrings(
+            to_geoarrow(many_linestrings), NROWS, NCOLS, TRANSFORM
+        )
+        capsule = stream.__arrow_c_stream__()
+        del capsule
+
+        stream = core_split_linestrings(
+            to_geoarrow(many_linestrings, batch_size=1), NROWS, NCOLS, TRANSFORM
+        )
+        reader = pa.RecordBatchReader.from_stream(stream)
+        next(iter(reader))
+        reader.close()
+        with pytest.raises(ValueError, match="already been read"):
+            stream.__arrow_c_stream__()
+
     def test_result_schema(self, linestrings, polygons):
         """Each batch carries the GeoArrow geometry and the parent index"""
         for geometries, split, extension in (
@@ -764,6 +855,27 @@ class TestStream:
 
 
 class TestSplits:
+    @pytest.mark.parametrize("batch_size", [0, -1])
+    def test_to_geoarrow_rejects_invalid_batch_size(self, linestrings, batch_size):
+        with pytest.raises(ValueError, match="batch_size"):
+            to_geoarrow(linestrings, batch_size=batch_size)
+
+    @pytest.mark.parametrize("transform", [(), (1, 0, 0, 0, 1)])
+    def test_core_rejects_short_transform(self, linestrings, transform):
+        with pytest.raises(ValueError, match="six values"):
+            core_split_linestrings(
+                to_geoarrow(linestrings), NROWS, NCOLS, transform
+            )
+
+    @pytest.mark.parametrize("nrows,ncols", [(-1, 4), (4, -1)])
+    def test_core_rejects_negative_grid_dimensions(
+        self, linestrings, nrows, ncols
+    ):
+        with pytest.raises(ValueError, match="non-negative"):
+            core_split_linestrings(
+                to_geoarrow(linestrings), nrows, ncols, TRANSFORM
+            )
+
     def test_linestrings_match_single_geometry_split(self, linestrings):
         actual = geometry_of(
             core_split_linestrings(to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM)

@@ -406,6 +406,25 @@ static void releaseStreamCapsule(PyObject *capsule) {
   }
 }
 
+static bool storageSchemaCompatible(const ArrowSchema *requested,
+                                    const ArrowSchema *produced) {
+  if (requested == nullptr || produced == nullptr) {
+    return requested == produced;
+  }
+  if (requested->format == nullptr || produced->format == nullptr ||
+      std::strcmp(requested->format, produced->format) != 0 ||
+      requested->n_children != produced->n_children) {
+    return false;
+  }
+  for (int64_t i = 0; i < requested->n_children; i++) {
+    if (!storageSchemaCompatible(requested->children[i],
+                                 produced->children[i])) {
+      return false;
+    }
+  }
+  return storageSchemaCompatible(requested->dictionary, produced->dictionary);
+}
+
 /// The pieces a split produces, as a stream of Arrow record batches of the
 /// GeoArrow geometry and the index of the geometry each piece came from.
 ///
@@ -424,13 +443,24 @@ public:
   /// Arrow PyCapsule interface. A stream is consumed once: the capsule
   /// takes the split with it, and this object is spent afterwards.
   py::capsule arrowCStream(const py::object &requested_schema) {
-    // requested_schema is part of the protocol and ignored here: the
-    // pieces are always GeoArrow with interleaved coordinates
-    (void)requested_schema;
     if (state == nullptr) {
       throw std::invalid_argument(
           "This split has already been read: an Arrow stream can only be "
           "consumed once");
+    }
+    if (!requested_schema.is_none()) {
+      py::capsule capsule = requested_schema.cast<py::capsule>();
+      auto *requested = static_cast<ArrowSchema *>(
+          PyCapsule_GetPointer(capsule.ptr(), "arrow_schema"));
+      if (requested == nullptr) {
+        throw py::error_already_set();
+      }
+      nanoarrow::UniqueSchema produced;
+      exportSchema(type, state->input.geometrySchema(), produced.get());
+      if (!storageSchemaCompatible(requested, produced.get())) {
+        throw std::invalid_argument(
+            "requested_schema is incompatible with the split output");
+      }
     }
     // The capsule takes the struct before the split goes into it, marked
     // released so that failing to build the capsule frees an empty struct
@@ -452,6 +482,9 @@ private:
 
 static grid::Grid makeGrid(int nrows, int ncols,
                            const std::vector<double> &transform) {
+  if (nrows < 0 || ncols < 0) {
+    throw std::invalid_argument("grid dimensions must be non-negative");
+  }
   if (transform.size() != 6) {
     throw std::invalid_argument("transform must contain exactly six values");
   }
