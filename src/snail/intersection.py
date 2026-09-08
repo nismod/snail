@@ -13,6 +13,7 @@ import numpy
 import pandas
 import pyarrow
 import rasterio
+import rioxarray  # noqa: F401  # register the xarray .rio accessor
 import xarray
 from shapely.ops import linemerge
 
@@ -461,9 +462,7 @@ def split_polygons(
     """Split polygons along a grid using the bounded C++ splitter."""
     # split every feature in one call: crossing into the extension per
     # feature costs far more than the splitting itself
-    geometry, parent = _split(
-        split_polygons_core, polygon_features.geometry.to_numpy(), grid
-    )
+    geometry, parent = _split(split_polygons_core, polygon_features.geometry, grid)
     logger.info(f"Split {len(polygon_features)} features into {len(geometry)} pieces")
     return _splits_frame(polygon_features, geometry, parent, grid)
 
