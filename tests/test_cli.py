@@ -221,7 +221,9 @@ def mixed_features(tmp_path):
     return path
 
 
-def test_split_accepts_raster_memory_limit(tmp_path, two_band_raster, lines_over_raster):
+def test_split_accepts_raster_memory_limit(
+    tmp_path, two_band_raster, lines_over_raster
+):
     features_path = tmp_path / "lines.geojson"
     output_path = tmp_path / "splits.gpkg"
     lines_over_raster.to_file(features_path)
@@ -292,7 +294,9 @@ def test_split_of_a_geometry_collection_layer(geometry_collection_features, tmp_
     assert set(splits.name) == {"collection"}
 
 
-@pytest.mark.parametrize("args", [["--experimental", "split"], ["split", "--lazy-rasters"]])
+@pytest.mark.parametrize(
+    "args", [["--experimental", "split"], ["split", "--lazy-rasters"]]
+)
 def test_removed_flags_are_rejected(args):
     with pytest.raises(SystemExit):
         snail(args)
