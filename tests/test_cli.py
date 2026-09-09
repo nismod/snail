@@ -30,6 +30,8 @@ def _run_4x4_split(features_path, output_path):
             "4",
             "--height",
             "4",
+            "--batch-size",
+            "1",
         ]
     )
 

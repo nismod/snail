@@ -131,8 +131,7 @@ public:
   operations::CoordSpan vertices(int64_t i);
 
   /// The rings of polygon i, exterior first
-  void rings(int64_t i, std::vector<operations::CoordSpan> &out,
-             std::vector<linestr> &scratch);
+  void rings(int64_t i, std::vector<operations::CoordSpan> &out, std::vector<linestr> &scratch);
 
 private:
   int64_t offsetAt(int level, int64_t i) const;
@@ -185,20 +184,28 @@ void exportSchema(GeometryType type, const ArrowSchema *source, ArrowSchema *out
 void exportArray(BatchData data, ArrowArray *out);
 
 /// Split one batch of geometries held in Arrow buffers, of the one type
-void splitNativeBatch(NativeReader &reader, int64_t count, GeometryType type,
-                      const grid::Grid &grid, bool bounded,
-                      int64_t parent_base, BatchData &out);
+void splitNativeBatch(NativeReader &reader, int64_t first, int64_t count, GeometryType type,
+                      const grid::Grid &grid, bool bounded, int64_t parent_base, BatchData &out);
 
 /// Split one batch of WKB geometries, refusing any that is not `type`
-void splitWkbBatch(WkbReader &reader, int64_t count, GeometryType type,
-                   const grid::Grid &grid, bool bounded, int64_t parent_base,
-                   BatchData &out);
+void splitWkbBatch(WkbReader &reader, int64_t first, int64_t count, GeometryType type, const grid::Grid &grid,
+                   bool bounded, int64_t parent_base, BatchData &out);
+
+inline void splitWkbBatch(WkbReader &reader, int64_t count, GeometryType type, const grid::Grid &grid,
+                          bool bounded, int64_t parent_base, BatchData &out) {
+  splitWkbBatch(reader, 0, count, type, grid, bounded, parent_base, out);
+}
 
 /// Split one batch of geometries of any type, writing the pieces as WKB.
 /// Sets up `out`'s writer, so a caller need never name it - which is what
 /// keeps WkbWriter out of this header.
-void splitMixedBatch(WkbReader &reader, int64_t count, const grid::Grid &grid,
-                     bool bounded, int64_t parent_base, BatchData &out);
+void splitMixedBatch(WkbReader &reader, int64_t first, int64_t count, const grid::Grid &grid, bool bounded,
+                     int64_t parent_base, BatchData &out);
+
+inline void splitMixedBatch(WkbReader &reader, int64_t count, const grid::Grid &grid, bool bounded,
+                            int64_t parent_base, BatchData &out) {
+  splitMixedBatch(reader, 0, count, grid, bounded, parent_base, out);
+}
 
 } // namespace geoarrow
 } // namespace snail

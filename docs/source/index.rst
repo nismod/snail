@@ -122,6 +122,9 @@ Split features on a grid defined by a GeoTIFF, optionally adding the values from
 Raster files are attributed through bounded rasterio windows. The memory limit
 applies to each application-managed read buffer across all selected bands; it
 does not limit GDAL's internal cache, vector splitting, or the final output.
+CLI workflows stream feature, split and output batches end to end. Use
+``--batch-size`` to tune the target number of rows per batch. Pieces from one
+feature are kept together, so one unusually large feature may exceed it.
 
 
 Split multiple vector feature files along the grids defined by multiple raster files, attributing all raster values::

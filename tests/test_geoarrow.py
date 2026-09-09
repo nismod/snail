@@ -634,6 +634,37 @@ class TestStream:
         assert source.num_chunks == 3
         assert len(batches) == 3
 
+    def test_output_batch_target_stops_between_features(self, many_linestrings):
+        batches = batches_of(
+            core_split_linestrings(
+                to_geoarrow(many_linestrings),
+                NROWS,
+                NCOLS,
+                TRANSFORM,
+                max_output_rows=5,
+            )
+        )
+
+        assert [len(batch) for batch in batches] == [8, 8, 8]
+        for parent in range(len(many_linestrings)):
+            containing = [
+                batch
+                for batch in batches
+                if parent in batch.column("parent").to_pylist()
+            ]
+            assert len(containing) == 1
+
+    @pytest.mark.parametrize("max_output_rows", [0, -1])
+    def test_rejects_invalid_output_batch_target(self, linestrings, max_output_rows):
+        with pytest.raises(ValueError, match="max_output_rows"):
+            core_split_linestrings(
+                to_geoarrow(linestrings),
+                NROWS,
+                NCOLS,
+                TRANSFORM,
+                max_output_rows=max_output_rows,
+            )
+
     def test_parents_index_the_whole_source(self, many_linestrings):
         """A piece's parent indexes the source, not the batch it was in"""
         array = pa.array(many_linestrings.to_arrow(geometry_encoding="geoarrow"))

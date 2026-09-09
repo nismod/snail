@@ -132,6 +132,17 @@ snail split \
 Raster files are attributed through bounded rasterio windows. The memory limit
 applies to each application-managed read buffer across all selected bands; it
 does not limit GDAL's internal cache, vector splitting, or the final output.
+The command-line workflows also stream vector features, split pieces and output
+in Arrow batches; use `--batch-size` to tune the number of rows targeted in each
+batch. A single feature and all of its pieces stay together, so one unusually
+large feature may exceed that target.
+
+For library callers, `iter_split_features_batches`,
+`iter_overlay_raster_batches` and `iter_overlay_rasters_batches` accept an
+Arrow table or record-batch stream and return a one-shot
+`pyarrow.RecordBatchReader`. The existing `split_features`, `overlay_raster`
+and `overlay_rasters` functions remain convenient materialising wrappers that
+return GeoDataFrames.
 
 Input features can be any vector format readable by geopandas (GeoPackage,
 Shapefile, GeoJSON, GeoParquet...), and the output format is picked from the
@@ -174,7 +185,8 @@ Optional columns in the rasters CSV:
   `hazard:flood`), falling back to the raster path.
 
 Use `--max-raster-memory-mb` with `snail process` to tune each raster read
-buffer (the default is 256 MiB).
+buffer (the default is 256 MiB), and `--batch-size` to tune streamed feature
+and split batches (the default is 65,536 rows).
 
 ### Transform
 
@@ -291,6 +303,10 @@ python scripts/benchmark_split.py
 The Python benchmark measures the default bounded polygon splitter. Results
 are machine-dependent; use the same environment and workload when comparing
 changes.
+
+To report raster window counts, application-buffer bytes and timings for dense,
+linear, clustered and sparse cell layouts, run
+``python scripts/benchmark_raster_reads.py``.
 
 ### C++ library
 

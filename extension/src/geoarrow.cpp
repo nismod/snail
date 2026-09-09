@@ -53,15 +53,13 @@ namespace py = pybind11;
 /// passes Arrow structs by move: the consumer copies the struct out and
 /// nulls the producer's release callback, so that only one of them will
 /// ever release it.
-template <typename T>
-static T movedFromCapsule(const py::capsule &capsule, const char *name) {
+template <typename T> static T movedFromCapsule(const py::capsule &capsule, const char *name) {
   auto *source = static_cast<T *>(PyCapsule_GetPointer(capsule.ptr(), name));
   if (source == nullptr) {
     throw py::error_already_set();
   }
   if (source->release == nullptr) {
-    throw std::invalid_argument(std::string("The ") + name +
-                                " has already been consumed");
+    throw std::invalid_argument(std::string("The ") + name + " has already been consumed");
   }
   T moved = *source;
   source->release = nullptr;
@@ -78,10 +76,8 @@ class InputStream {
 public:
   InputStream(const py::object &source, GeometryType type) {
     if (py::hasattr(source, "__arrow_c_stream__")) {
-      py::capsule capsule =
-          source.attr("__arrow_c_stream__")().cast<py::capsule>();
-      ArrowArrayStream moved =
-          movedFromCapsule<ArrowArrayStream>(capsule, "arrow_array_stream");
+      py::capsule capsule = source.attr("__arrow_c_stream__")().cast<py::capsule>();
+      ArrowArrayStream moved = movedFromCapsule<ArrowArrayStream>(capsule, "arrow_array_stream");
       stream.reset(&moved);
       // a stream states its type up front, before any batch arrives
       if (stream.get()->get_schema(stream.get(), schema.get()) != 0) {
@@ -93,18 +89,16 @@ public:
       // a single array comes with its schema alongside, and stands in for a
       // stream of one batch
       py::tuple capsules = source.attr("__arrow_c_array__")();
-      ArrowSchema moved_schema = movedFromCapsule<ArrowSchema>(
-          capsules[0].cast<py::capsule>(), "arrow_schema");
-      ArrowArray moved_array = movedFromCapsule<ArrowArray>(
-          capsules[1].cast<py::capsule>(), "arrow_array");
+      ArrowSchema moved_schema =
+          movedFromCapsule<ArrowSchema>(capsules[0].cast<py::capsule>(), "arrow_schema");
+      ArrowArray moved_array = movedFromCapsule<ArrowArray>(capsules[1].cast<py::capsule>(), "arrow_array");
       schema.reset(&moved_schema);
       single.reset(&moved_array);
     } else {
-      throw py::type_error(
-          "Expected GeoArrow geometries: an object supporting the Arrow "
-          "PyCapsule interface, such as the result of "
-          "GeoSeries.to_arrow(geometry_encoding='geoarrow'), a pyarrow "
-          "ChunkedArray or Table, or any Arrow stream of geometries");
+      throw py::type_error("Expected GeoArrow geometries: an object supporting the Arrow "
+                           "PyCapsule interface, such as the result of "
+                           "GeoSeries.to_arrow(geometry_encoding='geoarrow'), a pyarrow "
+                           "ChunkedArray or Table, or any Arrow stream of geometries");
     }
 
     // "+s" is Arrow's format string for a struct, which is how a stream of
@@ -142,8 +136,7 @@ public:
 
   /// The schema of the geometries themselves, within the batches
   const ArrowSchema *geometrySchema() const {
-    return geometry_child >= 0 ? schema.get()->children[geometry_child]
-                               : schema.get();
+    return geometry_child >= 0 ? schema.get()->children[geometry_child] : schema.get();
   }
 
   /// How this source holds its geometries
@@ -171,9 +164,7 @@ public:
       return false;
     } else {
       if (stream.get()->get_next(stream.get(), batch.get()) != 0) {
-        throw std::runtime_error(
-            std::string("Could not read the next batch of geometries: ") +
-            lastError());
+        throw std::runtime_error(std::string("Could not read the next batch of geometries: ") + lastError());
       }
       // the producer marks the end of the stream with a released array
       if (batch->release == nullptr) {
@@ -196,17 +187,14 @@ public:
 private:
   /// Pick the geometry column out of a record batch schema: the one
   /// declaring a GeoArrow extension type, or the only column there is
-  static int64_t findGeometryField(const ArrowSchema *struct_schema,
-                                   GeometryType type) {
+  static int64_t findGeometryField(const ArrowSchema *struct_schema, GeometryType type) {
     int64_t found = -1;
     for (int64_t i = 0; i < struct_schema->n_children; i++) {
-      std::string name = metadataValue(struct_schema->children[i]->metadata,
-                                       "ARROW:extension:name");
+      std::string name = metadataValue(struct_schema->children[i]->metadata, "ARROW:extension:name");
       if (name.rfind("geoarrow.", 0) == 0) {
         if (found >= 0) {
-          throw std::invalid_argument(
-              "Expected one geometry column, found several: select the "
-              "column to split");
+          throw std::invalid_argument("Expected one geometry column, found several: select the "
+                                      "column to split");
         }
         found = i;
       }
@@ -217,10 +205,9 @@ private:
     if (struct_schema->n_children == 1) {
       return 0;
     }
-    throw std::invalid_argument(
-        std::string("Found no ") + extensionName(type) +
-        " column in the Arrow stream: none of its columns declares a "
-        "GeoArrow extension type");
+    throw std::invalid_argument(std::string("Found no ") + extensionName(type) +
+                                " column in the Arrow stream: none of its columns declares a "
+                                "GeoArrow extension type");
   }
 
   /// The geometries within a batch this stream produced
@@ -258,17 +245,21 @@ private:
 
 /// Everything the split stream needs to answer its next call
 struct SplitState {
-  SplitState(const py::object &source, GeometryType type, const grid::Grid &grid,
-             bool bounded)
-      : input(source, type), grid(grid), type(type), bounded(bounded) {}
+  SplitState(const py::object &source, GeometryType type, const grid::Grid &grid, bool bounded,
+             int64_t max_output_rows)
+      : input(source, type), grid(grid), type(type), bounded(bounded), max_output_rows(max_output_rows) {}
 
   InputStream input;
   grid::Grid grid;
   GeometryType type;
   bool bounded;
+  int64_t max_output_rows;
   /// how many geometries the stream has read, so that a piece's parent
   /// indexes the source as a whole rather than the batch it came from
   int64_t parent_base = 0;
+  int64_t input_position = 0;
+  int64_t input_count = 0;
+  nanoarrow::UniqueArray input_batch;
 };
 
 /// Read one batch from the source and split it, returning nothing once the
@@ -280,36 +271,48 @@ struct SplitState {
 /// geopandas cannot read a zero-length GeoArrow array.
 static std::optional<BatchData> nextSplitBatch(SplitState *state) {
   while (true) {
-    nanoarrow::UniqueArray batch;
-    if (!state->input.next(batch)) {
-      return std::nullopt;
+    if (state->input_position == state->input_count) {
+      state->parent_base += state->input_count;
+      state->input_position = 0;
+      state->input_count = 0;
+      state->input_batch.reset();
+      if (!state->input.next(state->input_batch)) {
+        return std::nullopt;
+      }
+      state->input_count = state->input.length();
     }
 
     BatchData out;
     out.type = state->type;
-    const int64_t count = state->input.length();
-    // The GIL is held to read the source, which may be a Python object, and
-    // given back around the splitting, which is not.
-    if (state->type == GeometryType::mixed) {
+    {
+      // The GIL is needed to pull a Python-backed source batch, but not while
+      // splitting any of its features.
       py::gil_scoped_release unlocked;
-      splitMixedBatch(state->input.wkbReader(), count, state->grid,
-                      state->bounded, state->parent_base, out);
-    } else if (state->input.source() == Encoding::wkb) {
-      py::gil_scoped_release unlocked;
-      splitWkbBatch(state->input.wkbReader(), count, state->type, state->grid,
-                    state->bounded, state->parent_base, out);
-    } else {
-      py::gil_scoped_release unlocked;
-      splitNativeBatch(state->input.nativeReader(), count, state->type,
-                       state->grid, state->bounded, state->parent_base, out);
+      while (state->input_position < state->input_count && out.size() < state->max_output_rows) {
+        // With a target, complete one feature before checking it again. A
+        // single feature can exceed the target, but is never divided between
+        // output batches. The unlimited default keeps the original fast path.
+        const int64_t position = state->input_position;
+        const int64_t count = state->max_output_rows == std::numeric_limits<int64_t>::max()
+                                  ? state->input_count - state->input_position
+                                  : 1;
+        state->input_position += count;
+        if (state->type == GeometryType::mixed) {
+          splitMixedBatch(state->input.wkbReader(), position, count, state->grid, state->bounded,
+                          state->parent_base, out);
+        } else if (state->input.source() == Encoding::wkb) {
+          splitWkbBatch(state->input.wkbReader(), position, count, state->type, state->grid, state->bounded,
+                        state->parent_base, out);
+        } else {
+          splitNativeBatch(state->input.nativeReader(), position, count, state->type, state->grid,
+                           state->bounded, state->parent_base, out);
+        }
+      }
     }
-    state->parent_base += count;
 
-    if (out.coordinateCount() >
-        static_cast<std::size_t>(std::numeric_limits<int32_t>::max())) {
-      throw std::overflow_error(
-          "One batch split to more coordinates than a GeoArrow array with "
-          "32-bit offsets can hold: read the source in smaller batches");
+    if (out.coordinateCount() > static_cast<std::size_t>(std::numeric_limits<int32_t>::max())) {
+      throw std::overflow_error("One batch split to more coordinates than a GeoArrow array with "
+                                "32-bit offsets can hold: read the source in smaller batches");
     }
     if (out.size() > 0) {
       return out;
@@ -330,15 +333,12 @@ static std::optional<BatchData> nextSplitBatch(SplitState *state) {
 class SplitProducer {
 public:
   /// Hand a split over to a stream the consumer owns from here on
-  static void toArrayStream(std::unique_ptr<SplitState> state,
-                            ArrowArrayStream *out) {
-    nanoarrow::ArrayStreamFactory<SplitProducer>::InitArrayStream(
-        new SplitProducer(std::move(state)), out);
+  static void toArrayStream(std::unique_ptr<SplitState> state, ArrowArrayStream *out) {
+    nanoarrow::ArrayStreamFactory<SplitProducer>::InitArrayStream(new SplitProducer(std::move(state)), out);
   }
 
 private:
-  explicit SplitProducer(std::unique_ptr<SplitState> state)
-      : state(std::move(state)) {}
+  explicit SplitProducer(std::unique_ptr<SplitState> state) : state(std::move(state)) {}
 
   /// the methods below are called from C through the factory's callbacks
   friend class nanoarrow::ArrayStreamFactory<SplitProducer>;
@@ -396,8 +396,7 @@ private:
 /// to free; one abandoned unread still owns the stream, and is released
 /// here.
 static void releaseStreamCapsule(PyObject *capsule) {
-  auto *stream = static_cast<ArrowArrayStream *>(
-      PyCapsule_GetPointer(capsule, "arrow_array_stream"));
+  auto *stream = static_cast<ArrowArrayStream *>(PyCapsule_GetPointer(capsule, "arrow_array_stream"));
   if (stream != nullptr) {
     if (stream->release != nullptr) {
       stream->release(stream);
@@ -406,8 +405,7 @@ static void releaseStreamCapsule(PyObject *capsule) {
   }
 }
 
-static bool storageSchemaCompatible(const ArrowSchema *requested,
-                                    const ArrowSchema *produced) {
+static bool storageSchemaCompatible(const ArrowSchema *requested, const ArrowSchema *produced) {
   if (requested == nullptr || produced == nullptr) {
     return requested == produced;
   }
@@ -417,8 +415,7 @@ static bool storageSchemaCompatible(const ArrowSchema *requested,
     return false;
   }
   for (int64_t i = 0; i < requested->n_children; i++) {
-    if (!storageSchemaCompatible(requested->children[i],
-                                 produced->children[i])) {
+    if (!storageSchemaCompatible(requested->children[i], produced->children[i])) {
       return false;
     }
   }
@@ -433,10 +430,9 @@ static bool storageSchemaCompatible(const ArrowSchema *requested,
 /// by a consumer that takes the batches as they come.
 class SplitStream {
 public:
-  SplitStream(const py::object &source, GeometryType type,
-              const grid::Grid &grid, bool bounded)
-      : state(std::make_unique<SplitState>(source, type, grid, bounded)),
-        type(type) {}
+  SplitStream(const py::object &source, GeometryType type, const grid::Grid &grid, bool bounded,
+              int64_t max_output_rows)
+      : state(std::make_unique<SplitState>(source, type, grid, bounded, max_output_rows)), type(type) {}
 
   std::string geometryType() const { return extensionName(type); }
 
@@ -444,22 +440,19 @@ public:
   /// takes the split with it, and this object is spent afterwards.
   py::capsule arrowCStream(const py::object &requested_schema) {
     if (state == nullptr) {
-      throw std::invalid_argument(
-          "This split has already been read: an Arrow stream can only be "
-          "consumed once");
+      throw std::invalid_argument("This split has already been read: an Arrow stream can only be "
+                                  "consumed once");
     }
     if (!requested_schema.is_none()) {
       py::capsule capsule = requested_schema.cast<py::capsule>();
-      auto *requested = static_cast<ArrowSchema *>(
-          PyCapsule_GetPointer(capsule.ptr(), "arrow_schema"));
+      auto *requested = static_cast<ArrowSchema *>(PyCapsule_GetPointer(capsule.ptr(), "arrow_schema"));
       if (requested == nullptr) {
         throw py::error_already_set();
       }
       nanoarrow::UniqueSchema produced;
       exportSchema(type, state->input.geometrySchema(), produced.get());
       if (!storageSchemaCompatible(requested, produced.get())) {
-        throw std::invalid_argument(
-            "requested_schema is incompatible with the split output");
+        throw std::invalid_argument("requested_schema is incompatible with the split output");
       }
     }
     // The capsule takes the struct before the split goes into it, marked
@@ -467,8 +460,7 @@ public:
     // rather than stranding a split behind one nothing owns.
     auto owned = std::make_unique<ArrowArrayStream>();
     owned->release = nullptr;
-    py::capsule capsule(owned.get(), "arrow_array_stream",
-                        releaseStreamCapsule);
+    py::capsule capsule(owned.get(), "arrow_array_stream", releaseStreamCapsule);
     SplitProducer::toArrayStream(std::move(state), owned.release());
     return capsule;
   }
@@ -480,57 +472,57 @@ private:
   GeometryType type;
 };
 
-static grid::Grid makeGrid(int nrows, int ncols,
-                           const std::vector<double> &transform) {
+static grid::Grid makeGrid(int nrows, int ncols, const std::vector<double> &transform) {
   if (nrows < 0 || ncols < 0) {
     throw std::invalid_argument("grid dimensions must be non-negative");
   }
   if (transform.size() != 6) {
     throw std::invalid_argument("transform must contain exactly six values");
   }
-  transform::Affine affine(transform[0], transform[1], transform[2],
-                           transform[3], transform[4], transform[5]);
-  return {static_cast<std::size_t>(ncols), static_cast<std::size_t>(nrows),
-          affine};
+  transform::Affine affine(transform[0], transform[1], transform[2], transform[3], transform[4],
+                           transform[5]);
+  return {static_cast<std::size_t>(ncols), static_cast<std::size_t>(nrows), affine};
 }
 
-static SplitStream splitLineStrings(const py::object &linestrings, int nrows,
-                                    int ncols, std::vector<double> transform,
-                                    bool bounded) {
-  return {linestrings, GeometryType::linestring,
-          makeGrid(nrows, ncols, transform), bounded};
+static SplitStream splitLineStrings(const py::object &linestrings, int nrows, int ncols,
+                                    std::vector<double> transform, bool bounded, int64_t max_output_rows) {
+  if (max_output_rows <= 0) {
+    throw std::invalid_argument("max_output_rows must be greater than zero");
+  }
+  return {linestrings, GeometryType::linestring, makeGrid(nrows, ncols, transform), bounded, max_output_rows};
 }
 
-static SplitStream splitPolygons(const py::object &polygons, int nrows,
-                                 int ncols, std::vector<double> transform) {
-  return {polygons, GeometryType::polygon, makeGrid(nrows, ncols, transform),
-          false};
+static SplitStream splitPolygons(const py::object &polygons, int nrows, int ncols,
+                                 std::vector<double> transform, int64_t max_output_rows) {
+  if (max_output_rows <= 0) {
+    throw std::invalid_argument("max_output_rows must be greater than zero");
+  }
+  return {polygons, GeometryType::polygon, makeGrid(nrows, ncols, transform), false, max_output_rows};
 }
 
-static SplitStream splitGeometries(const py::object &geometries, int nrows,
-                                   int ncols, std::vector<double> transform,
-                                   bool bounded) {
-  return {geometries, GeometryType::mixed, makeGrid(nrows, ncols, transform),
-          bounded};
+static SplitStream splitGeometries(const py::object &geometries, int nrows, int ncols,
+                                   std::vector<double> transform, bool bounded, int64_t max_output_rows) {
+  if (max_output_rows <= 0) {
+    throw std::invalid_argument("max_output_rows must be greater than zero");
+  }
+  return {geometries, GeometryType::mixed, makeGrid(nrows, ncols, transform), bounded, max_output_rows};
 }
 
 void register_module(py::module_ &m) {
-  py::class_<SplitStream>(
-      m, "SplitStream",
-      "A stream of split geometries, readable through the Arrow PyCapsule "
-      "stream interface, e.g. by pyarrow.RecordBatchReader or "
-      "geopandas.GeoDataFrame.from_arrow. Each record batch holds a "
-      "GeoArrow 'geometry' column of the pieces and a 'parent' column "
-      "giving the index of the geometry each piece was split from.")
+  py::class_<SplitStream>(m, "SplitStream",
+                          "A stream of split geometries, readable through the Arrow PyCapsule "
+                          "stream interface, e.g. by pyarrow.RecordBatchReader or "
+                          "geopandas.GeoDataFrame.from_arrow. Each record batch holds a "
+                          "GeoArrow 'geometry' column of the pieces and a 'parent' column "
+                          "giving the index of the geometry each piece was split from.")
       .def_property_readonly("geometry_type", &SplitStream::geometryType,
                              "The GeoArrow extension name of the pieces, "
                              "e.g. 'geoarrow.linestring'")
-      .def("__arrow_c_stream__", &SplitStream::arrowCStream,
-           py::arg("requested_schema") = py::none());
+      .def("__arrow_c_stream__", &SplitStream::arrowCStream, py::arg("requested_schema") = py::none());
 
-  m.def("split_linestrings", &splitLineStrings, py::arg("linestrings"),
-        py::arg("nrows"), py::arg("ncols"), py::arg("transform"),
-        py::arg("bounded") = false,
+  m.def("split_linestrings", &splitLineStrings, py::arg("linestrings"), py::arg("nrows"), py::arg("ncols"),
+        py::arg("transform"), py::arg("bounded") = false,
+        py::arg("max_output_rows") = std::numeric_limits<int64_t>::max(),
         R"(Split LineStrings along a grid.
 
 Takes geoarrow.linestring geometries from any object supporting the Arrow
@@ -539,11 +531,14 @@ a GeoParquet or Dataset reader, the result of
 GeoSeries.to_arrow(geometry_encoding="geoarrow"),
 or a record batch stream with a GeoArrow geometry column.
 
+max_output_rows is a target rather than a hard limit: all pieces from one
+source feature remain in the same result batch.
+
 Returns a SplitStream of the LineString pieces.)");
 
-  m.def("split_geometries", &splitGeometries, py::arg("geometries"),
-        py::arg("nrows"), py::arg("ncols"), py::arg("transform"),
-        py::arg("bounded") = false,
+  m.def("split_geometries", &splitGeometries, py::arg("geometries"), py::arg("nrows"), py::arg("ncols"),
+        py::arg("transform"), py::arg("bounded") = false,
+        py::arg("max_output_rows") = std::numeric_limits<int64_t>::max(),
         R"(Split geometries of any type along a grid.
 
 Takes geometries of any GeoArrow encoding, including geoarrow.wkb and
@@ -559,10 +554,13 @@ part, and a GeometryCollection is split member by member. Every piece is
 attributed to the row it came from, whatever it came out of. An empty
 geometry comes back as itself.
 
+max_output_rows is a target rather than a hard limit: all pieces from one
+source feature remain in the same result batch.
+
 Returns a SplitStream whose pieces are geoarrow.wkb.)");
 
-  m.def("split_polygons", &splitPolygons, py::arg("polygons"),
-        py::arg("nrows"), py::arg("ncols"), py::arg("transform"),
+  m.def("split_polygons", &splitPolygons, py::arg("polygons"), py::arg("nrows"), py::arg("ncols"),
+        py::arg("transform"), py::arg("max_output_rows") = std::numeric_limits<int64_t>::max(),
         R"(Split Polygons along a grid.
 
 Takes geoarrow.polygon geometries, with coordinates interleaved or
@@ -570,6 +568,9 @@ separated, from any object supporting the Arrow PyCapsule interface: a
 pyarrow ChunkedArray, Table or RecordBatchReader, a GeoParquet or Dataset
 reader, the result of GeoSeries.to_arrow(geometry_encoding="geoarrow"),
 or a record batch stream with a GeoArrow geometry column.
+
+max_output_rows is a target rather than a hard limit: all pieces from one
+source feature remain in the same result batch.
 
 Returns a SplitStream of the Polygon pieces.)");
 }

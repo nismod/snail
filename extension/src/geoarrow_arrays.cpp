@@ -57,8 +57,7 @@ static const char *geometryTypeName(enum GeoArrowGeometryType type) {
 
 /// The one WKB geometry type a typed split accepts
 static enum GeoArrowGeometryType wanted(GeometryType type) {
-  return type == GeometryType::polygon ? GEOARROW_GEOMETRY_TYPE_POLYGON
-                                       : GEOARROW_GEOMETRY_TYPE_LINESTRING;
+  return type == GeometryType::polygon ? GEOARROW_GEOMETRY_TYPE_POLYGON : GEOARROW_GEOMETRY_TYPE_LINESTRING;
 }
 
 /// How the pieces of a split of this type are written back out. Coordinates
@@ -85,9 +84,7 @@ static enum GeoArrowType writtenAs(GeometryType type) {
 std::string metadataValue(const char *metadata, const char *key) {
   // left untouched when the key is not found, so start it empty
   ArrowStringView value = ArrowCharView(nullptr);
-  if (ArrowMetadataGetValue(metadata, ArrowCharView(key), &value) !=
-          NANOARROW_OK ||
-      value.data == nullptr) {
+  if (ArrowMetadataGetValue(metadata, ArrowCharView(key), &value) != NANOARROW_OK || value.data == nullptr) {
     return "";
   }
   return {value.data, static_cast<std::size_t>(value.size_bytes)};
@@ -106,9 +103,7 @@ static bool hasNulls(const ArrowArray *array) {
   }
   if (array->null_count < 0 && array->n_buffers > 0) {
     const auto *validity = static_cast<const uint8_t *>(array->buffers[0]);
-    if (validity != nullptr &&
-        ArrowBitCountSet(validity, array->offset, array->length) !=
-            array->length) {
+    if (validity != nullptr && ArrowBitCountSet(validity, array->offset, array->length) != array->length) {
       return true;
     }
   }
@@ -131,13 +126,10 @@ static bool hasNulls(const ArrowArray *array) {
 /// geopandas writes is affected; an array built directly with pyarrow can be
 /// a large list, and casting it is one call.
 static void refuseLargeOffsets(const ArrowSchema *schema) {
-  for (const ArrowSchema *at = schema; at != nullptr; at = at->n_children == 1
-                                                              ? at->children[0]
-                                                              : nullptr) {
+  for (const ArrowSchema *at = schema; at != nullptr; at = at->n_children == 1 ? at->children[0] : nullptr) {
     if (std::strcmp(at->format, "+L") == 0) {
-      throw std::invalid_argument(
-          "Expected 32-bit Arrow list offsets (\"+l\"), got 64-bit "
-          "(\"+L\"): cast the geometry column before splitting");
+      throw std::invalid_argument("Expected 32-bit Arrow list offsets (\"+l\"), got 64-bit "
+                                  "(\"+L\"): cast the geometry column before splitting");
     }
   }
 }
@@ -159,27 +151,22 @@ void NativeReader::init(const ArrowSchema *schema, GeometryType type) {
 
   GeoArrowSchemaView schema_view;
   GeoArrowError error;
-  if (GeoArrowSchemaViewInitFromStorage(&schema_view, schema, name, &error) !=
-      GEOARROW_OK) {
-    throw std::invalid_argument(std::string("Expected a ") + declared +
-                                " array: " + error.message);
+  if (GeoArrowSchemaViewInitFromStorage(&schema_view, schema, name, &error) != GEOARROW_OK) {
+    throw std::invalid_argument(std::string("Expected a ") + declared + " array: " + error.message);
   }
   if (GeoArrowArrayViewInitFromType(&view, schema_view.type) != GEOARROW_OK) {
-    throw std::invalid_argument(std::string("Could not read the ") + declared +
-                                " column");
+    throw std::invalid_argument(std::string("Could not read the ") + declared + " column");
   }
 }
 
 void NativeReader::setArray(const ArrowArray *array) {
   if (hasNulls(array)) {
-    throw std::invalid_argument(
-        "Cannot split missing (null) geometries: drop or fill null "
-        "geometries first");
+    throw std::invalid_argument("Cannot split missing (null) geometries: drop or fill null "
+                                "geometries first");
   }
   GeoArrowError error;
   if (GeoArrowArrayViewSetArray(&view, array, &error) != GEOARROW_OK) {
-    throw std::invalid_argument(
-        std::string("Could not read a batch of geometries: ") + error.message);
+    throw std::invalid_argument(std::string("Could not read a batch of geometries: ") + error.message);
   }
 
   // The innermost level needs the same shift offsetAt applies to the list
@@ -195,8 +182,7 @@ void NativeReader::setArray(const ArrowArray *array) {
   }
   if (coordinates->offset != 0) {
     for (int32_t i = 0; i < view.coords.n_values; i++) {
-      view.coords.values[i] +=
-          view.coords.coords_stride * coordinates->offset;
+      view.coords.values[i] += view.coords.coords_stride * coordinates->offset;
     }
   }
 }
@@ -218,14 +204,12 @@ int64_t NativeReader::offsetAt(int level, int64_t i) const {
 /// nothing but x and y is, which the static_assert on sizeof(Coord) pins
 /// down.
 bool NativeReader::contiguous() const {
-  return view.coords.coords_stride == 2 &&
-         view.coords.values[1] == view.coords.values[0] + 1;
+  return view.coords.coords_stride == 2 && view.coords.values[1] == view.coords.values[0] + 1;
 }
 
 geo::Coord NativeReader::at(int64_t vertex) const {
   const int32_t stride = view.coords.coords_stride;
-  return {view.coords.values[0][vertex * stride],
-          view.coords.values[1][vertex * stride]};
+  return {view.coords.values[0][vertex * stride], view.coords.values[1][vertex * stride]};
 }
 
 /// Vertices [begin, end) as a run the split kernels can read, pointing
@@ -234,8 +218,7 @@ geo::Coord NativeReader::at(int64_t vertex) const {
 operations::CoordSpan NativeReader::run(int64_t begin, int64_t end) {
   const std::size_t count = static_cast<std::size_t>(end - begin);
   if (contiguous()) {
-    const auto *first =
-        reinterpret_cast<const geo::Coord *>(view.coords.values[0]) + begin;
+    const auto *first = reinterpret_cast<const geo::Coord *>(view.coords.values[0]) + begin;
     return {first, count};
   }
   gathered.clear();
@@ -246,9 +229,7 @@ operations::CoordSpan NativeReader::run(int64_t begin, int64_t end) {
   return gathered;
 }
 
-operations::CoordSpan NativeReader::vertices(int64_t i) {
-  return run(offsetAt(0, i), offsetAt(0, i + 1));
-}
+operations::CoordSpan NativeReader::vertices(int64_t i) { return run(offsetAt(0, i), offsetAt(0, i + 1)); }
 
 /// The ring structure is explicit in the offsets, so rings are recovered
 /// exactly rather than inferred from where coordinates close back on
@@ -257,8 +238,7 @@ operations::CoordSpan NativeReader::vertices(int64_t i) {
 /// Only one gathered ring's span is valid at a time, since they share a
 /// buffer - so a polygon whose coordinates need gathering is materialised
 /// ring by ring into `scratch` first, and spans taken over that.
-void NativeReader::rings(int64_t i, std::vector<operations::CoordSpan> &out,
-                         std::vector<linestr> &scratch) {
+void NativeReader::rings(int64_t i, std::vector<operations::CoordSpan> &out, std::vector<linestr> &scratch) {
   out.clear();
   const int64_t first = offsetAt(0, i);
   const int64_t last = offsetAt(0, i + 1);
@@ -291,8 +271,7 @@ void NativeReader::rings(int64_t i, std::vector<operations::CoordSpan> &out,
 /// Check the GeoArrow extension name, when the producer declares one. A
 /// plain nested list array of the right shape is accepted too, so that
 /// arrays built directly with pyarrow work.
-static Encoding checkExtensionName(const ArrowSchema *schema,
-                                   GeometryType type) {
+static Encoding checkExtensionName(const ArrowSchema *schema, GeometryType type) {
   std::string name = metadataValue(schema->metadata, "ARROW:extension:name");
   if (name.empty() || name == extensionName(type)) {
     return Encoding::native;
@@ -300,8 +279,8 @@ static Encoding checkExtensionName(const ArrowSchema *schema,
   if (name == WKB_EXTENSION_NAME) {
     return Encoding::wkb;
   }
-  std::string message = std::string("Expected a ") + extensionName(type) +
-                        " array, got Arrow extension type '" + name + "'";
+  std::string message =
+      std::string("Expected a ") + extensionName(type) + " array, got Arrow extension type '" + name + "'";
   // multi-part geometries are the likely mistake, and the fix is the
   // caller's to make: point at it rather than at the Arrow type
   if (name.rfind("geoarrow.multi", 0) == 0) {
@@ -324,8 +303,7 @@ Encoding checkGeometrySchema(const ArrowSchema *schema, GeometryType type) {
     GeoArrowSchemaView view;
     GeoArrowError error;
     if (GeoArrowSchemaViewInit(&view, schema, &error) != GEOARROW_OK) {
-      throw std::invalid_argument(
-          std::string("Expected GeoArrow geometries: ") + error.message);
+      throw std::invalid_argument(std::string("Expected GeoArrow geometries: ") + error.message);
     }
     // read through the visitor either way, since only that reports a
     // geometry's own type
@@ -335,21 +313,15 @@ Encoding checkGeometrySchema(const ArrowSchema *schema, GeometryType type) {
 }
 
 void checkPlanarEdges(const ArrowSchema *schema) {
-  const std::string serialized =
-      metadataValue(schema->metadata, "ARROW:extension:metadata");
-  const GeoArrowStringView extension_metadata{
-      serialized.data(), static_cast<int64_t>(serialized.size())};
+  const std::string serialized = metadataValue(schema->metadata, "ARROW:extension:metadata");
+  const GeoArrowStringView extension_metadata{serialized.data(), static_cast<int64_t>(serialized.size())};
   GeoArrowMetadataView metadata;
   GeoArrowError error;
-  if (GeoArrowMetadataViewInit(&metadata, extension_metadata, &error) !=
-      GEOARROW_OK) {
-    throw std::invalid_argument(
-        std::string("Could not read GeoArrow extension metadata: ") +
-        error.message);
+  if (GeoArrowMetadataViewInit(&metadata, extension_metadata, &error) != GEOARROW_OK) {
+    throw std::invalid_argument(std::string("Could not read GeoArrow extension metadata: ") + error.message);
   }
   if (metadata.edge_type != GEOARROW_EDGE_TYPE_PLANAR) {
-    throw std::invalid_argument(
-        "Cannot split GeoArrow geometries with non-planar edges");
+    throw std::invalid_argument("Cannot split GeoArrow geometries with non-planar edges");
   }
 }
 
@@ -363,11 +335,8 @@ WkbReader::~WkbReader() {
 
 void WkbReader::init(const ArrowSchema *schema) {
   GeoArrowError error;
-  if (GeoArrowArrayReaderInitFromSchema(&reader, schema, &error) !=
-      GEOARROW_OK) {
-    throw std::invalid_argument(
-        std::string("Could not read the geometry column as WKB: ") +
-        error.message);
+  if (GeoArrowArrayReaderInitFromSchema(&reader, schema, &error) != GEOARROW_OK) {
+    throw std::invalid_argument(std::string("Could not read the geometry column as WKB: ") + error.message);
   }
   ready = true;
 }
@@ -375,9 +344,7 @@ void WkbReader::init(const ArrowSchema *schema) {
 void WkbReader::setArray(const ArrowArray *array) {
   GeoArrowError error;
   if (GeoArrowArrayReaderSetArray(&reader, array, &error) != GEOARROW_OK) {
-    throw std::invalid_argument(
-        std::string("Could not read a batch of WKB geometries: ") +
-        error.message);
+    throw std::invalid_argument(std::string("Could not read a batch of WKB geometries: ") + error.message);
   }
 }
 
@@ -385,9 +352,8 @@ void WkbReader::visit(int64_t i, GeoArrowVisitor *visitor) {
   GeoArrowError error;
   visitor->error = &error;
   if (GeoArrowArrayReaderVisit(&reader, i, 1, visitor) != GEOARROW_OK) {
-    throw std::invalid_argument(
-        std::string("Could not read WKB geometry at row ") + std::to_string(i) +
-        ": " + error.message);
+    throw std::invalid_argument(std::string("Could not read WKB geometry at row ") + std::to_string(i) +
+                                ": " + error.message);
   }
 }
 
@@ -398,8 +364,7 @@ void WkbReader::visit(int64_t i, GeoArrowVisitor *visitor) {
 /// already - so the common case is a single bulk append. A z or m coordinate
 /// to step over, or x and y held apart, falls back to gathering. Only x and
 /// y are read: splitting is planar.
-static int appendCoords(const GeoArrowCoordView *c,
-                        std::vector<geo::Coord> &into) {
+static int appendCoords(const GeoArrowCoordView *c, std::vector<geo::Coord> &into) {
   const std::size_t count = static_cast<std::size_t>(c->n_coords);
   if (count == 0) {
     return GEOARROW_OK;
@@ -440,8 +405,7 @@ public:
 
   /// A run of coordinates as geoarrow-c describes one: x and y interleaved,
   /// two doubles to a vertex, which is exactly a Coord array
-  static GeoArrowCoordView asRun(const geo::Coord *coordinates,
-                                 std::size_t count) {
+  static GeoArrowCoordView asRun(const geo::Coord *coordinates, std::size_t count) {
     GeoArrowCoordView run{};
     const auto *values = reinterpret_cast<const double *>(coordinates);
     run.values[0] = values;
@@ -469,16 +433,14 @@ public:
   }
 
   /// Rings exterior first, as the split produces them
-  void writePolygon(const geo::Coord *coordinates, const int32_t *ring_offsets,
-                    std::size_t rings) {
+  void writePolygon(const geo::Coord *coordinates, const int32_t *ring_offsets, std::size_t rings) {
     begin(GEOARROW_GEOMETRY_TYPE_POLYGON);
     for (std::size_t r = 0; r < rings; r++) {
       const int32_t from = ring_offsets[r];
       const int32_t to = ring_offsets[r + 1];
       check(into.ring_start(&into));
       if (to > from) {
-        const GeoArrowCoordView run =
-            asRun(coordinates + from, static_cast<std::size_t>(to - from));
+        const GeoArrowCoordView run = asRun(coordinates + from, static_cast<std::size_t>(to - from));
         check(into.coords(&into, &run));
       }
       check(into.ring_end(&into));
@@ -496,8 +458,7 @@ public:
   void finish(ArrowArray *out) {
     GeoArrowError error;
     if (GeoArrowWKBWriterFinish(&writer, out, &error) != GEOARROW_OK) {
-      throw std::runtime_error(std::string("Could not finish writing WKB: ") +
-                               error.message);
+      throw std::runtime_error(std::string("Could not finish writing WKB: ") + error.message);
     }
   }
 
@@ -522,7 +483,6 @@ private:
   GeoArrowVisitor into{};
 };
 
-
 /// One batch of split pieces: the geometries in GeoArrow's flat layout,
 /// and for each piece the index of the geometry it was split from.
 BatchData::BatchData() = default;
@@ -546,15 +506,13 @@ namespace {
 
 /// The buffers of a native batch, picked by geometry type
 std::vector<geo::Coord> &coordinatesOf(BatchData &data) {
-  return data.type == GeometryType::polygon ? data.polygons.coordinates
-                                            : data.lines.coordinates;
+  return data.type == GeometryType::polygon ? data.polygons.coordinates : data.lines.coordinates;
 }
 
 /// Where each run of coordinates begins: one run per piece for linestrings,
 /// one per ring for polygons.
 std::vector<int32_t> &vertexOffsetsOf(BatchData &data) {
-  return data.type == GeometryType::polygon ? data.polygons.ring_offsets
-                                            : data.lines.offsets;
+  return data.type == GeometryType::polygon ? data.polygons.ring_offsets : data.lines.offsets;
 }
 
 } // namespace
@@ -584,20 +542,16 @@ static void clearNullable(ArrowSchema *schema) {
 /// GeoArrow reader looks for. WKB comes out of the same call as a binary
 /// column carrying the same kind of metadata, so all three encodings are one
 /// line apart. nanoarrow puts the field beside the parent index in a struct.
-void exportSchema(GeometryType type, const ArrowSchema *source,
-                  ArrowSchema *out) {
+void exportSchema(GeometryType type, const ArrowSchema *source, ArrowSchema *out) {
   nanoarrow::UniqueSchema geometry;
-  if (GeoArrowSchemaInitExtension(geometry.get(), writtenAs(type)) !=
-      GEOARROW_OK) {
-    throw std::runtime_error(std::string("Could not describe a column of ") +
-                             extensionName(type));
+  if (GeoArrowSchemaInitExtension(geometry.get(), writtenAs(type)) != GEOARROW_OK) {
+    throw std::runtime_error(std::string("Could not describe a column of ") + extensionName(type));
   }
   // The split changes storage encoding/type but not the coordinate reference
   // system. Keep the source's GeoArrow extension metadata when it has one;
   // GeoArrowSchemaInitExtension already supplies the canonical empty object
   // for plain Arrow arrays without metadata.
-  if (source != nullptr &&
-      !metadataValue(source->metadata, "ARROW:extension:metadata").empty() &&
+  if (source != nullptr && !metadataValue(source->metadata, "ARROW:extension:metadata").empty() &&
       GeoArrowSchemaSetMetadataFrom(geometry.get(), source) != GEOARROW_OK) {
     throw std::runtime_error("Could not preserve GeoArrow extension metadata");
   }
@@ -611,8 +565,7 @@ void exportSchema(GeometryType type, const ArrowSchema *source,
   ArrowSchemaRelease(schema->children[0]);
   geometry.move(schema->children[0]);
 
-  NANOARROW_THROW_NOT_OK(
-      ArrowSchemaSetType(schema->children[1], NANOARROW_TYPE_INT64));
+  NANOARROW_THROW_NOT_OK(ArrowSchemaSetType(schema->children[1], NANOARROW_TYPE_INT64));
   NANOARROW_THROW_NOT_OK(ArrowSchemaSetName(schema->children[1], "parent"));
 
   // A split never produces a null - not a null piece, ring, vertex or
@@ -627,8 +580,7 @@ void exportSchema(GeometryType type, const ArrowSchema *source,
 
 /// Hand a vector's storage to Arrow as buffer `i` of an array, without
 /// copying it: nanoarrow takes the vector over and frees it with the buffer.
-template <typename T>
-static void adoptBuffer(ArrowArray *array, int64_t i, std::vector<T> values) {
+template <typename T> static void adoptBuffer(ArrowArray *array, int64_t i, std::vector<T> values) {
   nanoarrow::UniqueBuffer buffer;
   nanoarrow::BufferInitSequence(buffer.get(), std::move(values));
   NANOARROW_THROW_NOT_OK(ArrowArraySetBuffer(array, i, buffer.get()));
@@ -637,18 +589,13 @@ static void adoptBuffer(ArrowArray *array, int64_t i, std::vector<T> values) {
 /// Hand a vector's storage to geoarrow-c as buffer `i` of the geometry
 /// column, without copying it: the builder takes the vector over and frees
 /// it when the array it becomes is released.
-template <typename T>
-static void adoptGeoBuffer(GeoArrowBuilder *builder, int64_t i,
-                           std::vector<T> values) {
+template <typename T> static void adoptGeoBuffer(GeoArrowBuilder *builder, int64_t i, std::vector<T> values) {
   auto *owned = new std::vector<T>(std::move(values));
   GeoArrowBufferView view;
   view.data = reinterpret_cast<const uint8_t *>(owned->data());
   view.size_bytes = static_cast<int64_t>(owned->size() * sizeof(T));
-  const auto release = [](uint8_t *, int64_t, void *held) {
-    delete static_cast<std::vector<T> *>(held);
-  };
-  if (GeoArrowBuilderSetOwnedBuffer(builder, i, view, release, owned) !=
-      GEOARROW_OK) {
+  const auto release = [](uint8_t *, int64_t, void *held) { delete static_cast<std::vector<T> *>(held); };
+  if (GeoArrowBuilderSetOwnedBuffer(builder, i, view, release, owned) != GEOARROW_OK) {
     delete owned;
     throw std::runtime_error("Could not hand a buffer to the geometry column");
   }
@@ -665,29 +612,25 @@ static void adoptGeoBuffer(GeoArrowBuilder *builder, int64_t i,
 /// array's length is worked out from the buffer sizes, so none is set here.
 static void exportGeometryColumn(BatchData &data, ArrowArray *out) {
   GeoArrowBuilder builder{};
-  if (GeoArrowBuilderInitFromType(&builder, writtenAs(data.type)) !=
-      GEOARROW_OK) {
-    throw std::runtime_error(std::string("Could not start a column of ") +
-                             extensionName(data.type));
+  if (GeoArrowBuilderInitFromType(&builder, writtenAs(data.type)) != GEOARROW_OK) {
+    throw std::runtime_error(std::string("Could not start a column of ") + extensionName(data.type));
   }
   // adopting a buffer can throw, and the builder owns those already handed to
   // it, so it is reset however this returns
-  std::unique_ptr<GeoArrowBuilder, void (*)(GeoArrowBuilder *)> owned(
-      &builder, GeoArrowBuilderReset);
+  std::unique_ptr<GeoArrowBuilder, void (*)(GeoArrowBuilder *)> owned(&builder, GeoArrowBuilderReset);
 
   int64_t buffer = 1;
   if (data.type == GeometryType::polygon) {
     // polygons over rings, then rings over vertices
-    adoptGeoBuffer(&builder, buffer++,
-                   std::move(data.polygons.polygon_offsets));
+    adoptGeoBuffer(&builder, buffer++, std::move(data.polygons.polygon_offsets));
   }
   adoptGeoBuffer(&builder, buffer++, std::move(vertexOffsetsOf(data)));
   adoptGeoBuffer(&builder, buffer, std::move(coordinatesOf(data)));
 
   GeoArrowError error;
   if (GeoArrowBuilderFinish(&builder, out, &error) != GEOARROW_OK) {
-    throw std::runtime_error(std::string("Could not finish a column of ") +
-                             extensionName(data.type) + ": " + error.message);
+    throw std::runtime_error(std::string("Could not finish a column of ") + extensionName(data.type) + ": " +
+                             error.message);
   }
 }
 
@@ -711,14 +654,12 @@ void exportArray(BatchData data, ArrowArray *out) {
   // parent indices beside them - so this is where a disagreement would show
   const int64_t pieces = data.size();
   if (geometry->length != pieces) {
-    throw std::runtime_error("Wrote " + std::to_string(geometry->length) +
-                             " pieces but recorded " + std::to_string(pieces) +
-                             " parents");
+    throw std::runtime_error("Wrote " + std::to_string(geometry->length) + " pieces but recorded " +
+                             std::to_string(pieces) + " parents");
   }
 
   nanoarrow::UniqueArray array;
-  NANOARROW_THROW_NOT_OK(
-      ArrowArrayInitFromType(array.get(), NANOARROW_TYPE_STRUCT));
+  NANOARROW_THROW_NOT_OK(ArrowArrayInitFromType(array.get(), NANOARROW_TYPE_STRUCT));
   NANOARROW_THROW_NOT_OK(ArrowArrayAllocateChildren(array.get(), 2));
   geometry.move(array->children[0]);
 
@@ -730,8 +671,7 @@ void exportArray(BatchData data, ArrowArray *out) {
   array->length = pieces;
   // MINIMAL checks every buffer against the length we just set; it stops
   // short of the level that would try to reallocate the buffers adopted here
-  NANOARROW_THROW_NOT_OK(ArrowArrayFinishBuilding(
-      array.get(), NANOARROW_VALIDATION_LEVEL_MINIMAL, nullptr));
+  NANOARROW_THROW_NOT_OK(ArrowArrayFinishBuilding(array.get(), NANOARROW_VALIDATION_LEVEL_MINIMAL, nullptr));
 
   array.move(out);
 }
@@ -739,32 +679,27 @@ void exportArray(BatchData data, ArrowArray *out) {
 // -- Splitting a stream ------------------------------------------------------
 
 /// Split one batch of linestrings into pieces
-static void splitLineStringBatch(NativeReader &reader, int64_t count,
-                                 const grid::Grid &grid, bool bounded,
-                                 int64_t parent_base, BatchData &out) {
-  for (int64_t l = 0; l < count; l++) {
+static void splitLineStringBatch(NativeReader &reader, int64_t first, int64_t count, const grid::Grid &grid,
+                                 bool bounded, int64_t parent_base, BatchData &out) {
+  for (int64_t l = first; l < first + count; l++) {
     const std::size_t before = out.lines.size();
-    operations::splitLineStringGrid(reader.vertices(l), grid, bounded,
-                                    out.lines);
+    operations::splitLineStringGrid(reader.vertices(l), grid, bounded, out.lines);
     // one parent per piece this line produced; a line that fell apart into
     // nothing produces none
-    out.parents.insert(out.parents.end(), out.lines.size() - before,
-                       parent_base + l);
+    out.parents.insert(out.parents.end(), out.lines.size() - before, parent_base + l);
   }
 }
 
 /// Split one batch of polygons into pieces
-static void splitPolygonBatch(NativeReader &reader, int64_t count,
-                              const grid::Grid &grid, int64_t parent_base,
-                              BatchData &out) {
+static void splitPolygonBatch(NativeReader &reader, int64_t first, int64_t count, const grid::Grid &grid,
+                              int64_t parent_base, BatchData &out) {
   std::vector<operations::CoordSpan> rings;
   std::vector<linestr> scratch;
-  for (int64_t p = 0; p < count; p++) {
+  for (int64_t p = first; p < first + count; p++) {
     reader.rings(p, rings, scratch);
     const std::size_t before = out.polygons.size();
     operations::splitPolygonGridPieces(rings, grid, out.polygons);
-    out.parents.insert(out.parents.end(), out.polygons.size() - before,
-                       parent_base + p);
+    out.parents.insert(out.parents.end(), out.polygons.size() - before, parent_base + p);
   }
 }
 
@@ -782,10 +717,8 @@ static void splitPolygonBatch(NativeReader &reader, int64_t count,
 /// something else has nowhere to go and is refused with the row it is in.
 class WkbSplitter {
 public:
-  WkbSplitter(GeometryType type, const grid::Grid &grid, bool bounded,
-              BatchData &out)
-      : want(wanted(type)), expected(type), grid(grid), bounded(bounded),
-        out(out) {}
+  WkbSplitter(GeometryType type, const grid::Grid &grid, bool bounded, BatchData &out)
+      : want(wanted(type)), expected(type), grid(grid), bounded(bounded), out(out) {}
 
   /// A visitor bound to this splitter. geoarrow-c calls plain C function
   /// pointers, so each one recovers the splitter from private_data.
@@ -794,14 +727,11 @@ public:
     GeoArrowVisitorInitVoid(&v);
     v.feat_start = [](GeoArrowVisitor *v) { return self(v)->featStart(); };
     v.null_feat = [](GeoArrowVisitor *v) { return self(v)->nullFeat(); };
-    v.geom_start = [](GeoArrowVisitor *v, enum GeoArrowGeometryType type,
-                      enum GeoArrowDimensions) {
+    v.geom_start = [](GeoArrowVisitor *v, enum GeoArrowGeometryType type, enum GeoArrowDimensions) {
       return self(v)->geomStart(type);
     };
     v.ring_start = [](GeoArrowVisitor *v) { return self(v)->ringStart(); };
-    v.coords = [](GeoArrowVisitor *v, const GeoArrowCoordView *c) {
-      return self(v)->coords(c);
-    };
+    v.coords = [](GeoArrowVisitor *v, const GeoArrowCoordView *c) { return self(v)->coords(c); };
     v.ring_end = [](GeoArrowVisitor *v) { return self(v)->ringEnd(); };
     v.geom_end = [](GeoArrowVisitor *v) { return self(v)->geomEnd(); };
     v.private_data = this;
@@ -813,14 +743,11 @@ public:
 
   /// How many pieces this splitter has produced
   std::size_t pieces() const {
-    return expected == GeometryType::polygon ? out.polygons.size()
-                                             : out.lines.size();
+    return expected == GeometryType::polygon ? out.polygons.size() : out.lines.size();
   }
 
 private:
-  static WkbSplitter *self(GeoArrowVisitor *v) {
-    return static_cast<WkbSplitter *>(v->private_data);
-  }
+  static WkbSplitter *self(GeoArrowVisitor *v) { return static_cast<WkbSplitter *>(v->private_data); }
 
   /// A callback cannot let a C++ exception escape into geoarrow-c, so it
   /// records the complaint and returns a failure code; the message is
@@ -842,22 +769,17 @@ private:
   /// this must too: the same data in two encodings should not behave
   /// differently. WKB knows which row it is on, so it says.
   int nullFeat() {
-    return refuse("Cannot split missing (null) geometries (row " +
-                  std::to_string(row) +
+    return refuse("Cannot split missing (null) geometries (row " + std::to_string(row) +
                   "): drop or fill null geometries first");
   }
 
   int geomStart(enum GeoArrowGeometryType type) {
     depth++;
     if (depth == 1 && type != want) {
-      std::string message = std::string("Cannot split a ") +
-                            geometryTypeName(type) + " (row " +
-                            std::to_string(row) + ") as a " +
-                            extensionName(expected);
-      if (type == GEOARROW_GEOMETRY_TYPE_MULTILINESTRING ||
-          type == GEOARROW_GEOMETRY_TYPE_MULTIPOLYGON ||
-          type == GEOARROW_GEOMETRY_TYPE_MULTIPOINT ||
-          type == GEOARROW_GEOMETRY_TYPE_GEOMETRYCOLLECTION) {
+      std::string message = std::string("Cannot split a ") + geometryTypeName(type) + " (row " +
+                            std::to_string(row) + ") as a " + extensionName(expected);
+      if (type == GEOARROW_GEOMETRY_TYPE_MULTILINESTRING || type == GEOARROW_GEOMETRY_TYPE_MULTIPOLYGON ||
+          type == GEOARROW_GEOMETRY_TYPE_MULTIPOINT || type == GEOARROW_GEOMETRY_TYPE_GEOMETRYCOLLECTION) {
         message += "; merge or explode multi-part geometries before splitting";
       }
       return refuse(std::move(message));
@@ -870,9 +792,7 @@ private:
     return GEOARROW_OK;
   }
 
-  int coords(const GeoArrowCoordView *c) {
-    return appendCoords(c, coordinates);
-  }
+  int coords(const GeoArrowCoordView *c) { return appendCoords(c, coordinates); }
 
   int ringEnd() { return GEOARROW_OK; }
 
@@ -886,15 +806,12 @@ private:
       rings.clear();
       for (std::size_t r = 0; r < ring_starts.size(); r++) {
         const std::size_t begin = ring_starts[r];
-        const std::size_t end = r + 1 < ring_starts.size()
-                                    ? ring_starts[r + 1]
-                                    : coordinates.size();
+        const std::size_t end = r + 1 < ring_starts.size() ? ring_starts[r + 1] : coordinates.size();
         rings.push_back({coordinates.data() + begin, end - begin});
       }
       operations::splitPolygonGridPieces(rings, grid, out.polygons);
     } else {
-      operations::splitLineStringGrid({coordinates.data(), coordinates.size()},
-                                      grid, bounded, out.lines);
+      operations::splitLineStringGrid({coordinates.data(), coordinates.size()}, grid, bounded, out.lines);
     }
     return GEOARROW_OK;
   }
@@ -919,12 +836,11 @@ public:
 };
 
 /// Split one batch of WKB geometries into pieces
-void splitWkbBatch(WkbReader &reader, int64_t count, GeometryType type,
-                   const grid::Grid &grid, bool bounded, int64_t parent_base,
-                   BatchData &out) {
+void splitWkbBatch(WkbReader &reader, int64_t first, int64_t count, GeometryType type, const grid::Grid &grid,
+                   bool bounded, int64_t parent_base, BatchData &out) {
   WkbSplitter splitter(type, grid, bounded, out);
   GeoArrowVisitor visitor = splitter.visitor();
-  for (int64_t i = 0; i < count; i++) {
+  for (int64_t i = first; i < first + count; i++) {
     const std::size_t before = splitter.pieces();
     splitter.startRow(i);
     try {
@@ -937,8 +853,7 @@ void splitWkbBatch(WkbReader &reader, int64_t count, GeometryType type,
       }
       throw;
     }
-    out.parents.insert(out.parents.end(), splitter.pieces() - before,
-                       parent_base + i);
+    out.parents.insert(out.parents.end(), splitter.pieces() - before, parent_base + i);
   }
 }
 
@@ -964,14 +879,11 @@ public:
     GeoArrowVisitorInitVoid(&v);
     v.feat_start = [](GeoArrowVisitor *v) { return self(v)->featStart(); };
     v.null_feat = [](GeoArrowVisitor *v) { return self(v)->nullFeat(); };
-    v.geom_start = [](GeoArrowVisitor *v, enum GeoArrowGeometryType type,
-                      enum GeoArrowDimensions) {
+    v.geom_start = [](GeoArrowVisitor *v, enum GeoArrowGeometryType type, enum GeoArrowDimensions) {
       return self(v)->geomStart(type);
     };
     v.ring_start = [](GeoArrowVisitor *v) { return self(v)->ringStart(); };
-    v.coords = [](GeoArrowVisitor *v, const GeoArrowCoordView *c) {
-      return self(v)->coords(c);
-    };
+    v.coords = [](GeoArrowVisitor *v, const GeoArrowCoordView *c) { return self(v)->coords(c); };
     v.geom_end = [](GeoArrowVisitor *v) { return self(v)->geomEnd(); };
     v.private_data = this;
     return v;
@@ -986,9 +898,7 @@ public:
   std::string problem;
 
 private:
-  static MixedSplitter *self(GeoArrowVisitor *v) {
-    return static_cast<MixedSplitter *>(v->private_data);
-  }
+  static MixedSplitter *self(GeoArrowVisitor *v) { return static_cast<MixedSplitter *>(v->private_data); }
 
   int refuse(std::string what) {
     problem = std::move(what);
@@ -1014,8 +924,7 @@ private:
   }
 
   int nullFeat() {
-    return refuse("Cannot split missing (null) geometries (row " +
-                  std::to_string(row) +
+    return refuse("Cannot split missing (null) geometries (row " + std::to_string(row) +
                   "): drop or fill null geometries first");
   }
 
@@ -1035,9 +944,7 @@ private:
     return GEOARROW_OK;
   }
 
-  int coords(const GeoArrowCoordView *c) {
-    return appendCoords(c, coordinates);
-  }
+  int coords(const GeoArrowCoordView *c) { return appendCoords(c, coordinates); }
 
   int geomEnd() {
     Frame frame = open.back();
@@ -1070,8 +977,8 @@ private:
         }
       }
     } catch (const std::exception &error) {
-      return refuse(std::string("Could not split the geometry at row ") +
-                    std::to_string(row) + ": " + error.what());
+      return refuse(std::string("Could not split the geometry at row ") + std::to_string(row) + ": " +
+                    error.what());
     }
 
     // the geometry's own coordinates are spent
@@ -1083,8 +990,7 @@ private:
   void splitLine(const geo::Coord *from, std::size_t count) {
     pieces_scratch.offsets.assign(1, 0);
     pieces_scratch.coordinates.clear();
-    operations::splitLineStringGrid({from, count}, grid, bounded,
-                                    pieces_scratch);
+    operations::splitLineStringGrid({from, count}, grid, bounded, pieces_scratch);
     for (std::size_t p = 0; p + 1 < pieces_scratch.offsets.size(); p++) {
       const int32_t begin = pieces_scratch.offsets[p];
       const int32_t end = pieces_scratch.offsets[p + 1];
@@ -1098,22 +1004,18 @@ private:
     rings.clear();
     for (std::size_t r = frame.ring_base; r + 1 < ring_offsets.size(); r++) {
       const int32_t begin = ring_offsets[r + 1];
-      const int32_t end = r + 2 < ring_offsets.size()
-                              ? ring_offsets[r + 2]
-                              : static_cast<int32_t>(coordinates.size());
-      rings.push_back({coordinates.data() + begin,
-                       static_cast<std::size_t>(end - begin)});
+      const int32_t end =
+          r + 2 < ring_offsets.size() ? ring_offsets[r + 2] : static_cast<int32_t>(coordinates.size());
+      rings.push_back({coordinates.data() + begin, static_cast<std::size_t>(end - begin)});
     }
     polygon_scratch.coordinates.clear();
     polygon_scratch.ring_offsets.assign(1, 0);
     polygon_scratch.polygon_offsets.assign(1, 0);
     operations::splitPolygonGridPieces(rings, grid, polygon_scratch);
-    for (std::size_t q = 0; q + 1 < polygon_scratch.polygon_offsets.size();
-         q++) {
+    for (std::size_t q = 0; q + 1 < polygon_scratch.polygon_offsets.size(); q++) {
       const int32_t first = polygon_scratch.polygon_offsets[q];
       const int32_t last = polygon_scratch.polygon_offsets[q + 1];
-      writer.writePolygon(polygon_scratch.coordinates.data(),
-                          polygon_scratch.ring_offsets.data() + first,
+      writer.writePolygon(polygon_scratch.coordinates.data(), polygon_scratch.ring_offsets.data() + first,
                           static_cast<std::size_t>(last - first));
       written++;
     }
@@ -1136,14 +1038,14 @@ private:
 };
 
 /// Split one batch of geometries of any type, writing the pieces as WKB
-void splitMixedBatch(WkbReader &reader, int64_t count, const grid::Grid &grid,
-                     bool bounded, int64_t parent_base, BatchData &out) {
+void splitMixedBatch(WkbReader &reader, int64_t first, int64_t count, const grid::Grid &grid, bool bounded,
+                     int64_t parent_base, BatchData &out) {
   if (!out.wkb) {
     out.wkb = std::make_unique<WkbWriter>();
   }
   MixedSplitter splitter(grid, bounded, *out.wkb);
   GeoArrowVisitor visitor = splitter.visitor();
-  for (int64_t i = 0; i < count; i++) {
+  for (int64_t i = first; i < first + count; i++) {
     const std::size_t before = splitter.pieces();
     splitter.startRow(i);
     try {
@@ -1154,19 +1056,16 @@ void splitMixedBatch(WkbReader &reader, int64_t count, const grid::Grid &grid,
       }
       throw;
     }
-    out.parents.insert(out.parents.end(), splitter.pieces() - before,
-                       parent_base + i);
+    out.parents.insert(out.parents.end(), splitter.pieces() - before, parent_base + i);
   }
 }
 
-
-void splitNativeBatch(NativeReader &reader, int64_t count, GeometryType type,
-                      const grid::Grid &grid, bool bounded,
-                      int64_t parent_base, BatchData &out) {
+void splitNativeBatch(NativeReader &reader, int64_t first, int64_t count, GeometryType type,
+                      const grid::Grid &grid, bool bounded, int64_t parent_base, BatchData &out) {
   if (type == GeometryType::polygon) {
-    splitPolygonBatch(reader, count, grid, parent_base, out);
+    splitPolygonBatch(reader, first, count, grid, parent_base, out);
   } else {
-    splitLineStringBatch(reader, count, grid, bounded, parent_base, out);
+    splitLineStringBatch(reader, first, count, grid, bounded, parent_base, out);
   }
 }
 

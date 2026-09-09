@@ -135,7 +135,7 @@ def read_split_stream(stream) -> tuple[numpy.ndarray, numpy.ndarray]:
     :func:`split_polygons` do. To keep the streaming memory
     benefit - splitting a source larger than memory, for example - iterate
     the stream yourself instead, e.g. with
-        ``pyarrow.RecordBatchReader.from_stream(stream)``,
+    ``pyarrow.RecordBatchReader.from_stream(stream)``,
     and consume each record batch as it arrives.
 
     Parameters
@@ -638,41 +638,44 @@ def read_raster_values_for_splits(
                 for band, values in result_values.items()
             }
         budget = int(max_raster_memory_mb * 1024 * 1024)
-        read_dtype = numpy.result_type(
-            *(numpy.dtype(dataset.dtypes[band - 1]) for band in bands)
-        )
-        bytes_per_pixel = read_dtype.itemsize * len(bands)
-        max_pixels = budget // bytes_per_pixel
-        if max_pixels < 1:
-            raise ValueError(
-                "max_raster_memory_mb is too small to read one pixel "
-                "across the requested bands"
-            )
         row_to_value = numpy.full(len(splits), -1, dtype=int)
         row_to_value[positions] = numpy.arange(len(positions))
 
-        def consume(window, window_positions):
-            data = dataset.read(indexes=bands, window=window)
-            r0, c0 = int(window.row_off), int(window.col_off)
-            for k, band in enumerate(bands):
-                result_values[band][row_to_value[window_positions]] = data[
-                    k,
-                    jj[window_positions] - r0,
-                    ii[window_positions] - c0,
-                ]
+        # Rasterio cannot read bands with different dtypes in one call, and
+        # bands with different native block layouts need different window
+        # plans for efficient I/O. Read compatible bands together.
+        band_groups = defaultdict(list)
+        for band in bands:
+            key = (dataset.dtypes[band - 1], dataset.block_shapes[band - 1])
+            band_groups[key].append(band)
 
-        block_h, block_w = dataset.block_shapes[bands[0] - 1]
-        for window, window_positions in _plan_raster_windows(
-            ii,
-            jj,
-            positions,
-            dataset.width,
-            dataset.height,
-            block_h,
-            block_w,
-            max_pixels,
-        ):
-            consume(window, window_positions)
+        for (dtype, (block_h, block_w)), group in band_groups.items():
+            bytes_per_pixel = numpy.dtype(dtype).itemsize * len(group)
+            max_pixels = budget // bytes_per_pixel
+            if max_pixels < 1:
+                raise ValueError(
+                    "max_raster_memory_mb is too small to read one pixel "
+                    "across the requested bands"
+                )
+            for window, window_positions in _plan_raster_windows(
+                ii,
+                jj,
+                positions,
+                dataset.width,
+                dataset.height,
+                block_h,
+                block_w,
+                max_pixels,
+            ):
+                data = dataset.read(indexes=group, window=window)
+                r0, c0 = int(window.row_off), int(window.col_off)
+                value_positions = row_to_value[window_positions]
+                for k, band in enumerate(group):
+                    result_values[band][value_positions] = data[
+                        k,
+                        jj[window_positions] - r0,
+                        ii[window_positions] - c0,
+                    ]
         return {
             band: _build_series(splits.index, positions, values)
             for band, values in result_values.items()
@@ -744,11 +747,12 @@ def _plan_raster_windows(
         min_i, min_j, max_i - min_i + 1, max_j - min_j + 1
     )
     if tight_window.width * tight_window.height <= max_pixels:
-        return [(tight_window, positions)]
+        yield tight_window, positions
+        return
 
     native_block_pixels = block_height * block_width
     if native_block_pixels > max_pixels:
-        return _plan_oversized_block_windows(
+        yield from _plan_oversized_block_windows(
             ii,
             jj,
             positions,
@@ -758,6 +762,7 @@ def _plan_raster_windows(
             block_width,
             max_pixels,
         )
+        return
 
     block_rows = jj[positions] // block_height
     block_columns = ii[positions] // block_width
@@ -802,21 +807,17 @@ def _plan_raster_windows(
         previous_row = block_row
     rectangles.extend(active.values())
 
-    planned = []
     for rectangle in rectangles:
         row_off = rectangle.first_row * block_height
         col_off = rectangle.first_column * block_width
         row_end = min((rectangle.last_row + 1) * block_height, raster_height)
         col_end = min((rectangle.last_column + 1) * block_width, raster_width)
-        planned.append(
-            (
-                rasterio.windows.Window(
-                    col_off, row_off, col_end - col_off, row_end - row_off
-                ),
-                numpy.concatenate(rectangle.position_chunks),
-            )
+        yield (
+            rasterio.windows.Window(
+                col_off, row_off, col_end - col_off, row_end - row_off
+            ),
+            numpy.concatenate(rectangle.position_chunks),
         )
-    return planned
 
 
 def _horizontal_block_runs(block_row, columns, grouped, max_blocks):
@@ -869,24 +870,20 @@ def _plan_oversized_block_windows(
         + (ii[positions] % block_width // tile_width) * tile_width
     )
     grouped = _group_positions(row_offsets, column_offsets, positions)
-    planned = []
     for (row_off, col_off), window_positions in sorted(grouped.items()):
         native_row_end = min(
             (row_off // block_height + 1) * block_height, raster_height
         )
         native_col_end = min((col_off // block_width + 1) * block_width, raster_width)
-        planned.append(
-            (
-                rasterio.windows.Window(
-                    col_off,
-                    row_off,
-                    min(col_off + tile_width, native_col_end) - col_off,
-                    min(row_off + tile_height, native_row_end) - row_off,
-                ),
-                window_positions,
-            )
+        yield (
+            rasterio.windows.Window(
+                col_off,
+                row_off,
+                min(col_off + tile_width, native_col_end) - col_off,
+                min(row_off + tile_height, native_row_end) - row_off,
+            ),
+            window_positions,
         )
-    return planned
 
 
 def _build_series(
