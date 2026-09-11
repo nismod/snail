@@ -49,13 +49,6 @@ class TestOverlayRaster:
         )
         assert_array_equal(splits["two_band_band_1"].values, [0.0, 1.0, 22.0])
 
-    def test_lazy_reads_the_same_values(self, two_band_raster, lines_over_raster):
-        pytest.importorskip("rioxarray")
-        splits = overlay_raster(
-            lines_over_raster, two_band_raster, bands=[1], lazy=True
-        )
-        assert_array_equal(splits["two_band_band_1"].values, [0.0, 1.0, 22.0])
-
     def test_reprojects_features_to_raster_crs(
         self, two_band_raster, lines_over_raster
     ):
@@ -142,12 +135,6 @@ class TestOverlayRasters:
     def test_requires_path_column(self, lines_over_raster):
         with pytest.raises(ValueError, match="path"):
             overlay_rasters(lines_over_raster, pd.DataFrame({"key": ["flood"]}))
-
-    def test_lazy_reads_the_same_values(self, two_band_raster, lines_over_raster):
-        pytest.importorskip("rioxarray")
-        splits = overlay_rasters(lines_over_raster, [two_band_raster], lazy=True)
-        assert_array_equal(splits["two_band_band_1"].values, [0.0, 1.0, 22.0])
-        assert_array_equal(splits["two_band_band_2"].values, [100.0, 101.0, 122.0])
 
 
 class TestSplitFeatures:

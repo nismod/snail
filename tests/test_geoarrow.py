@@ -634,6 +634,37 @@ class TestStream:
         assert source.num_chunks == 3
         assert len(batches) == 3
 
+    def test_output_batch_target_stops_between_features(self, many_linestrings):
+        batches = batches_of(
+            core_split_linestrings(
+                to_geoarrow(many_linestrings),
+                NROWS,
+                NCOLS,
+                TRANSFORM,
+                max_output_rows=5,
+            )
+        )
+
+        assert [len(batch) for batch in batches] == [8, 8, 8]
+        for parent in range(len(many_linestrings)):
+            containing = [
+                batch
+                for batch in batches
+                if parent in batch.column("parent").to_pylist()
+            ]
+            assert len(containing) == 1
+
+    @pytest.mark.parametrize("max_output_rows", [0, -1])
+    def test_rejects_invalid_output_batch_target(self, linestrings, max_output_rows):
+        with pytest.raises(ValueError, match="max_output_rows"):
+            core_split_linestrings(
+                to_geoarrow(linestrings),
+                NROWS,
+                NCOLS,
+                TRANSFORM,
+                max_output_rows=max_output_rows,
+            )
+
     def test_parents_index_the_whole_source(self, many_linestrings):
         """A piece's parent indexes the source, not the batch it was in"""
         array = pa.array(many_linestrings.to_arrow(geometry_encoding="geoarrow"))
@@ -679,17 +710,13 @@ class TestStream:
 
     def test_requested_schema_compatibility(self, linestrings):
         reference = pa.RecordBatchReader.from_stream(
-            core_split_linestrings(
-                to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM
-            )
+            core_split_linestrings(to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM)
         )
         requested = reference.schema.set(
             0, reference.schema.field("geometry").with_name("requested_geometry")
         )
         reader = pa.RecordBatchReader.from_stream(
-            core_split_linestrings(
-                to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM
-            ),
+            core_split_linestrings(to_geoarrow(linestrings), NROWS, NCOLS, TRANSFORM),
             requested,
         )
         assert reader.schema.names == ["geometry", "parent"]
@@ -699,7 +726,9 @@ class TestStream:
         "requested",
         [
             pa.schema([pa.field("geometry", pa.binary())]),
-            pa.schema([pa.field("geometry", pa.int64()), pa.field("parent", pa.int64())]),
+            pa.schema(
+                [pa.field("geometry", pa.int64()), pa.field("parent", pa.int64())]
+            ),
         ],
     )
     def test_requested_schema_incompatible(self, linestrings, requested):
@@ -724,33 +753,29 @@ class TestStream:
             ],
         )
         batches = batches_of(
-            core_split_linestrings(
-                source, NROWS, NCOLS, TRANSFORM, bounded=True
-            )
+            core_split_linestrings(source, NROWS, NCOLS, TRANSFORM, bounded=True)
         )
         assert len(batches) == 1
         assert batches[0].column("parent").to_pylist() == [0, 0, 0, 0]
 
     def test_geometry_column_can_follow_attributes(self, linestrings):
         source = pa.table(
-            gpd.GeoDataFrame(
-                {"name": ["a", "b"], "geometry": linestrings}
-            ).to_arrow(geometry_encoding="geoarrow")
+            gpd.GeoDataFrame({"name": ["a", "b"], "geometry": linestrings}).to_arrow(
+                geometry_encoding="geoarrow"
+            )
         )
         assert len(batches_of(core_split_linestrings(source, NROWS, NCOLS, TRANSFORM)))
 
     def test_multiple_geometry_columns_are_rejected(self, linestrings):
         source = pa.table(
-            gpd.GeoDataFrame(
-                {"left": linestrings, "right": linestrings}
-            ).to_arrow(geometry_encoding="geoarrow")
+            gpd.GeoDataFrame({"left": linestrings, "right": linestrings}).to_arrow(
+                geometry_encoding="geoarrow"
+            )
         )
         with pytest.raises(ValueError, match="several"):
             core_split_linestrings(source, NROWS, NCOLS, TRANSFORM)
         selected = source.select(["left"])
-        assert batches_of(
-            core_split_linestrings(selected, NROWS, NCOLS, TRANSFORM)
-        )
+        assert batches_of(core_split_linestrings(selected, NROWS, NCOLS, TRANSFORM))
 
     def test_abandoned_and_partially_consumed_streams(self, many_linestrings):
         stream = core_split_linestrings(
@@ -863,18 +888,12 @@ class TestSplits:
     @pytest.mark.parametrize("transform", [(), (1, 0, 0, 0, 1)])
     def test_core_rejects_short_transform(self, linestrings, transform):
         with pytest.raises(ValueError, match="six values"):
-            core_split_linestrings(
-                to_geoarrow(linestrings), NROWS, NCOLS, transform
-            )
+            core_split_linestrings(to_geoarrow(linestrings), NROWS, NCOLS, transform)
 
     @pytest.mark.parametrize("nrows,ncols", [(-1, 4), (4, -1)])
-    def test_core_rejects_negative_grid_dimensions(
-        self, linestrings, nrows, ncols
-    ):
+    def test_core_rejects_negative_grid_dimensions(self, linestrings, nrows, ncols):
         with pytest.raises(ValueError, match="non-negative"):
-            core_split_linestrings(
-                to_geoarrow(linestrings), nrows, ncols, TRANSFORM
-            )
+            core_split_linestrings(to_geoarrow(linestrings), nrows, ncols, TRANSFORM)
 
     def test_linestrings_match_single_geometry_split(self, linestrings):
         actual = geometry_of(

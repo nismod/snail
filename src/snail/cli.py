@@ -8,16 +8,17 @@ import pandas
 
 from snail.intersection import GridDefinition
 from snail.io import (
-    read_features,
+    arrow_crs,
+    open_feature_batches,
     read_layer_names,
     read_raster_metadata,
-    write_features,
+    write_feature_batches,
 )
 from snail.overlay import (
-    overlay_raster,
-    overlay_rasters,
+    iter_overlay_raster_batches,
+    iter_overlay_rasters_batches,
+    iter_split_features_batches,
     parse_bands,
-    split_features,
 )
 
 # Module-level logger
@@ -28,7 +29,6 @@ def snail(args=None):
     """snail command"""
     parser = argparse.ArgumentParser(prog="snail")
     parser.add_argument("--verbose", "-v", action="count", default=0)
-    parser.add_argument("-x", "--experimental", action="store_true")
     subparsers = parser.add_subparsers(help="Run a command")
 
     parser_split = subparsers.add_parser(
@@ -110,9 +110,16 @@ def snail(args=None):
         "in one column per band, named '{column}_band_{n}'",
     )
     parser_split.add_argument(
-        "--lazy-rasters",
-        action="store_true",
-        help=("Read raster bands lazily with xarray/dask when attributing values."),
+        "--max-raster-memory-mb",
+        type=int,
+        default=256,
+        help="Maximum MiB for each raster attribution read buffer (default: 256)",
+    )
+    parser_split.add_argument(
+        "--batch-size",
+        type=int,
+        default=65_536,
+        help="Maximum feature/split rows per streaming batch (default: 65536)",
     )
     parser_split.add_argument(
         "-o",
@@ -148,9 +155,16 @@ def snail(args=None):
         help="CSV file with raster layers",
     )
     parser_process.add_argument(
-        "--lazy-rasters",
-        action="store_true",
-        help="Read raster bands lazily with xarray/dask during processing.",
+        "--max-raster-memory-mb",
+        type=int,
+        default=256,
+        help="Maximum MiB for each raster attribution read buffer (default: 256)",
+    )
+    parser_process.add_argument(
+        "--batch-size",
+        type=int,
+        default=65_536,
+        help="Maximum feature/split rows per streaming batch (default: 65536)",
     )
     parser_process.set_defaults(func=process)
 
@@ -218,30 +232,36 @@ def split(args):
         layers = [args.layer]
 
     for layer in layers:
-        features = read_features(Path(args.features), layer)
-        if grid is None:
-            layer_grid = GridDefinition(
-                features.crs, width, height, tuple(affine_transform)
-            )
-        else:
-            layer_grid = grid
+        with open_feature_batches(
+            Path(args.features), layer, args.batch_size
+        ) as features:
+            if grid is None:
+                layer_grid = GridDefinition(
+                    arrow_crs(features.schema),
+                    width,
+                    height,
+                    tuple(affine_transform),
+                )
+            else:
+                layer_grid = grid
 
-        if args.attribute and args.raster:
-            splits = overlay_raster(
-                features,
-                args.raster,
-                bands=args.band,
-                column=args.column,
-                experimental=args.experimental,
-                lazy=args.lazy_rasters,
-            )
-        else:
-            splits = split_features(features, layer_grid, args.experimental)
+            if args.attribute and args.raster:
+                splits = iter_overlay_raster_batches(
+                    features,
+                    args.raster,
+                    bands=args.band,
+                    column=args.column,
+                    max_raster_memory_mb=args.max_raster_memory_mb,
+                    split_batch_size=args.batch_size,
+                )
+            else:
+                splits = iter_split_features_batches(
+                    features, layer_grid, split_batch_size=args.batch_size
+                )
 
-        if args.all_layers:
-            write_features(splits, args.output, layer=layer)
-        else:
-            write_features(splits, args.output)
+            write_feature_batches(
+                splits, args.output, layer=layer if args.all_layers else None
+            )
 
 
 def process(args):
@@ -274,8 +294,8 @@ def process(args):
         _process_layer(
             vector_layer,
             rasters,
-            experimental=args.experimental,
-            lazy=args.lazy_rasters,
+            max_raster_memory_mb=args.max_raster_memory_mb,
+            batch_size=args.batch_size,
         )
 
 
@@ -283,8 +303,8 @@ def _process_layer(
     vector_layer,
     rasters,
     *,
-    experimental: bool = False,
-    lazy: bool = False,
+    max_raster_memory_mb: int = 256,
+    batch_size: int = 65_536,
 ):
     vector_path = Path(vector_layer.path)
     layer = getattr(vector_layer, "layer", None)
@@ -292,11 +312,15 @@ def _process_layer(
         layer = None
     logger.info("Processing %s layer %s", vector_path.name, layer)
 
-    features = read_features(vector_path, layer)
-    logger.info("Features CRS %s", features.crs)
-
-    with_data = overlay_rasters(features, rasters, experimental=experimental, lazy=lazy)
-    write_features(with_data, vector_layer.output_path)
+    with open_feature_batches(vector_path, layer, batch_size) as features:
+        logger.info("Features CRS %s", arrow_crs(features.schema))
+        with_data = iter_overlay_rasters_batches(
+            features,
+            rasters,
+            max_raster_memory_mb=max_raster_memory_mb,
+            split_batch_size=batch_size,
+        )
+        write_feature_batches(with_data, vector_layer.output_path)
 
 
 def _expand_layers(vector_layers: pandas.DataFrame) -> pandas.DataFrame:

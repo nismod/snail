@@ -1,8 +1,10 @@
 import logging
 import math
 import os
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import Union
 
 import dask.array
@@ -11,8 +13,8 @@ import numpy
 import pandas
 import pyarrow
 import rasterio
+import rioxarray  # noqa: F401  # register the xarray .rio accessor
 import xarray
-from shapely import box
 from shapely.ops import linemerge
 
 from snail.core.intersections import (  # type: ignore
@@ -69,7 +71,7 @@ def to_geoarrow(
     feature on either side of the interface. Batches are zero-copy slices
     of the one Arrow array, and the geometry type travels with them.
 
-    This is what :func:`split_linestrings` and :func:`split_polygons_experimental`
+    This is what :func:`split_linestrings` and :func:`split_polygons`
     use to feed a geometry column to :func:`snail.core.intersections.split_linestrings`
     or :func:`snail.core.intersections.split_polygons`; call it directly
     only if you are working with those lower-level, Arrow-native functions
@@ -130,10 +132,10 @@ def read_split_stream(stream) -> tuple[numpy.ndarray, numpy.ndarray]:
     drains the stream fully and concatenates every batch: use it when you
     want the pieces as shapely geometries and are content to hold them all
     at once, which is what :func:`split_linestrings` and
-    :func:`split_polygons_experimental` do. To keep the streaming memory
+    :func:`split_polygons` do. To keep the streaming memory
     benefit - splitting a source larger than memory, for example - iterate
     the stream yourself instead, e.g. with
-        ``pyarrow.RecordBatchReader.from_stream(stream)``,
+    ``pyarrow.RecordBatchReader.from_stream(stream)``,
     and consume each record batch as it arrives.
 
     Parameters
@@ -457,49 +459,11 @@ def split_linestrings(
 def split_polygons(
     polygon_features: geopandas.GeoDataFrame, grid: GridDefinition
 ) -> geopandas.GeoDataFrame:
-    """Split polygons along a grid"""
-    ##
-    # Fairly slow but solid approach, generate cells as boxes and
-    # use geopandas (shapely/GEOS) intersection
-    ##
-    box_geoms = generate_grid_boxes(grid)
-    splits = polygon_features.overlay(box_geoms, how="intersection")
-    splits = splits[~(splits.geometry.is_empty | splits.geometry.isna())]
-    splits = splits.explode(ignore_index=True)
-    splits = splits[splits.geometry.type == "Polygon"]
-    return splits
-
-
-def generate_grid_boxes(grid: GridDefinition):
-    """Generate all the box polygons for a grid"""
-    a, b, c, d, e, f = grid.transform
-    idx = numpy.arange(grid.width * grid.height)
-    i, j = numpy.unravel_index(idx, (grid.width, grid.height))
-    xmin = i * a + j * b + c
-    ymax = i * d + j * e + f
-    xmax = (i + 1) * a + (j + 1) * b + c
-    ymin = (i + 1) * d + (j + 1) * e + f
-    return geopandas.GeoDataFrame(
-        data={}, geometry=box(xmin, ymin, xmax, ymax), crs=grid.crs
-    )
-
-
-def split_polygons_experimental(
-    polygon_features: geopandas.GeoDataFrame, grid: GridDefinition
-) -> geopandas.GeoDataFrame:
-    """Split polygons along a grid
-
-    Experimental implementation of `split_polygons`, possibly faster than the
-    shapely/GEOS overlay approach with some inputs.
-
-    Uses snail::splitPolygon to scan each polygon (which may have holes, and
-    is assumed to be valid) along the grid lines and assemble the polygon
-    pieces that cover each cell.
-    """
+    """Split polygons along a grid using the bounded C++ splitter."""
     # split every feature in one call: crossing into the extension per
     # feature costs far more than the splitting itself
     geometry, parent = _split(split_polygons_core, polygon_features.geometry, grid)
-    logger.info(f"  Split {len(polygon_features)} areas into {len(geometry)} pieces")
+    logger.info(f"Split {len(polygon_features)} features into {len(geometry)} pieces")
     return _splits_frame(polygon_features, geometry, parent, grid)
 
 
@@ -623,6 +587,303 @@ def get_raster_values_for_splits(
 
     else:
         raise NotImplementedError("data array backends must be NumPy or Dask arrays.")
+
+
+def read_raster_values_for_splits(
+    splits: pandas.DataFrame,
+    raster,
+    bands,
+    index_i: str = "index_i",
+    index_j: str = "index_j",
+    max_raster_memory_mb: int = 256,
+) -> dict[int, pandas.Series]:
+    """Read selected raster bands through bounded rasterio windows.
+
+    This is the file-backed counterpart to :func:`get_raster_values_for_splits`.
+    The raster is opened once and all requested bands are read together in each
+    window.  Invalid cells are left as NaN and duplicate split rows retain their
+    original order and labels. Index columns use whole-raster coordinates and
+    must contain integer values; positive and negative out-of-bounds indices are
+    treated as invalid.
+    """
+    if max_raster_memory_mb <= 0:
+        raise ValueError("max_raster_memory_mb must be positive")
+    bands = tuple(dict.fromkeys(int(b) for b in bands))
+    if not bands:
+        return {}
+    opener = rasterio.open(raster) if isinstance(raster, (str, os.PathLike)) else None
+    dataset = opener or raster
+    try:
+        invalid_bands = [band for band in bands if band not in dataset.indexes]
+        if invalid_bands:
+            raise ValueError(f"Raster does not contain band(s) {invalid_bands}")
+        ii, finite_i = _integer_indices(splits[index_i], index_i)
+        jj, finite_j = _integer_indices(splits[index_j], index_j)
+        valid = (
+            finite_i
+            & finite_j
+            & (ii >= 0)
+            & (jj >= 0)
+            & (ii < dataset.width)
+            & (jj < dataset.height)
+        )
+        positions = numpy.flatnonzero(valid)
+        result_values = {
+            band: numpy.empty(len(positions), dtype=dataset.dtypes[band - 1])
+            for band in bands
+        }
+        if not len(positions):
+            return {
+                band: _build_series(splits.index, positions, values)
+                for band, values in result_values.items()
+            }
+        budget = int(max_raster_memory_mb * 1024 * 1024)
+        row_to_value = numpy.full(len(splits), -1, dtype=int)
+        row_to_value[positions] = numpy.arange(len(positions))
+
+        # Rasterio cannot read bands with different dtypes in one call, and
+        # bands with different native block layouts need different window
+        # plans for efficient I/O. Read compatible bands together.
+        band_groups = defaultdict(list)
+        for band in bands:
+            key = (dataset.dtypes[band - 1], dataset.block_shapes[band - 1])
+            band_groups[key].append(band)
+
+        for (dtype, (block_h, block_w)), group in band_groups.items():
+            bytes_per_pixel = numpy.dtype(dtype).itemsize * len(group)
+            max_pixels = budget // bytes_per_pixel
+            if max_pixels < 1:
+                raise ValueError(
+                    "max_raster_memory_mb is too small to read one pixel "
+                    "across the requested bands"
+                )
+            for window, window_positions in _plan_raster_windows(
+                ii,
+                jj,
+                positions,
+                dataset.width,
+                dataset.height,
+                block_h,
+                block_w,
+                max_pixels,
+            ):
+                data = dataset.read(indexes=group, window=window)
+                r0, c0 = int(window.row_off), int(window.col_off)
+                value_positions = row_to_value[window_positions]
+                for k, band in enumerate(group):
+                    result_values[band][value_positions] = data[
+                        k,
+                        jj[window_positions] - r0,
+                        ii[window_positions] - c0,
+                    ]
+        return {
+            band: _build_series(splits.index, positions, values)
+            for band, values in result_values.items()
+        }
+    finally:
+        if opener is not None:
+            opener.close()
+
+
+def _integer_indices(values: pandas.Series, name: str):
+    """Return integer indices and a mask of finite input values."""
+    try:
+        numeric = values.to_numpy(dtype="float64", na_value=numpy.nan)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must contain numeric integer indices") from error
+    finite = numpy.isfinite(numeric)
+    if numpy.any(numeric[finite] != numpy.floor(numeric[finite])):
+        raise ValueError(f"{name} must contain integer indices")
+    indices = numpy.zeros(len(numeric), dtype=numpy.int64)
+    indices[finite] = numeric[finite].astype(numpy.int64)
+    return indices, finite
+
+
+@dataclass
+class _BlockRectangle:
+    first_row: int
+    last_row: int
+    first_column: int
+    last_column: int
+    position_chunks: list[numpy.ndarray]
+
+
+def _group_positions(row_keys, column_keys, positions):
+    """Group positions by a pair of integer raster tile keys."""
+    order = numpy.lexsort((column_keys, row_keys))
+    ordered_rows = row_keys[order]
+    ordered_columns = column_keys[order]
+    ordered_positions = positions[order]
+    changes = (
+        numpy.flatnonzero(
+            (ordered_rows[1:] != ordered_rows[:-1])
+            | (ordered_columns[1:] != ordered_columns[:-1])
+        )
+        + 1
+    )
+    boundaries = numpy.concatenate(([0], changes, [len(order)]))
+    return {
+        (int(ordered_rows[start]), int(ordered_columns[start])): ordered_positions[
+            start:end
+        ]
+        for start, end in pairwise(boundaries)
+    }
+
+
+def _plan_raster_windows(
+    ii,
+    jj,
+    positions,
+    raster_width,
+    raster_height,
+    block_height,
+    block_width,
+    max_pixels,
+):
+    """Plan bounded windows and the split positions served by each window."""
+    min_i, max_i = int(ii[positions].min()), int(ii[positions].max())
+    min_j, max_j = int(jj[positions].min()), int(jj[positions].max())
+    tight_window = rasterio.windows.Window(
+        min_i, min_j, max_i - min_i + 1, max_j - min_j + 1
+    )
+    if tight_window.width * tight_window.height <= max_pixels:
+        yield tight_window, positions
+        return
+
+    native_block_pixels = block_height * block_width
+    if native_block_pixels > max_pixels:
+        yield from _plan_oversized_block_windows(
+            ii,
+            jj,
+            positions,
+            raster_width,
+            raster_height,
+            block_height,
+            block_width,
+            max_pixels,
+        )
+        return
+
+    block_rows = jj[positions] // block_height
+    block_columns = ii[positions] // block_width
+    grouped = _group_positions(block_rows, block_columns, positions)
+    columns_by_row = defaultdict(list)
+    for block_row, block_column in grouped:
+        columns_by_row[block_row].append(block_column)
+
+    max_blocks = max_pixels // native_block_pixels
+    active = {}
+    rectangles = []
+    previous_row = None
+    for block_row in sorted(columns_by_row):
+        if previous_row is not None and block_row != previous_row + 1:
+            rectangles.extend(active.values())
+            active = {}
+        runs = _horizontal_block_runs(
+            block_row,
+            sorted(columns_by_row[block_row]),
+            grouped,
+            max_blocks,
+        )
+        next_active = {}
+        for run in runs:
+            key = (run.first_column, run.last_column)
+            rectangle = active.pop(key, None)
+            run_width = run.last_column - run.first_column + 1
+            if (
+                rectangle is not None
+                and (rectangle.last_row - rectangle.first_row + 2) * run_width
+                <= max_blocks
+            ):
+                rectangle.last_row = block_row
+                rectangle.position_chunks.extend(run.position_chunks)
+                next_active[key] = rectangle
+            else:
+                if rectangle is not None:
+                    rectangles.append(rectangle)
+                next_active[key] = run
+        rectangles.extend(active.values())
+        active = next_active
+        previous_row = block_row
+    rectangles.extend(active.values())
+
+    for rectangle in rectangles:
+        row_off = rectangle.first_row * block_height
+        col_off = rectangle.first_column * block_width
+        row_end = min((rectangle.last_row + 1) * block_height, raster_height)
+        col_end = min((rectangle.last_column + 1) * block_width, raster_width)
+        yield (
+            rasterio.windows.Window(
+                col_off, row_off, col_end - col_off, row_end - row_off
+            ),
+            numpy.concatenate(rectangle.position_chunks),
+        )
+
+
+def _horizontal_block_runs(block_row, columns, grouped, max_blocks):
+    """Build contiguous, budget-capped runs for one native block row."""
+    runs = []
+    start = 0
+    while start < len(columns):
+        end = start + 1
+        while (
+            end < len(columns)
+            and columns[end] == columns[end - 1] + 1
+            and end - start < max_blocks
+        ):
+            end += 1
+        run_columns = columns[start:end]
+        runs.append(
+            _BlockRectangle(
+                block_row,
+                block_row,
+                run_columns[0],
+                run_columns[-1],
+                [grouped[(block_row, column)] for column in run_columns],
+            )
+        )
+        start = end
+    return runs
+
+
+def _plan_oversized_block_windows(
+    ii,
+    jj,
+    positions,
+    raster_width,
+    raster_height,
+    block_height,
+    block_width,
+    max_pixels,
+):
+    """Subdivide occupied native blocks which exceed the read budget."""
+    tile_width = min(block_width, max_pixels)
+    tile_height = max(1, min(block_height, max_pixels // tile_width))
+    block_rows = jj[positions] // block_height
+    block_columns = ii[positions] // block_width
+    row_offsets = (
+        block_rows * block_height
+        + (jj[positions] % block_height // tile_height) * tile_height
+    )
+    column_offsets = (
+        block_columns * block_width
+        + (ii[positions] % block_width // tile_width) * tile_width
+    )
+    grouped = _group_positions(row_offsets, column_offsets, positions)
+    for (row_off, col_off), window_positions in sorted(grouped.items()):
+        native_row_end = min(
+            (row_off // block_height + 1) * block_height, raster_height
+        )
+        native_col_end = min((col_off // block_width + 1) * block_width, raster_width)
+        yield (
+            rasterio.windows.Window(
+                col_off,
+                row_off,
+                min(col_off + tile_width, native_col_end) - col_off,
+                min(row_off + tile_height, native_row_end) - row_off,
+            ),
+            window_positions,
+        )
 
 
 def _build_series(

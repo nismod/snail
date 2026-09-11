@@ -1,5 +1,3 @@
-import gc
-import os
 from pathlib import Path
 
 import numpy as np
@@ -75,35 +73,20 @@ def test_read_raster_band_data_from_dataarray(sample_dataarray):
     assert result.dims == data_array.dims
 
 
-@pytest.mark.skipif(not Path("/proc").is_dir(), reason="Linux only")
-def test_lazy_raster_reads_do_not_leak_file_descriptors():
-    path = Path(__file__).parent / "integration" / "range.tif"
-    gc.collect()
-    initial_fds = len(os.listdir(f"/proc/{os.getpid()}/fd"))
-
-    for _ in range(200):
-        result = read_raster_band_data(path, lazy=True)
-        del result
-
-    gc.collect()
-    final_fds = len(os.listdir(f"/proc/{os.getpid()}/fd"))
-    assert final_fds <= initial_fds + 4
-
-
-def test_read_raster_band_data_rejects_zero_band_for_lazy_path():
+def test_read_raster_band_data_rejects_zero_band_for_path():
     path = Path(__file__).parent / "integration" / "range.tif"
 
     with pytest.raises(ValueError, match="band_number must be >= 1"):
-        read_raster_band_data(path, band_number=0, lazy=True)
+        read_raster_band_data(path, band_number=0)
 
 
-def test_read_raster_band_data_rejects_zero_band_for_lazy_dataarray(
+def test_read_raster_band_data_rejects_zero_band_for_dataarray(
     sample_dataarray,
 ):
     data_array, _ = sample_dataarray
 
     with pytest.raises(ValueError, match="band_number must be >= 1"):
-        read_raster_band_data(data_array, band_number=0, lazy=True)
+        read_raster_band_data(data_array, band_number=0)
 
 
 def test_read_raster_band_data_from_multiband_dataarray(sample_dataarray):

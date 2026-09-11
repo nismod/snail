@@ -11,6 +11,31 @@ from snail.cli import _default_output_path, _expand_layers, snail
 from snail.overlay import _geom_kinds
 
 
+def _run_4x4_split(features_path, output_path):
+    snail(
+        [
+            "split",
+            "--features",
+            str(features_path),
+            "--output",
+            str(output_path),
+            "--transform",
+            "1",
+            "0",
+            "0",
+            "0",
+            "1",
+            "0",
+            "--width",
+            "4",
+            "--height",
+            "4",
+            "--batch-size",
+            "1",
+        ]
+    )
+
+
 def test_split_multiband_attributes_column_per_band(
     tmp_path, two_band_raster, lines_over_raster
 ):
@@ -198,32 +223,34 @@ def mixed_features(tmp_path):
     return path
 
 
-def run_split(features_path, output_path):
+def test_split_accepts_raster_memory_limit(
+    tmp_path, two_band_raster, lines_over_raster
+):
+    features_path = tmp_path / "lines.geojson"
+    output_path = tmp_path / "splits.gpkg"
+    lines_over_raster.to_file(features_path)
+
     snail(
         [
             "split",
             "--features",
             str(features_path),
-            "--transform",
-            "1",
-            "0",
-            "0",
-            "0",
-            "1",
-            "0",
-            "--width",
-            "4",
-            "--height",
-            "4",
             "--output",
             str(output_path),
+            "--raster",
+            str(two_band_raster),
+            "--attribute",
+            "--max-raster-memory-mb",
+            "1",
         ]
     )
+
+    assert "two_band_band_1" in gpd.read_file(output_path).columns
 
 
 def test_split_of_a_mixed_layer_keeps_every_feature(mixed_features, tmp_path):
     output = tmp_path / "split.gpkg"
-    run_split(mixed_features, output)
+    _run_4x4_split(mixed_features, output)
 
     splits = gpd.read_file(output)
     by_name = splits.groupby("name").size()
@@ -249,7 +276,7 @@ def test_split_of_a_single_kind_layer_is_unchanged(tmp_path):
     path = tmp_path / "lines.gpkg"
     features.to_file(path)
     output = tmp_path / "split.gpkg"
-    run_split(path, output)
+    _run_4x4_split(path, output)
 
     splits = gpd.read_file(output)
     assert set(splits.geometry.geom_type) == {"LineString"}
@@ -261,9 +288,17 @@ def test_split_of_a_geometry_collection_layer(geometry_collection_features, tmp_
     geometry_collection_features.to_file(path)
     output = tmp_path / "split.gpkg"
 
-    run_split(path, output)
+    _run_4x4_split(path, output)
 
     splits = gpd.read_file(output)
     assert len(splits) == 5
     assert list(splits.geometry.geom_type) == ["Point"] + ["LineString"] * 4
     assert set(splits.name) == {"collection"}
+
+
+@pytest.mark.parametrize(
+    "args", [["--experimental", "split"], ["split", "--lazy-rasters"]]
+)
+def test_removed_flags_are_rejected(args):
+    with pytest.raises(SystemExit):
+        snail(args)

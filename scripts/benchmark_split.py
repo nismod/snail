@@ -1,8 +1,4 @@
-"""Benchmark polygon splitting: split_polygons vs split_polygons_experimental
-
-Compares the default shapely/GEOS overlay implementation against the C++
-line-scan implementation on a few representative workloads, checking that
-both conserve the total polygon area.
+"""Benchmark the default bounded C++ polygon splitter.
 
 Run:
     python scripts/benchmark_split.py
@@ -20,7 +16,6 @@ from shapely.geometry import Point, Polygon
 from snail.intersection import (
     GridDefinition,
     split_polygons,
-    split_polygons_experimental,
 )
 
 
@@ -85,25 +80,14 @@ def main():
         ("50 medium circles", *circles_workload(), 3),
         ("1 large circle", *large_workload(), 3),
     ]
-    print(
-        f"{'workload':<22} {'overlay':>10} {'experimental':>13} {'speedup':>8}   pieces"
-    )
+    print(f"{'workload':<22} {'split':>12}   pieces")
     for name, geoms, grid, repetitions in workloads:
-        t_overlay, s_overlay = run(split_polygons, geoms, grid, repetitions)
-        t_experimental, s_experimental = run(
-            split_polygons_experimental, geoms, grid, repetitions
-        )
+        elapsed, splits = run(split_polygons, geoms, grid, repetitions)
         expected = sum(g.area for g in geoms)
-        for label, splits in (("overlay", s_overlay), ("experimental", s_experimental)):
-            total = splits.geometry.area.sum()
-            if abs(total - expected) > 1e-6 * expected:
-                raise AssertionError(
-                    f"{name}/{label}: area {total} != expected {expected}"
-                )
-        print(
-            f"{name:<22} {t_overlay * 1000:>8.1f}ms {t_experimental * 1000:>11.1f}ms"
-            f" {t_overlay / t_experimental:>7.1f}x   {len(s_overlay)} / {len(s_experimental)}"
-        )
+        total = splits.geometry.area.sum()
+        if abs(total - expected) > 1e-6 * expected:
+            raise AssertionError(f"{name}: area {total} != expected {expected}")
+        print(f"{name:<22} {elapsed * 1000:>10.1f}ms   {len(splits)}")
 
 
 if __name__ == "__main__":

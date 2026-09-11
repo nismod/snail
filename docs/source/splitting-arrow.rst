@@ -16,7 +16,7 @@ How a split runs
 -----------------
 
 The splitting logic is all implemented in a C++ extension, which is compiled and
-made available to Python as :module:`snail.core.intersections`.
+made available to Python as :mod:`snail.core.intersections`.
 
 Geometries are passed into the C++ extension as `GeoArrow
 <https://geoarrow.org/>`_, using the `Arrow C stream interface
@@ -115,3 +115,20 @@ To get the pieces as shapely geometries instead, convert a batch with
 
 Or, to read the whole stream into memory, use
 :func:`snail.intersection.read_split_stream`.
+
+High-level streaming overlay
+----------------------------
+
+The high-level :func:`snail.iter_split_features_batches`,
+:func:`snail.iter_overlay_raster_batches` and
+:func:`snail.iter_overlay_rasters_batches` functions accept Arrow tables or
+record-batch streams and return a :class:`pyarrow.RecordBatchReader`. They
+preserve attributes while splitting and attribute raster windows once per
+result batch. The corresponding non-``iter`` functions consume the reader and
+return a materialised GeoDataFrame.
+
+Native splitting targets a bounded number of output rows while keeping every
+feature's pieces together. Consequently the bound is the configured target
+plus at most one feature's expansion. Raster blocks may be visited by several
+batches; an open Rasterio dataset lets GDAL's block cache avoid repeated I/O
+where possible.

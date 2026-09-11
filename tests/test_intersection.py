@@ -20,12 +20,10 @@ from snail.intersection import (
     GridDefinition,
     aggregate_values_to_grid,
     apply_indices,
-    generate_grid_boxes,
     get_raster_values_for_splits,
     split_geometries,
     split_linestrings,
     split_polygons,
-    split_polygons_experimental,
 )
 
 
@@ -227,7 +225,7 @@ class TestSnailIntersections:
         assert_array_equal(actual["col1"].values, expected["col1"].values)
 
     def test_split_polygons_experimental(self, grid, polygon, polygon_split):
-        actual = sort_polygons(split_polygons_experimental(polygon, grid))
+        actual = sort_polygons(split_polygons(polygon, grid))
         expected = sort_polygons(polygon_split)
 
         assert len(actual) == len(expected)
@@ -293,20 +291,16 @@ class TestSnailIntersections:
         ]
         assert splits[splits.name == "nothing"].geometry.iloc[0].is_empty
 
-    def test_split_polygons_experimental_with_hole(self, grid):
+    def test_split_polygons_with_hole(self, grid):
         polygon_with_hole = Polygon(
             [(0.5, 0.5), (2.5, 0.5), (2.5, 2.5), (0.5, 2.5)],
             [[(1.25, 1.25), (1.75, 1.25), (1.75, 1.75), (1.25, 1.75)]],
         )
         gdf = gpd.GeoDataFrame({"col1": ["name1"], "geometry": [polygon_with_hole]})
-        expected = sort_polygons(split_polygons(gdf.copy(), grid))
-        actual = sort_polygons(split_polygons_experimental(gdf.copy(), grid))
+        actual = split_polygons(gdf.copy(), grid)
 
         assert len(actual) == 9
         assert actual.geometry.area.sum() == pytest.approx(polygon_with_hole.area)
-        assert len(actual) == len(expected)
-        for i in range(len(actual)):
-            assert actual.iloc[i, 1].equals(expected.iloc[i, 1])
 
 
 def _make_sample_splits():
@@ -495,32 +489,6 @@ def test_split_linestrings_bounded_on_non_square_grid():
     ]
 
 
-def test_box_geom_bounds():
-    """Values take from tests/integration/range.tif"""
-    grid = GridDefinition(
-        crs=CRS.from_epsg(4326),
-        width=23,
-        height=14,
-        transform=(
-            0.008333333347826087,
-            0.0,
-            -1.341666667,
-            0.0,
-            -0.008333333285714315,
-            51.808333333,
-        ),
-    )
-    box_geoms = generate_grid_boxes(grid)
-    minb = box_geoms.bounds.min()
-    maxb = box_geoms.bounds.max()
-
-    atol = 1e-4
-    assert abs(minb.minx - -1.3416667) < atol
-    assert abs(minb.miny - 51.6916667) < atol
-    assert abs(maxb.maxx - -1.1500000) < atol
-    assert abs(maxb.maxy - 51.8083333) < atol
-
-
 def sort_polygons(df):
     iterations = 6  # all coords must be <= (2**p - 1) ; 2**6 - 1 == 63
     ndimensions = 2
@@ -616,7 +584,7 @@ def _random_test_polygons(seed, count):
         (0.5, 0, -1, 0, -0.5, 11),  # offset, fractional cell size
     ],
 )
-def test_split_polygons_experimental_random(transform):
+def test_split_polygons_random(transform):
     """Splitting must conserve area and yield valid pieces, each within a
     single cell, however the polygon falls on the grid"""
     grid = GridDefinition(crs=None, width=40, height=40, transform=transform)
@@ -624,7 +592,7 @@ def test_split_polygons_experimental_random(transform):
 
     polygons = _random_test_polygons(seed=20220309, count=200)
     features = gpd.GeoDataFrame({"col1": range(len(polygons)), "geometry": polygons})
-    splits = split_polygons_experimental(features, grid)
+    splits = split_polygons(features, grid)
 
     assert splits.geometry.is_valid.all()
     assert (splits.geometry.geom_type == "Polygon").all()
@@ -642,7 +610,7 @@ def test_split_polygons_experimental_random(transform):
     assert ((bounds.maxy - bounds.miny) <= cell_height + 1e-9).all()
 
 
-def test_split_polygons_experimental_matches_cells():
+def test_split_polygons_matches_cells():
     """Each piece must be exactly what the polygon has in its own cell.
 
     Comparing cell by cell against a direct intersection with that cell's
@@ -653,7 +621,7 @@ def test_split_polygons_experimental_matches_cells():
 
     for polygon in _random_test_polygons(seed=99, count=40):
         features = gpd.GeoDataFrame({"col1": ["name1"], "geometry": [polygon]})
-        splits = split_polygons_experimental(features, grid)
+        splits = split_polygons(features, grid)
 
         # a piece lies within one cell, but its vertices may sit on that
         # cell's border, so the middle of its extent identifies the cell
@@ -675,6 +643,23 @@ def test_split_polygons_experimental_matches_cells():
                     f"for {polygon.wkt}"
                 )
         assert not by_cell, f"pieces outside the polygon's cells: {sorted(by_cell)}"
+
+
+def test_split_polygons_does_not_materialize_a_huge_grid():
+    grid = GridDefinition(
+        crs=None,
+        width=1_000_000_000,
+        height=1_000_000_000,
+        transform=(1, 0, 0, 0, 1, 0),
+    )
+    polygon = Polygon([(10.1, 10.1), (11.9, 10.1), (11.9, 11.9), (10.1, 11.9)])
+    features = gpd.GeoDataFrame({"name": ["small"], "geometry": [polygon]})
+
+    splits = split_polygons(features, grid)
+
+    assert len(splits) == 4
+    assert splits["name"].tolist() == ["small"] * 4
+    assert splits.geometry.area.sum() == pytest.approx(polygon.area)
 
 
 def test_split_linestrings_random():

@@ -6,11 +6,17 @@ linestring and polygon features, handle single- or multi-band rasters, and
 implicitly reproject features to the raster CRS (and back) if they differ.
 """
 
+import json
 import logging
+from collections import defaultdict
+from os import PathLike
 from pathlib import Path
 
 import geopandas
+import numpy
 import pandas
+import pyarrow
+import pyarrow.compute
 
 from snail.intersection import (
     GridDefinition,
@@ -19,14 +25,19 @@ from snail.intersection import (
     prepare_linestrings,
     prepare_points,
     prepare_polygons,
+    read_raster_values_for_splits,
     split_features_for_rasters,
     split_geometries,
+    split_geometries_core,
     split_linestrings,
+    split_linestrings_core,
     split_points,
     split_polygons,
-    split_polygons_experimental,
+    split_polygons_core,
 )
 from snail.io import (
+    _is_rasterio_dataset,
+    _open_raster,
     band_column_name,
     extend_rasters_metadata,
     read_raster_band_data,
@@ -36,14 +47,368 @@ from snail.io import (
 # Module-level logger
 logger = logging.getLogger(__name__)
 
+STREAM_BATCH_SIZE = 65_536
+
+
+def _arrow_reader(features, batch_size=STREAM_BATCH_SIZE):
+    """Normalise an Arrow object or GeoDataFrame to a RecordBatchReader."""
+    if isinstance(features, geopandas.GeoDataFrame):
+        table = pyarrow.table(features.to_arrow(geometry_encoding="WKB"))
+        return pyarrow.RecordBatchReader.from_batches(
+            table.schema,
+            table.to_batches(max_chunksize=batch_size),
+        )
+    if isinstance(features, pyarrow.RecordBatchReader):
+        return features
+    if isinstance(features, pyarrow.RecordBatch):
+        return pyarrow.RecordBatchReader.from_batches(features.schema, [features])
+    if isinstance(features, pyarrow.Table):
+        return pyarrow.RecordBatchReader.from_batches(
+            features.schema, features.to_batches(max_chunksize=batch_size)
+        )
+    return pyarrow.RecordBatchReader.from_stream(features)
+
+
+def _geometry_field(schema):
+    fields = []
+    for field in schema:
+        extension = (field.metadata or {}).get(b"ARROW:extension:name", b"")
+        if extension.startswith((b"geoarrow.", b"ogc.")):
+            fields.append(field)
+    if len(fields) != 1:
+        raise ValueError("Expected exactly one GeoArrow geometry column")
+    return fields[0]
+
+
+def _wkb_field(field, fallback_crs=None):
+    metadata = dict(field.metadata or {})
+    metadata[b"ARROW:extension:name"] = b"geoarrow.wkb"
+    extension_metadata = json.loads(metadata.get(b"ARROW:extension:metadata", b"{}"))
+    if extension_metadata.get("crs") is None and fallback_crs is not None:
+        import pyproj
+
+        extension_metadata["crs"] = pyproj.CRS.from_user_input(
+            fallback_crs
+        ).to_json_dict()
+        metadata[b"ARROW:extension:metadata"] = json.dumps(extension_metadata).encode()
+    return pyarrow.field(
+        field.name, pyarrow.binary(), nullable=False, metadata=metadata
+    )
+
+
+def _split_schema(schema, index_i, index_j, fallback_crs=None):
+    geometry = _geometry_field(schema)
+    replaced = {"split", index_i, index_j}
+    fields = []
+    for field in schema:
+        if field.name in replaced:
+            continue
+        fields.append(
+            _wkb_field(field, fallback_crs) if field.name == geometry.name else field
+        )
+    fields.extend(
+        [
+            pyarrow.field("split", pyarrow.int64(), nullable=False),
+            pyarrow.field(index_i, pyarrow.int64(), nullable=False),
+            pyarrow.field(index_j, pyarrow.int64(), nullable=False),
+        ]
+    )
+    return pyarrow.schema(fields, metadata=schema.metadata)
+
+
+def _split_arrow_stage(
+    source,
+    grid,
+    index_i="index_i",
+    index_j="index_j",
+    split_batch_size=STREAM_BATCH_SIZE,
+):
+    """Split one Arrow stream on one grid without collecting its batches."""
+    if split_batch_size <= 0:
+        raise ValueError("split_batch_size must be positive")
+    source = _arrow_reader(source)
+    source_geometry = _geometry_field(source.schema)
+    output_schema = _split_schema(source.schema, index_i, index_j, grid.crs)
+
+    def batches():
+        for source_batch in source:
+            if source_batch.num_rows == 0:
+                continue
+            valid_geometry = pyarrow.compute.invert(
+                pyarrow.compute.is_null(
+                    source_batch.column(source_geometry.name), nan_is_null=False
+                )
+            )
+            source_batch = source_batch.filter(valid_geometry)
+            if source_batch.num_rows == 0:
+                continue
+            source_frame = geopandas.GeoDataFrame.from_arrow(source_batch)
+            source_crs = source_frame.crs
+            grid_frame = source_frame
+            if source_crs is not None and grid.crs is not None:
+                if not _crs_equal(source_crs, grid.crs):
+                    grid_frame = source_frame.to_crs(grid.crs)
+            elif source_crs is None and grid.crs is not None:
+                grid_frame = source_frame.set_crs(grid.crs)
+
+            geometry_types = set(grid_frame.geometry.geom_type.dropna())
+            if geometry_types == {"LineString"}:
+                encoding = "geoarrow"
+                split_core = split_linestrings_core
+            elif geometry_types == {"Polygon"}:
+                encoding = "geoarrow"
+                split_core = split_polygons_core
+            else:
+                encoding = "WKB"
+                split_core = split_geometries_core
+            arrow_kwargs = {"geometry_encoding": encoding}
+            if encoding == "geoarrow":
+                arrow_kwargs["interleaved"] = True
+            geometry_table = pyarrow.table(
+                grid_frame[[grid_frame.geometry.name]].to_arrow(**arrow_kwargs)
+            )
+            stream = split_core(
+                geometry_table,
+                nrows=grid.height,
+                ncols=grid.width,
+                transform=grid.transform,
+                max_output_rows=split_batch_size,
+            )
+            piece_reader = pyarrow.RecordBatchReader.from_stream(stream)
+            piece_numbers = defaultdict(int)
+            for pieces in piece_reader:
+                parents = pieces.column("parent")
+                parent_values = parents.to_numpy(zero_copy_only=False)
+                piece_frame = geopandas.GeoDataFrame.from_arrow(
+                    pyarrow.Table.from_arrays(
+                        [pieces.column("geometry")],
+                        schema=pyarrow.schema([pieces.schema.field("geometry")]),
+                    )
+                )
+                indexed = apply_indices(piece_frame, grid, index_i, index_j)
+                if source_crs is not None and grid.crs is not None:
+                    if not _crs_equal(source_crs, grid.crs):
+                        indexed = indexed.to_crs(source_crs)
+                elif source_crs is not None and indexed.crs is None:
+                    indexed = indexed.set_crs(source_crs)
+
+                ordinals = numpy.empty(len(parent_values), dtype=numpy.int64)
+                for offset, parent in enumerate(parent_values):
+                    ordinals[offset] = piece_numbers[int(parent)]
+                    piece_numbers[int(parent)] += 1
+
+                arrays = []
+                for field in output_schema:
+                    if field.name == source_geometry.name:
+                        geometry = (
+                            pyarrow.table(
+                                indexed[[indexed.geometry.name]].to_arrow(
+                                    geometry_encoding="WKB"
+                                )
+                            )
+                            .column(indexed.geometry.name)
+                            .combine_chunks()
+                        )
+                        arrays.append(geometry)
+                    elif field.name == "split":
+                        arrays.append(pyarrow.array(ordinals, type=field.type))
+                    elif field.name in (index_i, index_j):
+                        arrays.append(
+                            pyarrow.array(indexed[field.name], type=field.type)
+                        )
+                    else:
+                        arrays.append(
+                            pyarrow.compute.take(
+                                source_batch.column(field.name), parents
+                            )
+                        )
+                yield pyarrow.RecordBatch.from_arrays(arrays, schema=output_schema)
+
+    return pyarrow.RecordBatchReader.from_batches(output_schema, batches())
+
+
+def _raster_info(raster):
+    with _open_raster(raster) as dataset:
+        grid = GridDefinition.from_rasterio(dataset)
+        bands = tuple(dataset.indexes)
+        layouts = {
+            band: (dataset.dtypes[band - 1], dataset.block_shapes[band - 1])
+            for band in bands
+        }
+    return grid, bands, layouts
+
+
+def _raster_output_schema(schema, layouts, bands, column, all_bands):
+    additions = {}
+    for band in bands:
+        name = band_column_name(column, band, len(all_bands))
+        additions[name] = pyarrow.field(
+            name,
+            pyarrow.from_numpy_dtype(numpy.dtype(layouts[band][0])),
+            nullable=True,
+        )
+    fields = [field for field in schema if field.name not in additions]
+    fields.extend(additions.values())
+    return pyarrow.schema(fields, metadata=schema.metadata), additions
+
+
+def _attribute_arrow_stage(
+    source,
+    raster,
+    bands,
+    column,
+    all_bands,
+    index_i,
+    index_j,
+    max_raster_memory_mb,
+    layouts,
+):
+    source = _arrow_reader(source)
+    invalid = [band for band in bands if band not in layouts]
+    if invalid:
+        raise ValueError(f"Raster does not contain band(s) {invalid}")
+    output_schema, additions = _raster_output_schema(
+        source.schema, layouts, bands, column, all_bands
+    )
+    bands_by_column = {
+        band_column_name(column, band, len(all_bands)): band for band in bands
+    }
+
+    def batches():
+        with _open_raster(raster) as dataset:
+            for batch in source:
+                frame = geopandas.GeoDataFrame.from_arrow(batch)
+                values = read_raster_values_for_splits(
+                    frame,
+                    dataset,
+                    bands,
+                    index_i,
+                    index_j,
+                    max_raster_memory_mb,
+                )
+                arrays = []
+                for field in output_schema:
+                    if field.name in additions:
+                        band = bands_by_column[field.name]
+                        arrays.append(
+                            pyarrow.array(
+                                values[band], type=field.type, from_pandas=True
+                            )
+                        )
+                    else:
+                        arrays.append(batch.column(field.name))
+                yield pyarrow.RecordBatch.from_arrays(arrays, schema=output_schema)
+
+    return pyarrow.RecordBatchReader.from_batches(output_schema, batches())
+
+
+def iter_split_features_batches(
+    features,
+    grid: GridDefinition,
+    *,
+    split_batch_size: int = STREAM_BATCH_SIZE,
+) -> pyarrow.RecordBatchReader:
+    """Lazily split an Arrow feature stream and return Arrow result batches."""
+    return _split_arrow_stage(features, grid, split_batch_size=split_batch_size)
+
+
+def iter_overlay_raster_batches(
+    features,
+    raster,
+    bands: list[int] | None = None,
+    column: str | None = None,
+    *,
+    max_raster_memory_mb: int = 256,
+    split_batch_size: int = STREAM_BATCH_SIZE,
+) -> pyarrow.RecordBatchReader:
+    """Lazily split Arrow feature batches and attribute one raster."""
+    if max_raster_memory_mb <= 0:
+        raise ValueError("max_raster_memory_mb must be positive")
+    if not (isinstance(raster, (str, PathLike)) or _is_rasterio_dataset(raster)):
+        raise TypeError(
+            "Streaming raster attribution requires a rasterio dataset or path"
+        )
+    grid, all_bands, layouts = _raster_info(raster)
+    selected = list(all_bands if bands is None else dict.fromkeys(map(int, bands)))
+    column = _raster_key(raster) if column is None else column
+    splits = _split_arrow_stage(features, grid, split_batch_size=split_batch_size)
+    return _attribute_arrow_stage(
+        splits,
+        raster,
+        selected,
+        column,
+        all_bands,
+        "index_i",
+        "index_j",
+        max_raster_memory_mb,
+        layouts,
+    )
+
+
+def iter_overlay_rasters_batches(
+    features,
+    rasters: list | pandas.DataFrame,
+    *,
+    max_raster_memory_mb: int = 256,
+    split_batch_size: int = STREAM_BATCH_SIZE,
+) -> pyarrow.RecordBatchReader:
+    """Lazily split Arrow batches over all grids and attribute all rasters."""
+    if max_raster_memory_mb <= 0:
+        raise ValueError("max_raster_memory_mb must be positive")
+    rasters = _normalise_rasters(rasters)
+    if any(
+        not (isinstance(path, (str, PathLike)) or _is_rasterio_dataset(path))
+        for path in rasters.path
+    ):
+        raise TypeError(
+            "Streaming raster attribution requires rasterio datasets or paths"
+        )
+
+    grids = []
+    grid_ids = []
+    selected_bands = []
+    raster_infos = []
+    for raster in rasters.itertuples():
+        grid, all_bands, layouts = _raster_info(raster.path)
+        if grid not in grids:
+            grids.append(grid)
+        grid_ids.append(grids.index(grid))
+        given = getattr(raster, "bands", None)
+        selected_bands.append(all_bands if given is None else given)
+        raster_infos.append((all_bands, layouts))
+    rasters["grid_id"] = grid_ids
+    rasters["bands"] = selected_bands
+
+    result = _arrow_reader(features)
+    for grid_id, grid in enumerate(grids):
+        result = _split_arrow_stage(
+            result,
+            grid,
+            f"i_{grid_id}",
+            f"j_{grid_id}",
+            split_batch_size,
+        )
+    for raster, (all_bands, layouts) in zip(rasters.itertuples(), raster_infos):
+        result = _attribute_arrow_stage(
+            result,
+            raster.path,
+            list(raster.bands),
+            raster.key,
+            all_bands,
+            f"i_{raster.grid_id}",
+            f"j_{raster.grid_id}",
+            max_raster_memory_mb,
+            layouts,
+        )
+    return result
+
 
 def overlay_raster(
     features: geopandas.GeoDataFrame,
     raster,
     bands: list[int] | None = None,
     column: str | None = None,
-    experimental: bool = False,
-    lazy: bool = False,
+    max_raster_memory_mb: int = 256,
 ) -> geopandas.GeoDataFrame:
     """Split features along a raster grid and attribute cell values
 
@@ -60,11 +425,8 @@ def overlay_raster(
         Output column name (default: raster filename stem). Values from a
         single band are attributed under this name directly, multiple bands
         under "{column}_band_{n}" for each band n.
-    experimental : bool
-        Use the experimental (faster, less robust) polygon splitting routine
-    lazy : bool
-        Read raster bands lazily via xarray/dask rather than into memory.
-        Only applies when `raster` is a file path.
+    max_raster_memory_mb : int
+        Maximum size, in MiB, of each application-managed raster read buffer.
 
     Returns
     -------
@@ -75,13 +437,35 @@ def overlay_raster(
         NaN. If the features and raster CRS differ, features are reprojected
         to the raster CRS for splitting and lookup, then reprojected back.
     """
+    if isinstance(raster, (str, PathLike)) or _is_rasterio_dataset(raster):
+        return geopandas.GeoDataFrame.from_arrow(
+            iter_overlay_raster_batches(
+                features,
+                raster,
+                bands,
+                column,
+                max_raster_memory_mb=max_raster_memory_mb,
+            ).read_all()
+        )
+
     grid, all_bands = read_raster_metadata(raster)
     if bands is None:
         bands = list(all_bands)
     if column is None:
         column = _raster_key(raster)
 
-    splits = split_features(features, grid, experimental=experimental)
+    splits = split_features(features, grid)
+    if isinstance(raster, (str, PathLike)) or _is_rasterio_dataset(raster):
+        values = read_raster_values_for_splits(
+            splits, raster, bands, max_raster_memory_mb=max_raster_memory_mb
+        )
+    else:
+        values = {
+            band_number: get_raster_values_for_splits(
+                splits, read_raster_band_data(raster, int(band_number))
+            )
+            for band_number in bands
+        }
     for band_number in bands:
         band_column = band_column_name(column, band_number, len(all_bands))
         logger.info(
@@ -90,16 +474,14 @@ def overlay_raster(
             band_number,
             band_column,
         )
-        band_data = read_raster_band_data(raster, int(band_number), lazy=lazy)
-        splits[band_column] = get_raster_values_for_splits(splits, band_data)
+        splits[band_column] = values[band_number]
     return splits
 
 
 def overlay_rasters(
     features: geopandas.GeoDataFrame,
     rasters: list | pandas.DataFrame,
-    experimental: bool = False,
-    lazy: bool = False,
+    max_raster_memory_mb: int = 256,
 ) -> geopandas.GeoDataFrame:
     """Split features along multiple raster grids and attribute cell values
 
@@ -112,17 +494,10 @@ def overlay_rasters(
         Point, LineString or Polygon features (multi-geometries are exploded)
     rasters : list | pandas.DataFrame
         Either a sequence of raster file paths or open rasterio datasets, or
-        a DataFrame with columns:
-            - "path" (required): file path or open rasterio dataset
-            - "bands" (optional): band numbers to attribute, as an int, a
-              comma-separated string ("1,2,3"), or a list/tuple of ints -
-              defaults to all bands
-            - "key" (optional): output column name - defaults to the raster
-              filename stem
-    experimental : bool
-        Use the experimental (faster, less robust) polygon splitting routine
-    lazy : bool
-        Read raster bands lazily via xarray/dask rather than into memory
+        a DataFrame. Its required ``path`` column contains a path or dataset;
+        optional ``bands`` and ``key`` columns select bands and output names.
+    max_raster_memory_mb : int
+        Maximum size, in MiB, of each application-managed raster read buffer.
 
     Returns
     -------
@@ -132,9 +507,22 @@ def overlay_rasters(
         raster values per raster band, named by raster key (with a
         "_band_{n}" suffix for each band of a multi-band raster)
     """
-    rasters = _normalise_rasters(rasters)
+    normalised = _normalise_rasters(rasters)
+    if all(
+        isinstance(path, (str, PathLike)) or _is_rasterio_dataset(path)
+        for path in normalised.path
+    ):
+        return geopandas.GeoDataFrame.from_arrow(
+            iter_overlay_rasters_batches(
+                features,
+                normalised,
+                max_raster_memory_mb=max_raster_memory_mb,
+            ).read_all()
+        )
+
+    rasters = normalised
     rasters, grids = extend_rasters_metadata(rasters)
-    prepare, split_func = _prepare_and_split_funcs(features, experimental)
+    prepare, split_func = _prepare_and_split_funcs(features)
     prepared = prepare(features)
     splits = split_features_for_rasters(prepared, grids, split_func)
 
@@ -144,6 +532,27 @@ def overlay_rasters(
     # associate values
     for raster in rasters.itertuples():
         _, all_bands = read_raster_metadata(raster.path)
+        if isinstance(raster.path, (str, PathLike)) or _is_rasterio_dataset(
+            raster.path
+        ):
+            values = read_raster_values_for_splits(
+                splits,
+                raster.path,
+                raster.bands,
+                f"i_{raster.grid_id}",
+                f"j_{raster.grid_id}",
+                max_raster_memory_mb,
+            )
+        else:
+            values = {
+                band_number: get_raster_values_for_splits(
+                    splits,
+                    read_raster_band_data(raster.path, int(band_number)),
+                    f"i_{raster.grid_id}",
+                    f"j_{raster.grid_id}",
+                )
+                for band_number in raster.bands
+            }
         for band_number in raster.bands:
             logger.info(
                 "Associating values from raster %s grid %s band %s",
@@ -152,13 +561,7 @@ def overlay_rasters(
                 band_number,
             )
             column = band_column_name(raster.key, band_number, len(all_bands))
-            band_data = read_raster_band_data(raster.path, int(band_number), lazy=lazy)
-            raster_data[column] = get_raster_values_for_splits(
-                splits,
-                band_data,
-                f"i_{raster.grid_id}",
-                f"j_{raster.grid_id}",
-            )
+            raster_data[column] = values[band_number]
 
     raster_data = pandas.DataFrame(raster_data)
     splits = pandas.concat([splits, raster_data], axis="columns")
@@ -168,7 +571,6 @@ def overlay_rasters(
 def split_features(
     features: geopandas.GeoDataFrame,
     grid: GridDefinition,
-    experimental: bool = False,
 ) -> geopandas.GeoDataFrame:
     """Split point, linestring or polygon features along a grid
 
@@ -182,8 +584,6 @@ def split_features(
         Point, LineString or Polygon features (multi-geometries are exploded)
     grid : GridDefinition
         Grid to split features along
-    experimental : bool
-        Use the experimental (faster, less robust) polygon splitting routine
 
     Returns
     -------
@@ -193,40 +593,12 @@ def split_features(
     """
     if features.empty:
         return apply_indices(features, grid)
-    source_crs = features.crs
-    prepare, split_func = _prepare_and_split_funcs(features, experimental)
-    prepared = prepare(features)
-
-    if source_crs is None or grid.crs is None:
-        if (source_crs is None) != (grid.crs is None):
-            logger.warning(
-                "CRS undefined for features (%s) or grid (%s): assuming they share a CRS",
-                source_crs,
-                grid.crs,
-            )
-        reprojected = False
-    elif _crs_equal(source_crs, grid.crs):
-        reprojected = False
-    else:
-        logger.info(
-            "Reprojecting features from %s to grid CRS %s for splitting",
-            source_crs,
-            grid.crs,
-        )
-        prepared = prepared.to_crs(grid.crs)
-        reprojected = True
-
-    splits = split_func(prepared, grid)
-    splits = apply_indices(splits, grid)
-
-    if reprojected:
-        splits = splits.to_crs(source_crs)
-    elif source_crs is not None and splits.crs is None:
-        splits = splits.set_crs(source_crs)
-    return splits
+    return geopandas.GeoDataFrame.from_arrow(
+        iter_split_features_batches(features, grid).read_all()
+    )
 
 
-def _prepare_and_split_funcs(features: geopandas.GeoDataFrame, experimental: bool):
+def _prepare_and_split_funcs(features: geopandas.GeoDataFrame):
     """Pick prepare and split functions for the features' geometry type"""
     kinds = _geom_kinds(features)
     if len(kinds) > 1 or "GeometryCollection" in kinds:
@@ -242,8 +614,6 @@ def _prepare_and_split_funcs(features: geopandas.GeoDataFrame, experimental: boo
     elif "LineString" in geom_type:
         return prepare_linestrings, split_linestrings
     elif "Polygon" in geom_type:
-        if experimental:
-            return prepare_polygons, split_polygons_experimental
         return prepare_polygons, split_polygons
     raise ValueError(f"Could not process vector data of type {geom_type}")
 

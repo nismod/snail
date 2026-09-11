@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import logging
 from contextlib import contextmanager
 from os import PathLike
@@ -8,8 +9,9 @@ from typing import TYPE_CHECKING, Union
 import geopandas
 import numpy
 import pandas
+import pyarrow
+import pyarrow.parquet
 import rasterio
-import rioxarray
 
 from snail.intersection import (
     GridDefinition,
@@ -34,27 +36,6 @@ def band_column_name(key: str, band_number: int, number_of_bands: int) -> str:
     return f"{key}_band_{band_number}"
 
 
-def read_rasters(rasters, lazy: bool = False):
-    for raster in rasters.itertuples():
-        try:
-            if lazy:
-                data_array = rioxarray.open_rasterio(raster.path, chunks="auto")
-                source = data_array
-            else:
-                data_array = None
-                source = raster.path
-
-            for band_number in raster.bands:
-                yield (
-                    raster,
-                    band_number,
-                    read_raster_band_data(source, band_number, lazy=lazy),
-                )
-        finally:
-            if data_array is not None:
-                data_array.close()
-
-
 def _is_rasterio_dataset(value) -> bool:
     """True for an open rasterio dataset (duck-typed, covers the reader classes)"""
     return isinstance(value, rasterio.DatasetReader) or (
@@ -76,7 +57,6 @@ def _open_raster(raster):
 def read_raster_band_data(
     source: Union[str, PathLike, "xarray.DataArray"],
     band_number: int = 1,
-    lazy: bool = False,
 ) -> Union[numpy.ndarray, "xarray.DataArray"]:
     """Read a single band from a raster path, open rasterio dataset or DataArray"""
     if band_number < 1:
@@ -88,13 +68,8 @@ def read_raster_band_data(
         return source.read(band_number)
 
     if isinstance(source, (str, PathLike)):
-        if not lazy:
-            with rasterio.open(source) as dataset:
-                band_data: numpy.ndarray = dataset.read(band_number)
-        else:
-            data_array = rioxarray.open_rasterio(source, chunks="auto")
-            band_data = _select_dataarray_band(data_array, band_number)
-        return band_data
+        with rasterio.open(source) as dataset:
+            return dataset.read(band_number)
 
     raise TypeError(
         "Unsupported raster source; expected a path-like object, "
@@ -163,6 +138,106 @@ def read_features(path, layer=None):
             features = geopandas.read_file(path, engine=engine)
 
     return features[~features.geometry.isna()]
+
+
+def geometry_field(schema: pyarrow.Schema) -> pyarrow.Field:
+    """Return the single GeoArrow geometry field in an Arrow schema."""
+    fields = [
+        field
+        for field in schema
+        if (field.metadata or {})
+        .get(b"ARROW:extension:name", b"")
+        .startswith((b"geoarrow.", b"ogc."))
+    ]
+    if len(fields) != 1:
+        raise ValueError("Expected exactly one GeoArrow geometry column")
+    return fields[0]
+
+
+def arrow_crs(schema: pyarrow.Schema):
+    """Read CRS JSON from a GeoArrow geometry field, if present."""
+    metadata = geometry_field(schema).metadata or {}
+    encoded = metadata.get(b"ARROW:extension:metadata")
+    if not encoded:
+        return None
+    return json.loads(encoded).get("crs")
+
+
+@contextmanager
+def open_feature_batches(path, layer=None, batch_size: int = 65_536):
+    """Open a vector source as a bounded Arrow record-batch stream."""
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if Path(path).suffix.lower() in (".parquet", ".geoparquet"):
+        parquet = pyarrow.parquet.ParquetFile(path)
+        yield pyarrow.RecordBatchReader.from_batches(
+            parquet.schema_arrow,
+            parquet.iter_batches(batch_size=batch_size),
+        )
+        return
+
+    import pyogrio
+
+    with pyogrio.open_arrow(
+        path, layer=layer, batch_size=batch_size, use_pyarrow=True
+    ) as (_, reader):
+        yield reader
+
+
+def _geoparquet_schema(schema: pyarrow.Schema) -> pyarrow.Schema:
+    geometry = geometry_field(schema)
+    field_metadata = geometry.metadata or {}
+    extension = field_metadata.get(b"ARROW:extension:name", b"geoarrow.wkb")
+    encoding = (
+        "WKB" if extension.endswith(b"wkb") else extension.decode().split(".")[-1]
+    )
+    extension_metadata = json.loads(
+        field_metadata.get(b"ARROW:extension:metadata", b"{}")
+    )
+    column = {"encoding": encoding, "geometry_types": []}
+    if extension_metadata.get("crs") is not None:
+        column["crs"] = extension_metadata["crs"]
+    geo = {
+        "primary_column": geometry.name,
+        "columns": {geometry.name: column},
+        "version": "1.0.0",
+        "creator": {"library": "snail"},
+    }
+    metadata = dict(schema.metadata or {})
+    metadata[b"geo"] = json.dumps(geo).encode()
+    return schema.with_metadata(metadata)
+
+
+def write_feature_batches(reader, path, layer=None):
+    """Write an Arrow reader incrementally as GeoParquet or through GDAL."""
+    reader = (
+        reader
+        if isinstance(reader, pyarrow.RecordBatchReader)
+        else pyarrow.RecordBatchReader.from_stream(reader)
+    )
+    if Path(path).suffix.lower() in (".parquet", ".geoparquet"):
+        schema = _geoparquet_schema(reader.schema)
+        with pyarrow.parquet.ParquetWriter(path, schema) as writer:
+            for batch in reader:
+                writer.write_batch(
+                    pyarrow.RecordBatch.from_arrays(batch.columns, schema=schema)
+                )
+        return
+
+    import pyogrio
+    import pyproj
+
+    geometry = geometry_field(reader.schema)
+    crs = arrow_crs(reader.schema)
+    crs_wkt = None if crs is None else pyproj.CRS.from_user_input(crs).to_wkt()
+    pyogrio.write_arrow(
+        reader,
+        path,
+        layer=layer,
+        geometry_name=geometry.name,
+        geometry_type="Unknown",
+        crs=crs_wkt,
+    )
 
 
 def read_layer_names(path) -> list[str]:
