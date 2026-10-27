@@ -16,13 +16,59 @@ from scipy.interpolate import interp1d
 class DirectDamageResult:
     """Summarised sampled direct damages and their reproducibility metadata.
 
-    ``quantiles`` is a long-form frame with one row per asset, scenario and
-    intensity case. Quantile columns are named ``q_05``, ``q_50``, etc.
-    ``metadata`` records the seed and model inputs; raw samples are not kept.
+    ``metadata`` records the seed and model inputs. ``quantiles`` is a long-form
+    frame with one row per asset, scenario and intensity case, when requested.
+    ``ead_quantiles`` contains one row per asset and scenario when requested.
+    Quantile columns are named ``q_05``, ``q_50``, etc. Raw samples are not kept.
     """
 
-    quantiles: pandas.DataFrame
     metadata: dict[str, Any]
+    quantiles: pandas.DataFrame | None
+    ead_quantiles: pandas.DataFrame | None = None
+
+
+def _validate_quantiles(
+    quantiles: Sequence[float] | None, name: str
+) -> tuple[tuple[float, ...] | None, list[str] | None]:
+    if quantiles is None:
+        return None, None
+    quantiles = tuple(quantiles)
+    if len(quantiles) == 0 or any(
+        not numpy.isfinite(q) or not 0 <= q <= 1 for q in quantiles
+    ):
+        raise ValueError(f"{name} must be a non-empty sequence in [0, 1]")
+    if len(set(quantiles)) != len(quantiles):
+        raise ValueError(f"{name} must not contain duplicates")
+    columns = [f"q_{int(round(q * 100)):02d}" for q in quantiles]
+    if len(set(columns)) != len(columns):
+        raise ValueError(f"{name} must map to distinct percentile column names")
+    return quantiles, columns
+
+
+def _integrate_ead_samples(
+    sampled_damage_by_case: Mapping[Any, numpy.ndarray],
+    return_periods: Mapping[Any, float],
+) -> numpy.ndarray:
+    """
+    Integrate sampled damages over annual exceedance probability
+    """
+    cases = sorted(return_periods, key=lambda case: 1.0 / return_periods[case])
+    probabilities = numpy.asarray([1.0 / return_periods[case] for case in cases])
+    damage = numpy.column_stack([sampled_damage_by_case[case] for case in cases])
+
+    # Set unlikely tail: repeat first provided damage as zero-probability damage
+    probabilities = numpy.concatenate(([0.0], probabilities))
+    damage = numpy.column_stack((damage[:, 0], damage))
+
+    # No special treatment of most likely end, so if probability 1 is not
+    # supplied, we truncate contribution from (unknown) most likely events.
+
+    interval_areas = (
+        0.5
+        * (damage[:, :-1] + damage[:, 1:])
+        * numpy.diff(probabilities)[None, :]
+    )
+    return interval_areas.sum(axis=1)
 
 
 def calculate_direct_damages(
@@ -38,7 +84,9 @@ def calculate_direct_damages(
     cost_mean: float | str,
     cost_alpha: float,
     n_samples: int = 1000,
-    quantiles: Sequence[float] = (0.05, 0.25, 0.5, 0.75, 0.95),
+    quantiles: Sequence[float] | None = None,
+    return_periods: Mapping[Any, float] | None = None,
+    ead_quantiles: Sequence[float] | None = None,
     seed: int | None = None,
     scenario: str | None = None,
 ) -> DirectDamageResult:
@@ -96,9 +144,18 @@ def calculate_direct_damages(
     n_samples : int, default 1000
         Number of uncertainty realisations to draw for each asset or
         asset/scenario group.
-    quantiles : Sequence[float], default (0.05, 0.25, 0.5, 0.75, 0.95)
+    quantiles : Sequence[float] or None, default None
         Quantiles to report for each asset and intensity case. Values must be
-        in [0, 1]; output columns use percentile names such as ``q_05``.
+        in [0, 1]; output columns use percentile names such as ``q_05``. Set
+        to None to omit per-intensity quantiles.
+    return_periods : Mapping[Any, float] or None, default None
+        Mapping from intensity-case labels to return periods in years. Supply
+        this together with ``ead_quantiles`` to request expected annual damage
+        (EAD) quantiles. Keys must exactly match ``intensity_columns``.
+    ead_quantiles : Sequence[float] or None, default None
+        Quantiles to report for each asset/scenario EAD distribution. Requires
+        ``return_periods``. Values use the same validation and column naming as
+        ``quantiles``.
     seed : int or None, default None
         Seed for random number generator. Set a seed to make the sampled
         summaries reproducible for the same inputs and row order.
@@ -111,8 +168,10 @@ def calculate_direct_damages(
     -------
     DirectDamageResult
         ``quantiles`` contains one row per asset, scenario (if supplied), and
-        intensity case, with an ``n_splits`` count and one column per requested
-        quantile. ``metadata`` records the seed and model configuration.
+        intensity case when requested. ``ead_quantiles`` contains one row per
+        asset/scenario group when requested. Both have ``n_splits`` and one
+        column per requested quantile. ``metadata`` records the seed and model
+        configuration.
 
     Raises
     ------
@@ -127,6 +186,11 @@ def calculate_direct_damages(
     The draws for hazard, curve choice, damage noise and cost are shared across
     all segments and intensity cases within each asset or asset/scenario
     group. Different groups receive independent draws.
+    
+    If EAD is requested, each sample's damage values are integrated over annual
+    exceedance probability using the trapezoid rule, with the lowest probability
+    damage repeated as the zero probability damage. There is no extrapolation at
+    the highest probability end.
     """
     required = {asset_id, length, *intensity_columns.values()}
     if scenario is not None:
@@ -141,16 +205,38 @@ def calculate_direct_damages(
     if not isinstance(n_samples, (int, numpy.integer)) or n_samples <= 0:
         raise ValueError("n_samples must be greater than zero")
 
-    quantiles = tuple(quantiles)
-    if len(quantiles) == 0 or any(
-        not numpy.isfinite(q) or not 0 <= q <= 1 for q in quantiles
-    ):
-        raise ValueError("quantiles must be a non-empty sequence in [0, 1]")
-    if len(set(quantiles)) != len(quantiles):
-        raise ValueError("quantiles must not contain duplicates")
-    quantile_columns = [f"q_{int(round(q * 100)):02d}" for q in quantiles]
-    if len(set(quantile_columns)) != len(quantile_columns):
-        raise ValueError("quantiles must map to distinct percentile column names")
+    if quantiles is None and ead_quantiles is None:
+        raise ValueError("request quantiles, ead_quantiles, or both")
+    quantiles, quantile_columns = _validate_quantiles(quantiles, "quantiles")
+    ead_quantiles, ead_quantile_columns = _validate_quantiles(
+        ead_quantiles, "ead_quantiles"
+    )
+    if (ead_quantiles is None) != (return_periods is None):
+        raise ValueError("return_periods and ead_quantiles must be supplied together")
+
+    return_period_values: dict[Any, float] | None = None
+    if return_periods is not None:
+        if not isinstance(return_periods, Mapping):
+            raise ValueError("return_periods must map intensity-case labels to years")
+        if set(return_periods) != set(intensity_columns):
+            raise ValueError("return_periods keys must match intensity_columns")
+        try:
+            return_period_values = {
+                case: float(period) for case, period in return_periods.items()
+            }
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "return periods must be finite numbers of at least one year"
+            ) from error
+        periods = numpy.asarray(list(return_period_values.values()), dtype=float)
+        if (
+            not numpy.isfinite(periods).all()
+            or (periods < 1.0).any()
+            or len(set(periods)) != len(periods)
+        ):
+            raise ValueError(
+                "return periods must be finite, unique, and at least one year"
+            )
 
     if (
         not numpy.isfinite(eta_sd)
@@ -201,6 +287,7 @@ def calculate_direct_damages(
 
     rng = numpy.random.default_rng(seed)
     rows: list[dict[str, Any]] = []
+    ead_rows: list[dict[str, Any]] = []
     grouper: str | list[str] = group_cols[0] if len(group_cols) == 1 else group_cols
     for key, group in working.groupby(grouper, sort=False, dropna=False):
         key_values = (key,) if len(group_cols) == 1 else key
@@ -221,6 +308,7 @@ def calculate_direct_damages(
         cost_draw = numpy.maximum(0.0, group_cost_mean * (1.0 + cost_alpha * z_cost))
         damage_multiplier = numpy.exp(eta_sd * z_damage - 0.5 * eta_sd**2)
         lengths = group[length].to_numpy(dtype=float)
+        sampled_totals: dict[Any, numpy.ndarray] = {}
         for case, column in intensity_columns.items():
             means = group[column].to_numpy(dtype=float)
             hazard = numpy.maximum(
@@ -236,18 +324,33 @@ def calculate_direct_damages(
                 damage_fraction * damage_multiplier[:, None], 0.0, 1.0
             )
             total = (damage_fraction * lengths[None, :] * cost_draw[:, None]).sum(axis=1)
-            
+
+            if quantiles is not None:
+                summary = dict(base)
+                summary["intensity_case"] = case
+                summary["n_splits"] = size
+                for q, column_name in zip(quantiles, quantile_columns):
+                    summary[column_name] = float(numpy.quantile(total, q))
+                rows.append(summary)
+            if ead_quantiles is not None:
+                sampled_totals[case] = total
+
+        if ead_quantiles is not None:
+            ead_samples = _integrate_ead_samples(sampled_totals, return_period_values)
             summary = dict(base)
-            summary["intensity_case"] = case
             summary["n_splits"] = size
-            for q, column_name in zip(quantiles, quantile_columns):
-                summary[column_name] = float(numpy.quantile(total, q))
-            rows.append(summary)
+            for q, column_name in zip(ead_quantiles, ead_quantile_columns):
+                summary[column_name] = float(numpy.quantile(ead_samples, q))
+            ead_rows.append(summary)
 
     metadata = {
         "seed": seed,
         "n_samples": n_samples,
-        "quantiles": list(quantiles),
+        "quantiles": list(quantiles) if quantiles is not None else None,
+        "return_periods": return_period_values,
+        "ead_quantiles": (
+            list(ead_quantiles) if ead_quantiles is not None else None
+        ),
         "asset_id_column": asset_id,
         "scenario_column": scenario,
         "length_column": length,
@@ -260,8 +363,20 @@ def calculate_direct_damages(
         "eta_sd": eta_sd,
         "shared_draws": ["hazard", "damage_curve", "damage_noise", "cost"],
     }
-    output_columns = [*group_cols, "intensity_case", "n_splits", *quantile_columns]
-    return DirectDamageResult(pandas.DataFrame(rows, columns=output_columns), metadata)
+    quantile_frame = None
+    if quantiles is not None:
+        output_columns = [*group_cols, "intensity_case", "n_splits", *quantile_columns]
+        quantile_frame = pandas.DataFrame(rows, columns=output_columns)
+    ead_quantile_frame = None
+    if ead_quantiles is not None:
+        output_columns = [*group_cols, "n_splits", *ead_quantile_columns]
+        ead_quantile_frame = pandas.DataFrame(ead_rows, columns=output_columns)
+
+    return DirectDamageResult(
+        quantiles=quantile_frame,
+        metadata=metadata,
+        ead_quantiles=ead_quantile_frame,
+    )
 
 
 # TODO check `nismod/east-africa-transport` and `nismod/jamaica-infrastructure`

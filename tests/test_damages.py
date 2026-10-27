@@ -10,6 +10,7 @@ from numpy.testing import assert_allclose
 from snail.damages import (
     DamageCurve,
     PiecewiseLinearDamageCurve,
+    _integrate_ead_samples,
     calculate_direct_damages,
 )
 
@@ -266,6 +267,7 @@ def test_direct_damages_deterministic_single_curve():
         cost_mean=100.0,
         cost_alpha=0.0,
         n_samples=20,
+        quantiles=(0.05, 0.25, 0.5, 0.75, 0.95),
         seed=42,
     )
 
@@ -279,6 +281,146 @@ def test_direct_damages_deterministic_single_curve():
     # b, RP100: 0.25 * 0.5 * 1 * 100 = 12.5
     assert actual.loc[("b", 100)] == pytest.approx(12.5)
     assert result.metadata["seed"] == 42
+
+
+def test_direct_damages_calculates_ead_quantiles():
+    splits = pandas.DataFrame(
+        {"asset": ["a"], "length": [1.0], "frequent": [1.0], "rare": [3.0]}
+    )
+    curve = PiecewiseLinearDamageCurve(
+        pandas.DataFrame({"intensity": [0.0, 10.0], "damage": [0.0, 1.0]})
+    )
+    result = calculate_direct_damages(
+        splits,
+        asset_id="asset",
+        length="length",
+        intensity_columns={"rp2": "frequent", "rp10": "rare"},
+        return_periods={"rp10": 10.0, "rp2": 2.0},
+        curves={"linear": curve},
+        curve_weights={"linear": 1.0},
+        cost_mean=10.0,
+        cost_alpha=0.0,
+        quantiles=(0.5,),
+        ead_quantiles=(0.05, 0.5, 0.95),
+        n_samples=10,
+        seed=3,
+    )
+
+    assert result.quantiles is not None
+    assert len(result.quantiles) == 2
+    assert result.ead_quantiles is not None
+    assert result.ead_quantiles.loc[0, "n_splits"] == 1
+    # d(h, c) = h/10 * c, with c=10
+    # So (probability, damage) = (0, 3), (0.1, 3), (0.5, 1)
+    # EAD = (0.1 - 0) * (3 + 3) / 2 + (0.5 - 0.1) * (1 + 3) / 2 = 1.1
+    assert result.ead_quantiles.loc[0, "q_05"] == pytest.approx(1.1)
+    assert result.ead_quantiles.loc[0, "q_50"] == pytest.approx(1.1)
+    assert result.ead_quantiles.loc[0, "q_95"] == pytest.approx(1.1)
+
+    ead_only = calculate_direct_damages(
+        splits,
+        asset_id="asset",
+        length="length",
+        intensity_columns={"rp2": "frequent", "rp10": "rare"},
+        return_periods={"rp10": 10.0, "rp2": 2.0},
+        curves={"linear": curve},
+        curve_weights={"linear": 1.0},
+        cost_mean=10.0,
+        cost_alpha=0.0,
+        quantiles=None,
+        ead_quantiles=(0.5,),
+        n_samples=10,
+        seed=3,
+    )
+    assert ead_only.quantiles is None
+    assert ead_only.ead_quantiles.loc[0, "q_50"] == pytest.approx(1.1)
+
+
+def test_ead_quantiles_are_calculated_from_integrated_samples():
+    sampled_damage = {
+        "rp10": numpy.array([0.0, 10.0, 100.0]),
+        "rp2": numpy.array([100.0, 0.0, 10.0]),
+    }
+    ead_samples = _integrate_ead_samples(
+        sampled_damage, {"rp10": 10.0, "rp2": 2.0}
+    )
+
+    # Sample 1: (0.1 - 0) * (0 + 0) / 2 + (0.5 - 0.1) * (0 + 100) / 2 = 20.
+    # Sample 2: (0.1 - 0) * (10 + 10) / 2 + (0.5 - 0.1) * (10 + 0) / 2 = 3.
+    # Sample 3: (0.1 - 0) * (100 + 100) / 2 + (0.5 - 0.1) * (100 + 10) / 2 = 32.
+    # The median of the per-sample EADs (20, 3, 32) is 20.
+    assert numpy.quantile(ead_samples, 0.5) == pytest.approx(20.0)
+
+    # Per-period medians are 10 at both RP10 (p=0.1) and RP2 (p=0.5):
+    # (0.1 - 0) * (10 + 10) / 2 + (0.5 - 0.1) * (10 + 10) / 2 = 5.
+    per_period_medians = {
+        case: numpy.median(samples) for case, samples in sampled_damage.items()
+    }
+    integrated_medians = _integrate_ead_samples(
+        {case: numpy.array([value]) for case, value in per_period_medians.items()},
+        {"rp10": 10.0, "rp2": 2.0},
+    )[0]
+    assert integrated_medians == pytest.approx(5.0)
+    assert numpy.quantile(ead_samples, 0.5) != pytest.approx(integrated_medians)
+
+
+@pytest.mark.parametrize(
+    "bad_input, message",
+    [
+        ("missing_return_periods", "must be supplied together"),
+        ("missing_ead_quantiles", "must be supplied together"),
+        ("mismatched_labels", "keys must match intensity_columns"),
+        ("nonmapping_periods", "must map intensity-case labels"),
+        ("duplicate_periods", "finite, unique, and at least one year"),
+        ("period_below_one", "finite, unique, and at least one year"),
+        ("nonfinite_period", "finite, unique, and at least one year"),
+        ("nonnumeric_period", "return periods must be finite numbers"),
+        ("no_requested_summaries", "request quantiles, ead_quantiles, or both"),
+    ],
+)
+def test_direct_damages_validates_ead_inputs(bad_input, message):
+    splits = pandas.DataFrame(
+        {"asset": ["a"], "length": [1.0], "rp10": [1.0], "rp2": [2.0]}
+    )
+    arguments = dict(
+        asset_id="asset",
+        length="length",
+        intensity_columns={"rp10": "rp10", "rp2": "rp2"},
+        curves={"central": _constant_curve(0.5)},
+        curve_weights={"central": 1.0},
+        cost_mean=10.0,
+        cost_alpha=0.0,
+        quantiles=(0.5,),
+        ead_quantiles=(0.5,),
+        return_periods={"rp10": 10.0, "rp2": 2.0},
+    )
+
+    match bad_input:
+        case "missing_return_periods":
+            arguments["return_periods"] = None
+        case "missing_ead_quantiles":
+            arguments["ead_quantiles"] = None
+        case "mismatched_labels":
+            arguments["return_periods"] = {"other": 10.0}
+        case "nonmapping_periods":
+            arguments["return_periods"] = [("rp10", 10.0), ("rp2", 2.0)]
+        case "duplicate_periods":
+            arguments["return_periods"] = {"rp10": 10.0, "rp2": 10.0}
+        case "period_below_one":
+            arguments["return_periods"] = {"rp10": 0.5, "rp2": 2.0}
+        case "nonfinite_period":
+            arguments["return_periods"] = {"rp10": numpy.inf, "rp2": 2.0}
+        case "nonnumeric_period":
+            arguments["return_periods"] = {"rp10": "bad", "rp2": 2.0}
+        case "no_requested_summaries":
+            arguments["quantiles"] = None
+            arguments["ead_quantiles"] = None
+            arguments["return_periods"] = None
+        case _:
+            pytest.fail(f"Unhandled bad input: {bad_input}")
+
+    with pytest.raises(ValueError, match=message):
+        calculate_direct_damages(splits, **arguments)
 
 
 def test_direct_damages_share_curve_draws_across_splits():
@@ -299,6 +441,7 @@ def test_direct_damages_share_curve_draws_across_splits():
         cost_mean=10.0,
         cost_alpha=0.0,
         n_samples=1000,
+        quantiles=(0.05, 0.25, 0.5, 0.75, 0.95),
         seed=9,
     )
 
@@ -394,6 +537,7 @@ def test_direct_damages_share_draws_across_return_periods():
         hazard_alpha=0.1,
         eta_sd=0.1,
         n_samples=10,  # Low samples
+        quantiles=(0.05, 0.25, 0.5, 0.75, 0.95),
         seed=9,
     )
 
@@ -428,6 +572,7 @@ def test_direct_damages_scenario_groups_and_reproducible_quantiles():
         cost_mean=10.0,
         cost_alpha=0.0,
         n_samples=100,
+        quantiles=(0.05, 0.25, 0.5, 0.75, 0.95),
         seed=12,
     )
 
@@ -539,6 +684,7 @@ def test_direct_damages_validates_inputs(bad_input, error, message):
         cost_mean=10.0,
         cost_alpha=0.0,
         n_samples=10,
+        quantiles=(0.05, 0.25, 0.5, 0.75, 0.95),
     )
 
     match bad_input:
