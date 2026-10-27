@@ -300,30 +300,33 @@ def calculate_direct_damages(
         else:
             group_cost_mean = float(cost_mean)
 
-        size = len(group)
-        z_hazard = rng.standard_normal(n_samples)
-        z_damage = rng.standard_normal(n_samples)
-        z_cost = rng.standard_normal(n_samples)
-        selected_curve = rng.choice(len(curve_values), size=n_samples, p=weights)
-        cost_draw = numpy.maximum(0.0, group_cost_mean * (1.0 + cost_alpha * z_cost))
-        damage_multiplier = numpy.exp(eta_sd * z_damage - 0.5 * eta_sd**2)
-        lengths = group[length].to_numpy(dtype=float)
-        sampled_totals: dict[Any, numpy.ndarray] = {}
+        # n = n_samples; s = the number of splits in this asset/scenario group.
+        size = len(group)  # s
+        z_hazard = rng.standard_normal(n_samples)  # (n,)
+        z_damage = rng.standard_normal(n_samples)  # (n,)
+        z_cost = rng.standard_normal(n_samples)  # (n,)
+        selected_curve = rng.choice(len(curve_values), size=n_samples, p=weights)  # (n,)
+        cost_draw = numpy.maximum(0.0, group_cost_mean * (1.0 + cost_alpha * z_cost))  # (n,)
+        damage_multiplier = numpy.exp(eta_sd * z_damage - 0.5 * eta_sd**2)  # (n,)
+        lengths = group[length].to_numpy(dtype=float)  # (s,)
+        sampled_totals: dict[Any, numpy.ndarray] = {}  # each value: (n,)
+        
         for case, column in intensity_columns.items():
-            means = group[column].to_numpy(dtype=float)
+            means = group[column].to_numpy(dtype=float)  # (s,)
             hazard = numpy.maximum(
                 0.0,
                 means[None, :] * (1.0 + alpha_by_case[case] * z_hazard[:, None]),
-            )
-            damage_fraction = numpy.empty((n_samples, size), dtype=float)
+            )  # (n, s)
+            damage_fraction = numpy.empty((n_samples, size), dtype=float)  # (n, s)
             for curve_index, curve in enumerate(curve_values):
-                mask = selected_curve == curve_index
+                mask = selected_curve == curve_index  # (n,)
                 if mask.any():
                     damage_fraction[mask] = curve.damage_fraction(hazard[mask])
             damage_fraction = numpy.clip(
-                damage_fraction * damage_multiplier[:, None], 0.0, 1.0
-            )
-            total = (damage_fraction * lengths[None, :] * cost_draw[:, None]).sum(axis=1)
+                damage_fraction * damage_multiplier[:, None], 0.0, 1.0)  # (n, s)
+            total = (
+                damage_fraction * lengths[None, :] * cost_draw[:, None]
+            ).sum(axis=1)  # (n,)
 
             if quantiles is not None:
                 summary = dict(base)
@@ -336,7 +339,7 @@ def calculate_direct_damages(
                 sampled_totals[case] = total
 
         if ead_quantiles is not None:
-            ead_samples = _integrate_ead_samples(sampled_totals, return_period_values)
+            ead_samples = _integrate_ead_samples(sampled_totals, return_period_values)  # (n,)
             summary = dict(base)
             summary["n_splits"] = size
             for q, column_name in zip(ead_quantiles, ead_quantile_columns):
