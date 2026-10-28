@@ -39,7 +39,7 @@ def _validate_quantiles(
         raise ValueError(f"{name} must be a non-empty sequence in [0, 1]")
     if len(set(quantiles)) != len(quantiles):
         raise ValueError(f"{name} must not contain duplicates")
-    columns = [f"q_{int(round(q * 100)):02d}" for q in quantiles]
+    columns = [f"q_{round(q * 100):02d}" for q in quantiles]
     if len(set(columns)) != len(columns):
         raise ValueError(f"{name} must map to distinct percentile column names")
     return quantiles, columns
@@ -64,9 +64,7 @@ def _integrate_ead_samples(
     # supplied, we truncate contribution from (unknown) most likely events.
 
     interval_areas = (
-        0.5
-        * (damage[:, :-1] + damage[:, 1:])
-        * numpy.diff(probabilities)[None, :]
+        0.5 * (damage[:, :-1] + damage[:, 1:]) * numpy.diff(probabilities)[None, :]
     )
     return interval_areas.sum(axis=1)
 
@@ -82,7 +80,8 @@ def calculate_direct_damages(
     curve_weights: Mapping[str, float],
     eta_sd: float = 0.0,
     cost_mean: float | str,
-    cost_alpha: float,
+    cost_alpha: float = 0.0,
+    cost_system_sd: float = 0.0,
     n_samples: int = 1000,
     quantiles: Sequence[float] | None = None,
     return_periods: Mapping[Any, float] | None = None,
@@ -94,10 +93,11 @@ def calculate_direct_damages(
 
     Each row in ``splits`` is one asset segment. ``intensity_columns`` maps
     intensity-case labels (such as named events or return-periods) to hazard
-    intensity columns. For each asset, or asset/scenario pair, the function
-    samples shared hazard and cost perturbations, selects a damage curve by
-    its weight, and applies mean-corrected lognormal damage noise. Hazard and
-    cost values are clamped at zero, damage fractions are clipped to [0, 1],
+    intensity columns. Each simulation selects a weighted damage curve and
+    draws a systemic cost offset shared across all assets and scenarios.
+    Each asset/scenario group then receives independent hazard, damage-noise
+    and local cost draws, shared across its splits and intensity cases.
+    Hazard and cost values are clamped at zero, damage fractions are clipped to [0, 1],
     and asset splits damages are summed for each intensity case. The result
     returns requested quantiles and run metadata. Samples are discarded.
 
@@ -134,13 +134,21 @@ def calculate_direct_damages(
         damage fraction is multiplied by
         ``exp(eta_sd * Z - eta_sd**2 / 2)`` before clipping to [0, 1].
     cost_mean : float or str
-        Mean rehabilitation cost per unit length. Give a non-negative number
+        Baseline rehabilitation cost per unit length. Give a non-negative number
         to use the same mean for all assets, or a column name to read an
         asset-specific mean. Column values must be constant across that
         asset's segments within each scenario.
-    cost_alpha : float
-        Relative standard deviation of the normal cost perturbation. Each
-        sampled unit cost is ``max(0, cost_mean * (1 + cost_alpha * Z))``.
+    cost_alpha : float, default 0.0
+        Relative standard deviation of the local normal cost perturbation.
+        Sampled unit cost is ``max(0, systemic_cost * (1 + cost_alpha * Z))``,
+        with an independent local draw for each asset/scenario group.
+        Zero disables local cost variation.
+    cost_system_sd : float, default 0.0
+        Finite, non-negative standard deviation of the systemic normal cost
+        offset, in the same cost-per-unit-length units as ``cost_mean``.
+        Each simulation uses ``systemic_cost = max(0, cost_mean +
+        cost_system_sd * Z_system)``. The same absolute offset is applied to
+        every asset/scenario baseline. Zero disables systemic cost variation.
     n_samples : int, default 1000
         Number of uncertainty realisations to draw for each asset or
         asset/scenario group.
@@ -160,9 +168,9 @@ def calculate_direct_damages(
         Seed for random number generator. Set a seed to make the sampled
         summaries reproducible for the same inputs and row order.
     scenario : str or None, default None
-        Optional column identifying scenarios. If supplied, calculations and
-        shared random draws are grouped by both asset and scenario; otherwise
-        they are grouped by asset alone.
+        Optional column identifying scenarios. If supplied, aggregation and
+        local random draws are grouped by both asset and scenario; otherwise
+        they are grouped by asset alone. Systemic draws span all scenarios.
 
     Returns
     -------
@@ -183,10 +191,16 @@ def calculate_direct_damages(
 
     Notes
     -----
-    The draws for hazard, curve choice, damage noise and cost are shared across
-    all segments and intensity cases within each asset or asset/scenario
-    group. Different groups receive independent draws.
-    
+    Curve choices and systemic cost offsets are shared across the entire call
+    at each simulation index. Hazard, damage noise and local cost draws are
+    independent between asset/scenario groups and shared across all splits
+    and intensity cases within each group. Both cost stages are clamped at
+    zero; the final cost mean may therefore differ from the input baseline.
+
+    Global damage curve choices are made first, then systemic cost draws, then
+    local draws for each group. Metadata records cost_system_sd and draw_scopes
+    ("call" or "asset_scenario").
+
     If EAD is requested, each sample's damage values are integrated over annual
     exceedance probability using the trapezoid rule, with the lowest probability
     damage repeated as the zero probability damage. There is no extrapolation at
@@ -245,6 +259,8 @@ def calculate_direct_damages(
         or cost_alpha < 0
     ):
         raise ValueError("eta_sd and cost_alpha must be non-negative")
+    if not numpy.isfinite(cost_system_sd) or cost_system_sd < 0:
+        raise ValueError("cost_system_sd must be finite and non-negative")
     if isinstance(hazard_alpha, Mapping):
         missing_alpha = set(intensity_columns) - set(hazard_alpha)
         if missing_alpha:
@@ -266,9 +282,10 @@ def calculate_direct_damages(
     curve_ids = list(curves)
     curve_values = [curves[key] for key in curve_ids]
 
-    if not isinstance(cost_mean, str):
-        if not numpy.isfinite(cost_mean) or cost_mean < 0:
-            raise ValueError("cost_mean must be finite and non-negative")
+    if not isinstance(cost_mean, str) and (
+        not numpy.isfinite(cost_mean) or cost_mean < 0
+    ):
+        raise ValueError("cost_mean must be finite and non-negative")
     numeric_columns = list(dict.fromkeys([length, *intensity_columns.values()]))
     if isinstance(cost_mean, str) and cost_mean not in numeric_columns:
         numeric_columns.append(cost_mean)
@@ -286,9 +303,17 @@ def calculate_direct_damages(
         raise ValueError("Asset and scenario identifiers must not be missing")
 
     rng = numpy.random.default_rng(seed)
+
+    # s = the number of splits; n = n_samples
+    # Make systemic draws, shared across the whole call
+    selected_curve = rng.choice(len(curve_values), size=n_samples, p=weights)  # (n,)
+    z_system = rng.standard_normal(n_samples)  # (n,)
+    systemic_cost_offset = cost_system_sd * z_system  # (n,)
+
     rows: list[dict[str, Any]] = []
     ead_rows: list[dict[str, Any]] = []
     grouper: str | list[str] = group_cols[0] if len(group_cols) == 1 else group_cols
+    # Scenario grouping
     for key, group in working.groupby(grouper, sort=False, dropna=False):
         key_values = (key,) if len(group_cols) == 1 else key
         base = dict(zip(group_cols, key_values))
@@ -300,17 +325,22 @@ def calculate_direct_damages(
         else:
             group_cost_mean = float(cost_mean)
 
-        # n = n_samples; s = the number of splits in this asset/scenario group.
+        # Make local draws, shared across asset-scenario
         size = len(group)  # s
         z_hazard = rng.standard_normal(n_samples)  # (n,)
         z_damage = rng.standard_normal(n_samples)  # (n,)
         z_cost = rng.standard_normal(n_samples)  # (n,)
-        selected_curve = rng.choice(len(curve_values), size=n_samples, p=weights)  # (n,)
-        cost_draw = numpy.maximum(0.0, group_cost_mean * (1.0 + cost_alpha * z_cost))  # (n,)
+        systemic_cost = numpy.maximum(
+            0.0, group_cost_mean + systemic_cost_offset
+        )  # (n,)
+        cost_draw = numpy.maximum(
+            0.0, systemic_cost * (1.0 + cost_alpha * z_cost)
+        )  # (n,)
         damage_multiplier = numpy.exp(eta_sd * z_damage - 0.5 * eta_sd**2)  # (n,)
         lengths = group[length].to_numpy(dtype=float)  # (s,)
         sampled_totals: dict[Any, numpy.ndarray] = {}  # each value: (n,)
-        
+
+        # Intensity case (e.g. return-period) iterator
         for case, column in intensity_columns.items():
             means = group[column].to_numpy(dtype=float)  # (s,)
             hazard = numpy.maximum(
@@ -323,10 +353,11 @@ def calculate_direct_damages(
                 if mask.any():
                     damage_fraction[mask] = curve.damage_fraction(hazard[mask])
             damage_fraction = numpy.clip(
-                damage_fraction * damage_multiplier[:, None], 0.0, 1.0)  # (n, s)
-            total = (
-                damage_fraction * lengths[None, :] * cost_draw[:, None]
-            ).sum(axis=1)  # (n,)
+                damage_fraction * damage_multiplier[:, None], 0.0, 1.0
+            )  # (n, s)
+            total = (damage_fraction * lengths[None, :] * cost_draw[:, None]).sum(
+                axis=1
+            )  # (n,)
 
             if quantiles is not None:
                 summary = dict(base)
@@ -339,7 +370,9 @@ def calculate_direct_damages(
                 sampled_totals[case] = total
 
         if ead_quantiles is not None:
-            ead_samples = _integrate_ead_samples(sampled_totals, return_period_values)  # (n,)
+            ead_samples = _integrate_ead_samples(
+                sampled_totals, return_period_values
+            )  # (n,)
             summary = dict(base)
             summary["n_splits"] = size
             for q, column_name in zip(ead_quantiles, ead_quantile_columns):
@@ -351,9 +384,7 @@ def calculate_direct_damages(
         "n_samples": n_samples,
         "quantiles": list(quantiles) if quantiles is not None else None,
         "return_periods": return_period_values,
-        "ead_quantiles": (
-            list(ead_quantiles) if ead_quantiles is not None else None
-        ),
+        "ead_quantiles": (list(ead_quantiles) if ead_quantiles is not None else None),
         "asset_id_column": asset_id,
         "scenario_column": scenario,
         "length_column": length,
@@ -362,9 +393,16 @@ def calculate_direct_damages(
         "curve_weights": dict(curve_weights),
         "cost_mean": cost_mean,
         "cost_alpha": cost_alpha,
+        "cost_system_sd": cost_system_sd,
         "hazard_alpha": alpha_by_case,
         "eta_sd": eta_sd,
-        "shared_draws": ["hazard", "damage_curve", "damage_noise", "cost"],
+        "draw_scopes": {
+            "damage_curve": "call",
+            "cost_system": "call",
+            "hazard": "asset_scenario",
+            "damage_noise": "asset_scenario",
+            "cost": "asset_scenario",
+        },
     }
     quantile_frame = None
     if quantiles is not None:
