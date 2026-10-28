@@ -8,6 +8,7 @@ from importlib.metadata import PackageNotFoundError, version
 # e.g. uncomment:
 # from snail.network import Network
 from snail import damage_library
+from snail.damages import DirectDamageResult, calculate_direct_damages
 from snail.overlay import overlay_raster, overlay_rasters, split_features
 
 try:
@@ -19,6 +20,8 @@ except PackageNotFoundError:
 # Define what should be imported as * when a client writes::
 #   from snail import *
 __all__ = [
+    "DirectDamageResult",
+    "calculate_direct_damages",
     "damage_library",
     "overlay_raster",
     "overlay_rasters",
