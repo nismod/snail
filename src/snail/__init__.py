@@ -20,9 +20,9 @@ except PackageNotFoundError:
 # Define what should be imported as * when a client writes::
 #   from snail import *
 __all__ = [
-    "damage_library",
     "DirectDamageResult",
     "calculate_direct_damages",
+    "damage_library",
     "overlay_raster",
     "overlay_rasters",
     "split_features",
