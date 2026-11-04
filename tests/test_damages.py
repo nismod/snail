@@ -1,12 +1,14 @@
 """Test damage assessment"""
 
 import os
+from itertools import pairwise
 from unittest.mock import Mock
 
 import numpy
 import pandas
 import pytest
 from numpy.testing import assert_allclose
+from scipy.integrate import trapezoid
 
 from snail.damages import (
     DamageCurve,
@@ -312,11 +314,13 @@ def test_direct_damages_calculates_ead_quantiles():
     assert result.ead_quantiles is not None
     assert result.ead_quantiles.loc[0, "n_splits"] == 1
     # d(h, c) = h/10 * c, with c=10
-    # So (probability, damage) = (0, 3), (0.1, 3), (0.5, 1)
-    # EAD = (0.1 - 0) * (3 + 3) / 2 + (0.5 - 0.1) * (1 + 3) / 2 = 1.1
-    assert result.ead_quantiles.loc[0, "q_05"] == pytest.approx(1.1)
-    assert result.ead_quantiles.loc[0, "q_50"] == pytest.approx(1.1)
-    assert result.ead_quantiles.loc[0, "q_95"] == pytest.approx(1.1)
+    # Supplied (probability, damage) pairs are (0.1, 3) and (0.5, 1).
+    # Integrating 1 - 2*ln(p/0.5)/ln(5) gives 0.2 + 0.8/ln(5).
+    # Add the rare tail rectangle 0.1*3; omit probabilities above 0.5.
+    expected_ead = 0.5 + 0.8 / numpy.log(5.0)
+    assert result.ead_quantiles.loc[0, "q_05"] == pytest.approx(expected_ead)
+    assert result.ead_quantiles.loc[0, "q_50"] == pytest.approx(expected_ead)
+    assert result.ead_quantiles.loc[0, "q_95"] == pytest.approx(expected_ead)
 
     ead_only = calculate_direct_damages(
         splits,
@@ -334,7 +338,60 @@ def test_direct_damages_calculates_ead_quantiles():
         seed=3,
     )
     assert ead_only.quantiles is None
-    assert ead_only.ead_quantiles.loc[0, "q_50"] == pytest.approx(1.1)
+    assert ead_only.ead_quantiles.loc[0, "q_50"] == pytest.approx(expected_ead)
+
+
+@pytest.fixture(params=[(0.0, 1.0), (4.0, 2.0), (7.0, 0.0), (0.0, 0.0)])
+def log_linear_ead_case(request):
+    a, b = request.param
+    # D(p) = a - b*ln(p), with one simulation sample.
+    return_periods = {"rp100": 100.0, "rp25": 25.0, "rp5": 5.0, "rp2": 2.0}
+    sampled_damage = {
+        case: numpy.array([a - b * numpy.log(1.0 / period)])
+        for case, period in return_periods.items()
+    }
+    return a, b, return_periods, sampled_damage
+
+
+def test_integrate_ead_samples_matches_log_linear_numerical_case(log_linear_ead_case):
+    a, b, return_periods, sampled_damage = log_linear_ead_case
+    actual = _integrate_ead_samples(sampled_damage, return_periods)[0]
+
+    p_min = 1.0 / max(return_periods.values())
+    p_max = 1.0 / min(return_periods.values())
+    grid = numpy.geomspace(p_min, p_max, 100_001)
+    grid_damage = a - b * numpy.log(grid)
+    numerical = trapezoid(grid_damage, x=grid) + grid_damage[0] * p_min
+    assert_allclose(actual, numerical, rtol=1e-8, atol=1e-12)
+
+
+def test_integrate_ead_samples_uses_intermediate_points():
+    probabilities = numpy.array([0.01, 0.04, 0.2, 0.5])
+    damage = numpy.array([100.0, 80.0, 20.0, 0.0])
+    cases = ["rare", "uncommon", "common", "frequent"]
+    sampled_damage = {case: numpy.array([value]) for case, value in zip(cases, damage)}
+    return_periods = dict(zip(cases, 1.0 / probabilities))
+    actual = _integrate_ead_samples(sampled_damage, return_periods)[0]
+
+    # Include every supplied probability, so numerical trapezoids do not cross corners.
+    grid = numpy.unique(
+        numpy.concatenate(
+            [
+                numpy.geomspace(p_lo, p_hi, 100_001)
+                for p_lo, p_hi in pairwise(probabilities)
+            ]
+        )
+    )
+    grid_damage = numpy.interp(numpy.log(grid), numpy.log(probabilities), damage)
+    numerical = trapezoid(grid_damage, x=grid) + damage[0] * probabilities[0]
+    assert_allclose(actual, numerical, rtol=1e-8, atol=1e-12)
+
+
+@pytest.mark.parametrize("return_period", [1.0, 20.0])
+def test_integrate_ead_samples_single_event_contributes_only_tail(return_period):
+    damage = numpy.array([0.0, 2.0, 100.0])
+    actual = _integrate_ead_samples({"event": damage}, {"event": return_period})
+    assert_allclose(actual, damage / return_period)
 
 
 def test_ead_quantiles_are_calculated_from_integrated_samples():
@@ -344,14 +401,19 @@ def test_ead_quantiles_are_calculated_from_integrated_samples():
     }
     ead_samples = _integrate_ead_samples(sampled_damage, {"rp10": 10.0, "rp2": 2.0})
 
-    # Sample 1: (0.1 - 0) * (0 + 0) / 2 + (0.5 - 0.1) * (0 + 100) / 2 = 20.
-    # Sample 2: (0.1 - 0) * (10 + 10) / 2 + (0.5 - 0.1) * (10 + 0) / 2 = 3.
-    # Sample 3: (0.1 - 0) * (100 + 100) / 2 + (0.5 - 0.1) * (100 + 10) / 2 = 32.
-    # The median of the per-sample EADs (20, 3, 32) is 20.
-    assert numpy.quantile(ead_samples, 0.5) == pytest.approx(20.0)
+    # Log-linear interval integrals plus each sample's rare tail rectangle.
+    expected = numpy.array(
+        [
+            50.0 - 40.0 / numpy.log(5.0),
+            4.0 / numpy.log(5.0),
+            5.0 + 36.0 / numpy.log(5.0),
+        ]
+    )
+    assert_allclose(ead_samples, expected)
+    assert numpy.quantile(ead_samples, 0.5) == pytest.approx(expected[0])
 
     # Per-period medians are 10 at both RP10 (p=0.1) and RP2 (p=0.5):
-    # (0.1 - 0) * (10 + 10) / 2 + (0.5 - 0.1) * (10 + 10) / 2 = 5.
+    # Constant damage gives 10 * 0.5 = 5, including the rare tail rectangle.
     per_period_medians = {
         case: numpy.median(samples) for case, samples in sampled_damage.items()
     }

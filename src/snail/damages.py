@@ -50,23 +50,68 @@ def _integrate_ead_samples(
     return_periods: Mapping[Any, float],
 ) -> numpy.ndarray:
     """
-    Integrate sampled damages over annual exceedance probability
+    Integrate arrays of damage-probability pairs to find Expected Annual
+    Damages (EAD).
+
+    Damage is assumed to vary linearly with natural log of annual exceedance
+    probability between supplied events. Each interval's contribution to EAD is
+    integrated analytically with respect to annual exceedance probability.
+
+    We peform constant extrapolation in damage from the lowest supplied
+    probability to zero probability. There is no extrapolation beyond the
+    highest supplied probability.
+
+    Parameters
+    ----------
+    sampled_damage_by_case : Mapping[Any, numpy.ndarray]
+        Mapping from ``k`` intensity-case labels to one-dimensional damage
+        arrays of shape ``(n,)``, where ``n`` is the number of simulation
+        samples. All arrays must have the same length.
+    return_periods : Mapping[Any, float]
+        Mapping from the same ``k`` case labels to finite, unique return periods
+        in years, each at least one year. At least one case is required. Annual
+        exceedance probability is ``1 / return_period``. Cases are sorted by
+        increasing probability before integration.
+
+    Returns
+    -------
+    numpy.ndarray
+        Expected annual damage samples of shape ``(n,)``, including the
+        low-probability tail rectangle. Each output corresponds to the same
+        sample index in the input damage arrays.
     """
     cases = sorted(return_periods, key=lambda case: 1.0 / return_periods[case])
-    probabilities = numpy.asarray([1.0 / return_periods[case] for case in cases])
-    damage = numpy.column_stack([sampled_damage_by_case[case] for case in cases])
+    p = numpy.asarray([1.0 / return_periods[case] for case in cases])
+    D = numpy.column_stack([sampled_damage_by_case[case] for case in cases])
 
-    # Set unlikely tail: repeat first provided damage as zero-probability damage
-    probabilities = numpy.concatenate(([0.0], probabilities))
-    damage = numpy.column_stack((damage[:, 0], damage))
+    p_0 = p[:-1]  # higher probability
+    p_1 = p[1:]  # lower probability
+    w = p_1 - p_0  # width
+    L = numpy.log(p_1 / p_0)  # log ratio
+    lambd = w / L  # log mean, also known as lambda
 
-    # No special treatment of most likely end, so if probability 1 is not
-    # supplied, we truncate contribution from (unknown) most likely events.
+    # Assume:
+    # p_0 < p_1
+    # w = p_1 - p_0
+    # L = ln(p_1 / p_0)
+    # delta_D = D_1 - D_0
 
-    interval_areas = (
-        0.5 * (damage[:, :-1] + damage[:, 1:]) * numpy.diff(probabilities)[None, :]
-    )
-    return interval_areas.sum(axis=1)
+    # D(p) = D_0 + s * ln(p / p_0)
+    # s = delta_D / L
+    # J = integral from p_0 to p_1 of ln(p / p_0) dp
+    #   = [p * ln(p / p_0) - p] evaluated from p_0 to p_1
+    #   = p_1 * L - w
+    # I = D_0 * w + s * J
+    #   = D_0 * w + delta_D * (p_1 - w/L)
+    # If lambda = w/L:
+    # I = D_0 * w + (D_1 - D_0) * (p_1 - lambda)
+    #   = D_0 * (lambda - p_0) + D_1 * (p_1 - lambda)
+
+    areas = D[:, :-1] * (lambd - p_0) + D[:, 1:] * (p_1 - lambd)
+    integral = areas.sum(axis=1)
+    rare_tail = p[0] * D[:, 0]
+
+    return integral + rare_tail
 
 
 def calculate_direct_damages(
@@ -207,10 +252,12 @@ def calculate_direct_damages(
     local draws for each group. Metadata records cost_systemic_alpha and draw_scopes
     ("call" or "asset_scenario").
 
-    If EAD is requested, each sample's damage values are integrated over annual
-    exceedance probability using the trapezoid rule, with the lowest probability
-    damage repeated as the zero probability damage. There is no extrapolation at
-    the highest probability end.
+    If EAD is requested, each sample's damage is assumed linear in the natural
+    logarithm of annual exceedance probability between supplied events. These
+    intervals are integrated analytically with respect to probability. We peform
+    constant extrapolation in damage from the lowest supplied probability to
+    zero probability. There is no extrapolation beyond the highest supplied
+    probability. Quantiles are calculated from the integrated samples.
     """
     required = {asset_id, quantity, *intensity_columns.values()}
     if scenario is not None:
