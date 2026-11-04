@@ -261,7 +261,7 @@ def test_direct_damages_deterministic_single_curve():
     result = calculate_direct_damages(
         splits,
         asset_id="asset",
-        length="length",
+        quantity="length",
         intensity_columns={10: "rp_10", 100: "rp_100"},
         curves={"central": curve},
         curve_weights={"central": 1.0},
@@ -294,7 +294,7 @@ def test_direct_damages_calculates_ead_quantiles():
     result = calculate_direct_damages(
         splits,
         asset_id="asset",
-        length="length",
+        quantity="length",
         intensity_columns={"rp2": "frequent", "rp10": "rare"},
         return_periods={"rp10": 10.0, "rp2": 2.0},
         curves={"linear": curve},
@@ -321,7 +321,7 @@ def test_direct_damages_calculates_ead_quantiles():
     ead_only = calculate_direct_damages(
         splits,
         asset_id="asset",
-        length="length",
+        quantity="length",
         intensity_columns={"rp2": "frequent", "rp10": "rare"},
         return_periods={"rp10": 10.0, "rp2": 2.0},
         curves={"linear": curve},
@@ -383,7 +383,7 @@ def test_direct_damages_validates_ead_inputs(bad_input, message):
     )
     arguments = {
         "asset_id": "asset",
-        "length": "length",
+        "quantity": "length",
         "intensity_columns": {"rp10": "rp10", "rp2": "rp2"},
         "curves": {"central": _constant_curve(0.5)},
         "curve_weights": {"central": 1.0},
@@ -433,7 +433,7 @@ def test_direct_damages_share_curve_draws_across_splits():
     result = calculate_direct_damages(
         splits,
         asset_id="asset",
-        length="length",
+        quantity="length",
         intensity_columns={10: "hazard"},
         curves={"low": _constant_curve(0.2), "high": _constant_curve(0.8)},
         curve_weights={"low": 0.6, "high": 0.4},
@@ -453,7 +453,9 @@ def test_direct_damages_share_curve_draws_across_splits():
     assert summary["q_95"] == pytest.approx(24.0)
 
 
-@pytest.mark.parametrize("uncertainty", ["hazard_alpha", "eta_sd", "cost_alpha"])
+@pytest.mark.parametrize(
+    "uncertainty", ["hazard_alpha", "eta_sd", "cost_alpha", "cost_systemic_alpha"]
+)
 def test_direct_damages_share_hazard_damage_and_cost_draws_across_splits(uncertainty):
     split_inputs = pandas.DataFrame(
         {"asset": ["a", "a"], "length": [1.0, 2.0], "hazard": [1.0, 1.0]}
@@ -466,7 +468,7 @@ def test_direct_damages_share_hazard_damage_and_cost_draws_across_splits(uncerta
     )
     kwargs = {
         "asset_id": "asset",
-        "length": "length",
+        "quantity": "length",
         "intensity_columns": {10: "hazard"},
         "curves": {"linear": linear_curve},
         "curve_weights": {"linear": 1.0},
@@ -494,7 +496,7 @@ def test_direct_damages_share_curve_draws_across_assets():
     result = calculate_direct_damages(
         splits,
         asset_id="asset",
-        length="length",
+        quantity="length",
         intensity_columns={10: "hazard"},
         curves={"low": _constant_curve(0.2), "high": _constant_curve(0.8)},
         curve_weights={"low": 0.5, "high": 0.5},
@@ -529,7 +531,7 @@ def test_direct_damages_draw_local_uncertainty_independently(uncertainty, scenar
     arguments = {
         "asset_id": "asset",
         "scenario": scenario,
-        "length": "length",
+        "quantity": "length",
         "intensity_columns": {10: "hazard"},
         "curves": {"linear": curve},
         "curve_weights": {"linear": 1.0},
@@ -561,13 +563,13 @@ def test_direct_damages_share_draws_across_return_periods():
     result = calculate_direct_damages(
         splits,
         asset_id="asset",
-        length="length",
+        quantity="length",
         intensity_columns={10: "rp_10", 100: "rp_100"},
         curves={"linear": linear_curve},
         curve_weights={"linear": 1.0},
         cost_mean=10.0,
         cost_alpha=0.2,
-        cost_system_sd=2.0,
+        cost_systemic_alpha=0.2,
         hazard_alpha=0.1,
         eta_sd=0.1,
         n_samples=10,  # Low samples
@@ -599,7 +601,7 @@ def test_direct_damages_scenario_groups_and_reproducible_quantiles():
     kwargs = {
         "asset_id": "asset",
         "scenario": "scenario",
-        "length": "length",
+        "quantity": "length",
         "intensity_columns": {10: "hazard"},
         "curves": {"central": curve},
         "curve_weights": {"central": 1.0},
@@ -635,7 +637,7 @@ def test_direct_damages_share_curve_draws_across_asset_scenario_groups():
         splits,
         asset_id="asset",
         scenario="scenario",
-        length="length",
+        quantity="length",
         intensity_columns={10: "hazard"},
         curves={"low": _constant_curve(0.2), "high": _constant_curve(0.8)},
         curve_weights={"low": 0.5, "high": 0.5},
@@ -654,7 +656,7 @@ def test_direct_damages_share_curve_draws_across_asset_scenario_groups():
 
 
 @pytest.mark.parametrize("cost_mean", [100.0, "cost"])
-def test_direct_damages_share_systemic_cost_offsets(cost_mean):
+def test_direct_damages_share_systemic_cost_multipliers(cost_mean):
     splits = pandas.DataFrame(
         {
             "asset": ["a", "a", "b", "c"],
@@ -667,7 +669,7 @@ def test_direct_damages_share_systemic_cost_offsets(cost_mean):
     arguments = {
         "asset_id": "asset",
         "scenario": "scenario",
-        "length": "length",
+        "quantity": "length",
         "intensity_columns": {10: "hazard"},
         "curves": {"central": _constant_curve(0.5)},
         "curve_weights": {"central": 1.0},
@@ -677,26 +679,28 @@ def test_direct_damages_share_systemic_cost_offsets(cost_mean):
         "quantiles": (0.0, 0.5, 1.0),
         "seed": 42,
     }
-    result = calculate_direct_damages(splits, cost_system_sd=5.0, **arguments)
-    doubled = calculate_direct_damages(splits, cost_system_sd=10.0, **arguments)
+    result = calculate_direct_damages(splits, cost_systemic_alpha=0.05, **arguments)
+    doubled = calculate_direct_damages(splits, cost_systemic_alpha=0.10, **arguments)
     columns = ["q_00", "q_50", "q_100"]
     baselines = splits["cost"].to_numpy() if cost_mean == "cost" else cost_mean
-    # Damage / (fraction * length) recovers cost; subtract its baseline for the offset.
+    # Recover unit cost, then divide by the baseline to get relative changes.
     costs = result.quantiles[columns].to_numpy() / (
         0.5 * splits["length"].to_numpy()[:, None]
     )
-    offsets = (costs.T - baselines).T
+    relative_changes = (costs.T / baselines).T - 1.0
     doubled_costs = doubled.quantiles[columns].to_numpy() / (
         0.5 * splits["length"].to_numpy()[:, None]
     )
-    doubled_offsets = (doubled_costs.T - baselines).T
-    for offset in offsets:
-        assert_allclose(offset, offsets[0], rtol=1e-12)
-    # Doubling the absolute standard deviation doubles each shared offset.
-    assert_allclose(doubled_offsets, 2 * offsets, rtol=1e-12)
-    assert (costs > 0).all()  # No clamping obscures the additive relationship.
-    assert offsets[0, 0] < offsets[0, 1] < offsets[0, 2]
-    assert result.metadata["cost_system_sd"] == 5.0
+    doubled_changes = (doubled_costs.T / baselines).T - 1.0
+    for change in relative_changes:
+        assert_allclose(change, relative_changes[0], rtol=1e-12)
+    # Doubling alpha doubles each relative change when neither draw is clamped.
+    assert_allclose(doubled_changes, 2 * relative_changes, rtol=1e-12)
+    assert (costs > 0).all()
+    assert (doubled_costs > 0).all()
+    assert relative_changes[0, 0] < relative_changes[0, 1] < relative_changes[0, 2]
+    assert result.metadata["cost_systemic_alpha"] == 0.05
+    assert result.metadata["quantity_column"] == "length"
     assert result.metadata["draw_scopes"] == {
         "damage_curve": "call",
         "cost_system": "call",
@@ -704,6 +708,48 @@ def test_direct_damages_share_systemic_cost_offsets(cost_mean):
         "damage_noise": "asset_scenario",
         "cost": "asset_scenario",
     }
+
+
+@pytest.mark.parametrize("systemic_alpha", [0.0, 0.25])
+def test_direct_damages_mixed_asset_quantities(systemic_alpha):
+    # Precomputed count, line lengths and polygon areas; one geometry type per asset.
+    splits = pandas.DataFrame(
+        {
+            "asset": ["point", "line", "line", "polygon", "polygon"],
+            "quantity": [1.0, 2.0, 3.0, 10.0, 20.0],
+            "unit_cost": [100.0, 10.0, 10.0, 4.0, 4.0],
+            "hazard": [1.0] * 5,
+        }
+    )
+    result = calculate_direct_damages(
+        splits,
+        asset_id="asset",
+        quantity="quantity",
+        intensity_columns={10: "hazard"},
+        curves={"central": _constant_curve(0.5)},
+        curve_weights={"central": 1.0},
+        cost_mean="unit_cost",
+        cost_systemic_alpha=systemic_alpha,
+        quantiles=(0.0, 0.5, 1.0),
+        n_samples=100,
+        seed=42,
+    )
+    summary = result.quantiles.set_index("asset")
+    columns = ["q_00", "q_50", "q_100"]
+    # Baseline damages: half of 1*100, (2+3)*10 and (10+20)*4.
+    if systemic_alpha == 0.0:
+        for asset, expected in [("point", 50.0), ("line", 25.0), ("polygon", 60.0)]:
+            assert_allclose(summary.loc[asset, columns].to_numpy(dtype=float), expected)
+    else:
+        multipliers = summary.loc["point", columns].to_numpy(dtype=float) / 50.0
+        assert multipliers[0] < multipliers[1] < multipliers[2]
+        for asset, baseline in [("line", 25.0), ("polygon", 60.0)]:
+            assert_allclose(
+                summary.loc[asset, columns].to_numpy(dtype=float) / baseline,
+                multipliers,
+            )
+    assert summary["n_splits"].to_dict() == {"point": 1, "line": 2, "polygon": 2}
+    assert result.metadata["quantity_column"] == "quantity"
 
 
 def test_direct_damages_clamp_both_cost_stages(monkeypatch):
@@ -719,12 +765,12 @@ def test_direct_damages_clamp_both_cost_stages(monkeypatch):
     result = calculate_direct_damages(
         pandas.DataFrame({"asset": ["a"], "length": [2.0], "hazard": [1.0]}),
         asset_id="asset",
-        length="length",
+        quantity="length",
         intensity_columns={10: "hazard"},
         curves={"central": _constant_curve(0.5)},
         curve_weights={"central": 1.0},
         cost_mean=1.0,
-        cost_system_sd=1.0,
+        cost_systemic_alpha=1.0,
         cost_alpha=1.0,
         n_samples=4,
         quantiles=(0.0, 0.5, 1.0),
@@ -760,24 +806,24 @@ def test_direct_damages_clamp_both_cost_stages(monkeypatch):
         ("negative_cost_alpha", ValueError, "non-negative"),
         ("nonfinite_cost_alpha", ValueError, "non-negative"),
         (
-            "negative_cost_system_sd",
+            "negative_cost_systemic_alpha",
             ValueError,
-            "cost_system_sd must be finite and non-negative",
+            "cost_systemic_alpha must be finite and non-negative",
         ),
         (
-            "nan_cost_system_sd",
+            "nan_cost_systemic_alpha",
             ValueError,
-            "cost_system_sd must be finite and non-negative",
+            "cost_systemic_alpha must be finite and non-negative",
         ),
         (
-            "infinite_cost_system_sd",
+            "infinite_cost_systemic_alpha",
             ValueError,
-            "cost_system_sd must be finite and non-negative",
+            "cost_systemic_alpha must be finite and non-negative",
         ),
         (
-            "negative_infinite_cost_system_sd",
+            "negative_infinite_cost_systemic_alpha",
             ValueError,
-            "cost_system_sd must be finite and non-negative",
+            "cost_systemic_alpha must be finite and non-negative",
         ),
         ("missing_hazard_alpha", ValueError, "hazard_alpha missing intensity cases"),
         (
@@ -857,7 +903,7 @@ def test_direct_damages_validates_inputs(bad_input, error, message):
     arguments = {
         "asset_id": "asset",
         "scenario": None,
-        "length": "length",
+        "quantity": "length",
         "intensity_columns": {10: "hazard"},
         "curves": {"central": _constant_curve(0.5)},
         "curve_weights": {"central": 1.0},
@@ -902,14 +948,14 @@ def test_direct_damages_validates_inputs(bad_input, error, message):
             arguments["cost_alpha"] = -0.1
         case "nonfinite_cost_alpha":
             arguments["cost_alpha"] = numpy.nan
-        case "negative_cost_system_sd":
-            arguments["cost_system_sd"] = -0.1
-        case "nan_cost_system_sd":
-            arguments["cost_system_sd"] = numpy.nan
-        case "infinite_cost_system_sd":
-            arguments["cost_system_sd"] = numpy.inf
-        case "negative_infinite_cost_system_sd":
-            arguments["cost_system_sd"] = -numpy.inf
+        case "negative_cost_systemic_alpha":
+            arguments["cost_systemic_alpha"] = -0.1
+        case "nan_cost_systemic_alpha":
+            arguments["cost_systemic_alpha"] = numpy.nan
+        case "infinite_cost_systemic_alpha":
+            arguments["cost_systemic_alpha"] = numpy.inf
+        case "negative_infinite_cost_systemic_alpha":
+            arguments["cost_systemic_alpha"] = -numpy.inf
         case "missing_hazard_alpha":
             arguments["hazard_alpha"] = {20: 0.1}
         case "negative_hazard_alpha":
