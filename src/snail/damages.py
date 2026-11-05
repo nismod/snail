@@ -51,6 +51,42 @@ def _validate_quantiles(
     return quantiles, columns
 
 
+def _validate_return_periods(
+    return_periods: Mapping[Any, float] | None,
+    intensity_columns: Mapping[Any, str],
+) -> dict[Any, float] | None:
+    """Check case labels and normalise finite, unique return periods in years."""
+    if return_periods is None:
+        return None
+    if not isinstance(return_periods, Mapping):
+        # Preserve the public API's ValueError for invalid return-period inputs.
+        raise ValueError("return_periods must map intensity-case labels to years")  # noqa: TRY004
+    if set(return_periods) != set(intensity_columns):
+        raise ValueError("return_periods keys must match intensity_columns")
+    try:
+        values = {case: float(period) for case, period in return_periods.items()}
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "return periods must be finite numbers of at least one year"
+        ) from error
+    periods = numpy.asarray(list(values.values()), dtype=float)
+    if (
+        not numpy.isfinite(periods).all()
+        or (periods < 1.0).any()
+        or len(set(periods)) != len(periods)
+    ):
+        raise ValueError("return periods must be finite, unique, and at least one year")
+    return values
+
+
+def _quantile_summary(
+    samples: numpy.ndarray, quantiles: Sequence[float], columns: Sequence[str]
+) -> dict[str, float]:
+    """Calculate requested quantiles together and map them to output columns."""
+    values = numpy.quantile(samples, quantiles)
+    return {column: float(value) for column, value in zip(columns, values)}
+
+
 def _integrate_ead_samples(
     sampled_damage_by_case: Mapping[Any, numpy.ndarray],
     return_periods: Mapping[Any, float],
@@ -303,29 +339,7 @@ def calculate_direct_damages(
     if (ead_quantiles is None) != (return_periods is None):
         raise ValueError("return_periods and ead_quantiles must be supplied together")
 
-    return_period_values: dict[Any, float] | None = None
-    if return_periods is not None:
-        if not isinstance(return_periods, Mapping):
-            raise ValueError("return_periods must map intensity-case labels to years")
-        if set(return_periods) != set(intensity_columns):
-            raise ValueError("return_periods keys must match intensity_columns")
-        try:
-            return_period_values = {
-                case: float(period) for case, period in return_periods.items()
-            }
-        except (TypeError, ValueError) as error:
-            raise ValueError(
-                "return periods must be finite numbers of at least one year"
-            ) from error
-        periods = numpy.asarray(list(return_period_values.values()), dtype=float)
-        if (
-            not numpy.isfinite(periods).all()
-            or (periods < 1.0).any()
-            or len(set(periods)) != len(periods)
-        ):
-            raise ValueError(
-                "return periods must be finite, unique, and at least one year"
-            )
+    return_period_values = _validate_return_periods(return_periods, intensity_columns)
 
     if (
         not numpy.isfinite(eta_sd)
@@ -457,10 +471,7 @@ def calculate_direct_damages(
                 summary = dict(group_identifiers)
                 summary["intensity_case"] = case
                 summary["n_splits"] = size
-                for column_name, value in zip(
-                    quantile_columns, numpy.quantile(total, quantiles)
-                ):
-                    summary[column_name] = float(value)
+                summary.update(_quantile_summary(total, quantiles, quantile_columns))
                 rows.append(summary)
             if ead_quantiles is not None:
                 sampled_totals[case] = total
@@ -471,10 +482,9 @@ def calculate_direct_damages(
             )  # (n,)
             summary = dict(group_identifiers)
             summary["n_splits"] = size
-            for column_name, value in zip(
-                ead_quantile_columns, numpy.quantile(ead_samples, ead_quantiles)
-            ):
-                summary[column_name] = float(value)
+            summary.update(
+                _quantile_summary(ead_samples, ead_quantiles, ead_quantile_columns)
+            )
             ead_rows.append(summary)
 
     total_rows: list[dict[str, Any]] = []
@@ -485,18 +495,14 @@ def calculate_direct_damages(
         if quantiles is not None:
             for case, samples in totals.items():
                 summary = dict(total_identifiers, intensity_case=case)
-                for column_name, value in zip(
-                    quantile_columns, numpy.quantile(samples, quantiles)
-                ):
-                    summary[column_name] = float(value)
+                summary.update(_quantile_summary(samples, quantiles, quantile_columns))
                 total_rows.append(summary)
         if ead_quantiles is not None:
             samples = _integrate_ead_samples(totals, return_period_values)
             summary = dict(total_identifiers)
-            for column_name, value in zip(
-                ead_quantile_columns, numpy.quantile(samples, ead_quantiles)
-            ):
-                summary[column_name] = float(value)
+            summary.update(
+                _quantile_summary(samples, ead_quantiles, ead_quantile_columns)
+            )
             total_ead_rows.append(summary)
 
     metadata = {
