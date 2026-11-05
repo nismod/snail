@@ -648,6 +648,51 @@ def test_direct_damages_share_draws_across_return_periods():
         )
 
 
+def test_direct_damages_totals_keep_scenarios_separate():
+    splits = pandas.DataFrame(
+        {
+            "asset": ["a", "b", "a", "b"],
+            "scenario": ["base", "base", "future", "future"],
+            "quantity": [1.0] * 4,
+            "hazard": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    curve = PiecewiseLinearDamageCurve(
+        pandas.DataFrame({"intensity": [0.0, 10.0], "damage": [0.0, 1.0]})
+    )
+    result = calculate_direct_damages(
+        splits,
+        asset_id="asset",
+        scenario="scenario",
+        quantity="quantity",
+        intensity_columns={10: "hazard"},
+        curves={"linear": curve},
+        curve_weights={"linear": 1.0},
+        cost_mean=10.0,
+        n_samples=1,
+        quantiles=(0.5,),
+        return_periods={10: 10.0},
+        ead_quantiles=(0.5,),
+        aggregate_assets=True,
+    )
+
+    # Damage = hazard/10 * quantity * cost, so each asset's damage equals its hazard.
+    summary = result.total_quantiles.set_index("scenario")
+    assert summary.loc["base", "q_50"] == pytest.approx(3.0)  # 1 + 2
+    assert summary.loc["future", "q_50"] == pytest.approx(7.0)  # 3 + 4
+    assert len(summary) == 2
+    assert (summary["n_assets"] == 2).all()
+    assert (summary["n_splits"] == 2).all()
+
+    # With one RP10 event, EAD is just the tail rectangle: total damage * 1 / 10
+    ead = result.total_ead_quantiles.set_index("scenario")
+    assert ead.loc["base", "q_50"] == pytest.approx(0.3)
+    assert ead.loc["future", "q_50"] == pytest.approx(0.7)
+    assert len(ead) == 2
+    assert (ead["n_assets"] == 2).all()
+    assert (ead["n_splits"] == 2).all()
+
+
 def test_direct_damages_scenario_groups_and_reproducible_quantiles():
     splits = pandas.DataFrame(
         {
