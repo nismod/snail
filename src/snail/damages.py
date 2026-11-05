@@ -19,12 +19,18 @@ class DirectDamageResult:
     ``metadata`` records the seed and model inputs. ``quantiles`` is a long-form
     frame with one row per asset, scenario and intensity case, when requested.
     ``ead_quantiles`` contains one row per asset and scenario when requested.
-    Quantile columns are named ``q_05``, ``q_50``, etc. Raw samples are not kept.
+    Quantile columns are named ``q_05``, ``q_50``, etc.
+
+    When asset aggregation is requested, ``total_quantiles`` and
+    ``total_ead_quantiles`` summarise sums across assets within each scenario.
+    All raw samples are discarded after summarising.
     """
 
     metadata: dict[str, Any]
     quantiles: pandas.DataFrame | None
     ead_quantiles: pandas.DataFrame | None = None
+    total_quantiles: pandas.DataFrame | None = None
+    total_ead_quantiles: pandas.DataFrame | None = None
 
 
 def _validate_quantiles(
@@ -133,6 +139,7 @@ def calculate_direct_damages(
     ead_quantiles: Sequence[float] | None = None,
     seed: int | None = None,
     scenario: str | None = None,
+    aggregate_assets: bool = False,
 ) -> DirectDamageResult:
     """Sample and summarise direct damages for pre-split assets.
 
@@ -144,7 +151,8 @@ def calculate_direct_damages(
     and local cost draws, shared across its splits and intensity cases.
     Hazard and cost values are clamped at zero, damage fractions are clipped to [0, 1],
     and asset splits damages are summed for each intensity case. The result
-    returns requested quantiles and run metadata. Samples are discarded.
+    returns requested quantiles and run metadata. Samples can optionally be
+    accumulated across assets to calculate total quantiles.
 
     In the equations below, ``Z`` denotes a draw from a standard normal
     distribution with mean 0 and standard deviation 1.
@@ -222,6 +230,12 @@ def calculate_direct_damages(
         Optional column identifying scenarios. If supplied, aggregation and
         local random draws are grouped by both asset and scenario; otherwise
         they are grouped by asset alone. Systemic draws span all scenarios.
+    aggregate_assets : bool, default False
+        Sum matching simulation samples across assets, separately within each
+        scenario. Return ``total_quantiles`` at ``quantiles`` when supplied.
+        When EAD is requested, integrate the summed event samples and return
+        ``total_ead_quantiles`` at ``ead_quantiles``. Total summaries include
+        ``n_assets`` and ``n_splits``.
 
     Returns
     -------
@@ -230,7 +244,10 @@ def calculate_direct_damages(
         intensity case when requested. ``ead_quantiles`` contains one row per
         asset/scenario group when requested. Both have ``n_splits`` and one
         column per requested quantile. ``metadata`` records the seed and model
-        configuration.
+        configuration. When ``aggregate_assets`` is True, the ``total_*``
+        fields contain corresponding total quantile summaries; otherwise
+        these fields are None. Total event summaries use one row per scenario
+        and intensity case; total EAD summaries use one row per scenario.
 
     Raises
     ------
@@ -251,6 +268,11 @@ def calculate_direct_damages(
     Global damage curve choices are made first, then systemic cost draws, then
     local draws for each group. Metadata records cost_systemic_alpha and draw_scopes
     ("call" or "asset_scenario").
+
+    Asset aggregation sums corresponding simulation indices before calculating
+    total quantiles. This preserves shared systemic uncertainty and local
+    variation. Total EAD integrates the summed event damages; the fixed
+    integration weights make this equivalent to summing asset EAD samples.
 
     If EAD is requested, each sample's damage is assumed linear in the natural
     logarithm of annual exceedance probability between supplied events. These
@@ -367,15 +389,32 @@ def calculate_direct_damages(
 
     rows: list[dict[str, Any]] = []
     ead_rows: list[dict[str, Any]] = []
+    total_samples: dict[Any, dict[Any, numpy.ndarray]] = {}
+    total_counts: dict[Any, dict[str, int]] = {}
     grouper: str | list[str] = group_cols[0] if len(group_cols) == 1 else group_cols
+
     # Asset-scenario loop
     for key, group in working.groupby(grouper, sort=False, dropna=False):
         key_values = (key,) if len(group_cols) == 1 else key
-        base = dict(zip(group_cols, key_values))
+        # e.g. {"asset_id": "road_2718", "scenario": "future"}
+        group_identifiers = dict(zip(group_cols, key_values))
+
+        if aggregate_assets:
+            scenario_key = group_identifiers[scenario] if scenario is not None else None
+            if scenario_key not in total_samples:
+                total_samples[scenario_key] = {
+                    case: numpy.zeros(n_samples) for case in intensity_columns
+                }
+                total_counts[scenario_key] = {"n_assets": 0, "n_splits": 0}
+            total_counts[scenario_key]["n_assets"] += 1
+            total_counts[scenario_key]["n_splits"] += len(group)
+
         if isinstance(cost_mean, str):
             costs = group[cost_mean].to_numpy(dtype=float)
             if not numpy.allclose(costs, costs[0]):
-                raise ValueError(f"Cost mean must be constant within group {base!r}")
+                raise ValueError(
+                    f"Cost mean must be constant within group {group_identifiers!r}"
+                )
             group_cost_mean = float(costs[0])
         else:
             group_cost_mean = float(cost_mean)
@@ -411,13 +450,17 @@ def calculate_direct_damages(
             total = (damage_fraction * quantities[None, :] * cost_draw[:, None]).sum(
                 axis=1
             )  # (n,)
+            if aggregate_assets:
+                total_samples[scenario_key][case] += total
 
             if quantiles is not None:
-                summary = dict(base)
+                summary = dict(group_identifiers)
                 summary["intensity_case"] = case
                 summary["n_splits"] = size
-                for q, column_name in zip(quantiles, quantile_columns):
-                    summary[column_name] = float(numpy.quantile(total, q))
+                for column_name, value in zip(
+                    quantile_columns, numpy.quantile(total, quantiles)
+                ):
+                    summary[column_name] = float(value)
                 rows.append(summary)
             if ead_quantiles is not None:
                 sampled_totals[case] = total
@@ -426,11 +469,35 @@ def calculate_direct_damages(
             ead_samples = _integrate_ead_samples(
                 sampled_totals, return_period_values
             )  # (n,)
-            summary = dict(base)
+            summary = dict(group_identifiers)
             summary["n_splits"] = size
-            for q, column_name in zip(ead_quantiles, ead_quantile_columns):
-                summary[column_name] = float(numpy.quantile(ead_samples, q))
+            for column_name, value in zip(
+                ead_quantile_columns, numpy.quantile(ead_samples, ead_quantiles)
+            ):
+                summary[column_name] = float(value)
             ead_rows.append(summary)
+
+    total_rows: list[dict[str, Any]] = []
+    total_ead_rows: list[dict[str, Any]] = []
+    for scenario_key, totals in total_samples.items():
+        total_identifiers = {scenario: scenario_key} if scenario is not None else {}
+        total_identifiers.update(total_counts[scenario_key])
+        if quantiles is not None:
+            for case, samples in totals.items():
+                summary = dict(total_identifiers, intensity_case=case)
+                for column_name, value in zip(
+                    quantile_columns, numpy.quantile(samples, quantiles)
+                ):
+                    summary[column_name] = float(value)
+                total_rows.append(summary)
+        if ead_quantiles is not None:
+            samples = _integrate_ead_samples(totals, return_period_values)
+            summary = dict(total_identifiers)
+            for column_name, value in zip(
+                ead_quantile_columns, numpy.quantile(samples, ead_quantiles)
+            ):
+                summary[column_name] = float(value)
+            total_ead_rows.append(summary)
 
     metadata = {
         "seed": seed,
@@ -440,6 +507,7 @@ def calculate_direct_damages(
         "ead_quantiles": (list(ead_quantiles) if ead_quantiles is not None else None),
         "asset_id_column": asset_id,
         "scenario_column": scenario,
+        "aggregate_assets": aggregate_assets,
         "quantity_column": quantity,
         "intensity_columns": dict(intensity_columns),
         "curve_ids": curve_ids,
@@ -466,10 +534,35 @@ def calculate_direct_damages(
         output_columns = [*group_cols, "n_splits", *ead_quantile_columns]
         ead_quantile_frame = pandas.DataFrame(ead_rows, columns=output_columns)
 
+    total_quantile_frame = None
+    total_ead_quantile_frame = None
+    scenario_columns = [scenario] if scenario is not None else []
+    if aggregate_assets and quantiles is not None:
+        output_columns = [
+            *scenario_columns,
+            "intensity_case",
+            "n_assets",
+            "n_splits",
+            *quantile_columns,
+        ]
+        total_quantile_frame = pandas.DataFrame(total_rows, columns=output_columns)
+    if aggregate_assets and ead_quantiles is not None:
+        output_columns = [
+            *scenario_columns,
+            "n_assets",
+            "n_splits",
+            *ead_quantile_columns,
+        ]
+        total_ead_quantile_frame = pandas.DataFrame(
+            total_ead_rows, columns=output_columns
+        )
+
     return DirectDamageResult(
         quantiles=quantile_frame,
         metadata=metadata,
         ead_quantiles=ead_quantile_frame,
+        total_quantiles=total_quantile_frame,
+        total_ead_quantiles=total_ead_quantile_frame,
     )
 
 
