@@ -1,15 +1,24 @@
 """Profile calculate_direct_damages using reproducible synthetic split data.
 
-Run from an environment with snail installed:
+Run from a development environment with snail and psutil installed:
     python scripts/benchmark_damages.py
     python scripts/benchmark_damages.py --assets 1000 --samples 1000
     python scripts/benchmark_damages.py --profile /tmp/damages.prof
     python scripts/benchmark_damages.py --ead-only --no-profile
+    python scripts/benchmark_damages.py --no-profile --metrics /tmp/damages.json
 
-Data generation, imports and result checks are excluded from the measured call.
-By default cProfile reports cumulative time (including callees) and direct time
-(excluding callees). Use --no-profile to measure without profiler overhead.
+Data generation, imports and result checks are excluded from measurements.
+The first invocation measures wall time and RSS. A separate invocation reports
+cProfile cumulative time (including callees) and direct time (excluding callees),
+without the memory sampler. --no-profile skips this second invocation.
 An optional .prof file can be opened with pstats or other profile viewers.
+
+Process RSS is sampled every 10 ms during the measured call, including native
+NumPy/SciPy memory. The reported peak is approximate and may miss shorter spikes.
+Peak increase is relative to RSS after input generation; RSS includes allocator
+retention and is not a count of allocated bytes. Run each workload in a fresh
+process for comparisons. --metrics saves timings, sizes and RSS measurements as
+JSON. Memory sampling adds a small overhead even with --no-profile.
 
 The default call exercises multiple scenarios and weighted damage curves,
 variable split counts, per-asset unit costs, all uncertainty terms, asset/event
@@ -18,13 +27,19 @@ quantiles, asset EAD, and per-scenario totals. It needs no geometry or raster da
 
 import argparse
 import cProfile
+import gc
+import json
 import platform
 import pstats
+import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy
 import pandas
+import psutil
 
 from snail.damages import (
     DirectDamageResult,
@@ -34,6 +49,8 @@ from snail.damages import (
 
 RETURN_PERIODS = (20, 50, 100, 200, 500, 1500)
 QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95)
+MIB = 1024**2
+MEMORY_INTERVAL = 0.01
 
 
 def positive_int(value: str) -> int:
@@ -139,6 +156,34 @@ def check_result(
     assert (result.total_ead_quantiles["n_assets"] == n_assets).all()
 
 
+@contextmanager
+def monitor_rss() -> Iterator[dict[str, int]]:
+    """Sample resident process memory during the call, excluding setup/checks."""
+    process = psutil.Process()
+    before = process.memory_info().rss
+    memory = {"rss_before_bytes": before, "peak_rss_bytes": before}
+    stopped = threading.Event()
+
+    def sample() -> None:
+        while not stopped.wait(MEMORY_INTERVAL):
+            memory["peak_rss_bytes"] = max(
+                memory["peak_rss_bytes"], process.memory_info().rss
+            )
+
+    sampler = threading.Thread(target=sample, daemon=True)
+    sampler.start()
+    try:
+        yield memory
+    finally:
+        stopped.set()
+        sampler.join()
+        memory["rss_after_bytes"] = process.memory_info().rss
+        memory["peak_rss_bytes"] = max(
+            memory["peak_rss_bytes"], memory["rss_after_bytes"]
+        )
+        memory["peak_rss_increase_bytes"] = memory["peak_rss_bytes"] - before
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets", type=positive_int, default=500)
@@ -157,13 +202,16 @@ def main() -> None:
     parser.add_argument(
         "--no-profile",
         action="store_true",
-        help="time the call without cProfile overhead",
+        help="skip the separate cProfile invocation",
     )
     parser.add_argument(
         "--profile", type=Path, help="save cProfile statistics to this file"
     )
     parser.add_argument(
         "--top", type=positive_int, default=20, help="rows per profile table"
+    )
+    parser.add_argument(
+        "--metrics", type=Path, help="save timing and memory measurements as JSON"
     )
     args = parser.parse_args()
     if args.no_profile and args.profile is not None:
@@ -179,27 +227,74 @@ def main() -> None:
         f"{args.assets * args.scenarios:,} groups; {len(splits):,} split rows; "
         f"{len(RETURN_PERIODS)} events; {len(curves)} curves; {args.samples:,} samples"
     )
-    print(f"Input DataFrame: {splits.memory_usage(deep=True).sum() / 1e6:.2f} MB")
+    input_bytes = int(splits.memory_usage(deep=True).sum())
+    print(f"Input DataFrame: {input_bytes / MIB:.2f} MiB")
     print(
         f"Summaries: {'EAD only' if args.ead_only else 'events and EAD'}; totals enabled"
     )
     print("Timing calculate_direct_damages; setup excluded.", flush=True)
 
     profiler = None if args.no_profile else cProfile.Profile()
-    started = time.perf_counter()
-    if profiler is None:
+    gc.collect()
+    with monitor_rss() as memory:
+        started = time.perf_counter()
         result = run(splits, curves, args.samples, args.seed, args.ead_only)
-    else:
-        result = profiler.runcall(
-            run, splits, curves, args.samples, args.seed, args.ead_only
-        )
-    elapsed = time.perf_counter() - started
-    label = "unprofiled" if profiler is None else "includes cProfile overhead"
-    print(f"Elapsed: {elapsed:.3f} s ({label})")
+        elapsed = time.perf_counter() - started
+    print(f"Elapsed: {elapsed:.3f} s (RSS sampling enabled; no cProfile overhead)")
+    print(
+        f"Process RSS: before {memory['rss_before_bytes'] / MIB:.2f} MiB; "
+        f"sampled peak {memory['peak_rss_bytes'] / MIB:.2f} MiB; "
+        f"peak increase {memory['peak_rss_increase_bytes'] / MIB:.2f} MiB; "
+        f"after {memory['rss_after_bytes'] / MIB:.2f} MiB"
+    )
 
     check_result(result, args.assets, args.scenarios, args.ead_only)
+    result_bytes = int(
+        sum(
+            frame.memory_usage(deep=True).sum()
+            for frame in (
+                result.quantiles,
+                result.ead_quantiles,
+                result.total_quantiles,
+                result.total_ead_quantiles,
+            )
+            if frame is not None
+        )
+    )
+    print(f"Result DataFrames: {result_bytes / MIB:.2f} MiB")
     print("Result checks passed. Total EAD summaries (first 10 scenarios):")
     print(result.total_ead_quantiles.head(10).to_string(index=False))
+    if profiler is not None:
+        print("Profiling a separate invocation; RSS sampling is stopped.", flush=True)
+        started = time.perf_counter()
+        profiler.runcall(run, splits, curves, args.samples, args.seed, args.ead_only)
+        profiled_elapsed = time.perf_counter() - started
+        print(
+            f"Profiled elapsed: {profiled_elapsed:.3f} s (includes cProfile overhead)"
+        )
+    if args.metrics is not None:
+        metrics = {
+            "assets": args.assets,
+            "scenarios": args.scenarios,
+            "max_splits": args.splits,
+            "samples": args.samples,
+            "seed": args.seed,
+            "events": len(RETURN_PERIODS),
+            "curves": len(curves),
+            "split_rows": len(splits),
+            "ead_only": args.ead_only,
+            "profiled": profiler is not None,
+            "elapsed_seconds": elapsed,
+            "memory_interval_seconds": MEMORY_INTERVAL,
+            "input_bytes": input_bytes,
+            "result_bytes": result_bytes,
+            **memory,
+        }
+        if profiler is not None:
+            metrics["profiled_seconds"] = profiled_elapsed
+        args.metrics.parent.mkdir(parents=True, exist_ok=True)
+        args.metrics.write_text(json.dumps(metrics, indent=2) + "\n")
+        print(f"\nMetrics saved to {args.metrics}")
     if profiler is not None:
         if args.profile is not None:
             args.profile.parent.mkdir(parents=True, exist_ok=True)
