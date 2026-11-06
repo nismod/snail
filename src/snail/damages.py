@@ -167,8 +167,8 @@ def calculate_direct_damages(
     curve_weights: Mapping[str, float],
     eta_sd: float = 0.0,
     cost_mean: float | str,
-    cost_alpha: float = 0.0,
-    cost_systemic_alpha: float = 0.0,
+    cost_asset_cv: float = 0.0,
+    cost_systemic_cv: float = 0.0,
     n_samples: int = 1000,
     quantiles: Sequence[float] | None = None,
     return_periods: Mapping[Any, float] | None = None,
@@ -232,15 +232,15 @@ def calculate_direct_damages(
         asset's splits within each scenario. For a point with quantity 1,
         this is the whole-asset cost; for lines and polygons, value is assumed
         uniformly distributed per unit length or area.
-    cost_alpha : float, default 0.0
-        Relative standard deviation of the local normal cost perturbation.
-        Sampled unit cost is ``max(0, systemic_cost * (1 + cost_alpha * Z))``,
-        with an independent local draw for each asset/scenario group.
-        Zero disables local cost variation.
-    cost_systemic_alpha : float, default 0.0
-        Finite, non-negative relative standard deviation of the systemic
-        normal cost perturbation, before clamping. Each simulation uses
-        ``systemic_cost = cost_mean * max(0, 1 + cost_systemic_alpha * Z_system)``.
+    cost_asset_cv : float, default 0.0
+        Coefficient of variation of the asset normal cost factor before clamping.
+        Sampled unit cost is ``max(0, systemic_cost * (1 + cost_asset_cv * Z))``,
+        with an independent draw for each asset/scenario group, shared across
+        its splits and intensity cases. Zero disables asset-specific cost variation.
+    cost_systemic_cv : float, default 0.0
+        Finite, non-negative coefficient of variation of the systemic normal
+        cost factor before clamping. Each simulation uses
+        ``systemic_cost = cost_mean * max(0, 1 + cost_systemic_cv * Z_system)``.
         The same dimensionless multiplier applies to every asset/scenario
         baseline, including assets with different quantity units.
         Zero disables systemic cost variation.
@@ -302,8 +302,8 @@ def calculate_direct_damages(
     zero; the final cost mean may therefore differ from the input baseline.
 
     Global damage curve choices are made first, then systemic cost draws, then
-    local draws for each group. Metadata records cost_systemic_alpha and draw_scopes
-    ("call" or "asset_scenario").
+    local draws for each group. Metadata records inputs and draw_scopes ("call"
+    or "asset_scenario").
 
     Asset aggregation sums corresponding simulation indices before calculating
     total quantiles. This preserves shared systemic uncertainty and local
@@ -343,13 +343,13 @@ def calculate_direct_damages(
 
     if (
         not numpy.isfinite(eta_sd)
-        or not numpy.isfinite(cost_alpha)
+        or not numpy.isfinite(cost_asset_cv)
         or eta_sd < 0
-        or cost_alpha < 0
+        or cost_asset_cv < 0
     ):
-        raise ValueError("eta_sd and cost_alpha must be non-negative")
-    if not numpy.isfinite(cost_systemic_alpha) or cost_systemic_alpha < 0:
-        raise ValueError("cost_systemic_alpha must be finite and non-negative")
+        raise ValueError("eta_sd and cost_asset_cv must be non-negative")
+    if not numpy.isfinite(cost_systemic_cv) or cost_systemic_cv < 0:
+        raise ValueError("cost_systemic_cv must be finite and non-negative")
     if isinstance(hazard_alpha, Mapping):
         missing_alpha = set(intensity_columns) - set(hazard_alpha)
         if missing_alpha:
@@ -397,9 +397,7 @@ def calculate_direct_damages(
     # Make systemic draws, shared across the whole call
     selected_curve = rng.choice(len(curve_values), size=n_samples, p=weights)  # (n,)
     z_system = rng.standard_normal(n_samples)  # (n,)
-    systemic_multiplier = numpy.maximum(
-        0.0, 1.0 + cost_systemic_alpha * z_system
-    )  # (n,)
+    systemic_multiplier = numpy.maximum(0.0, 1.0 + cost_systemic_cv * z_system)  # (n,)
 
     rows: list[dict[str, Any]] = []
     ead_rows: list[dict[str, Any]] = []
@@ -440,7 +438,7 @@ def calculate_direct_damages(
         z_cost = rng.standard_normal(n_samples)  # (n,)
         systemic_cost = group_cost_mean * systemic_multiplier  # (n,)
         cost_draw = numpy.maximum(
-            0.0, systemic_cost * (1.0 + cost_alpha * z_cost)
+            0.0, systemic_cost * (1.0 + cost_asset_cv * z_cost)
         )  # (n,)
         damage_multiplier = numpy.exp(eta_sd * z_damage - 0.5 * eta_sd**2)  # (n,)
         quantities = group[quantity].to_numpy(dtype=float)  # (s,)
@@ -519,8 +517,8 @@ def calculate_direct_damages(
         "curve_ids": curve_ids,
         "curve_weights": dict(curve_weights),
         "cost_mean": cost_mean,
-        "cost_alpha": cost_alpha,
-        "cost_systemic_alpha": cost_systemic_alpha,
+        "cost_asset_cv": cost_asset_cv,
+        "cost_systemic_cv": cost_systemic_cv,
         "hazard_alpha": alpha_by_case,
         "eta_sd": eta_sd,
         "draw_scopes": {
