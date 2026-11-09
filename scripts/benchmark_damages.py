@@ -123,7 +123,7 @@ def run(
         cost_mean="unit_cost",
         cost_asset_cv=0.2,
         cost_systemic_cv=0.25,
-        hazard_alpha={rp: 0.15 for rp in RETURN_PERIODS},
+        hazard_cv={rp: 0.15 for rp in RETURN_PERIODS},
         eta_sd=0.15,
         n_samples=n_samples,
         quantiles=None if ead_only else QUANTILES,
