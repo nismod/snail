@@ -516,7 +516,7 @@ def test_direct_damages_share_curve_draws_across_splits():
 
 
 @pytest.mark.parametrize(
-    "uncertainty", ["hazard_alpha", "eta_sd", "cost_asset_cv", "cost_systemic_cv"]
+    "uncertainty", ["hazard_cv", "eta_sd", "cost_asset_cv", "cost_systemic_cv"]
 )
 def test_direct_damages_share_hazard_damage_and_cost_draws_across_splits(uncertainty):
     split_inputs = pandas.DataFrame(
@@ -576,7 +576,7 @@ def test_direct_damages_share_curve_draws_across_assets():
     assert summary.loc["b", "q_50"] == pytest.approx(16.0)
 
 
-@pytest.mark.parametrize("uncertainty", ["hazard_alpha", "eta_sd", "cost_asset_cv"])
+@pytest.mark.parametrize("uncertainty", ["hazard_cv", "eta_sd", "cost_asset_cv"])
 @pytest.mark.parametrize("scenario", [None, "scenario"])
 def test_direct_damages_draw_local_uncertainty_independently(uncertainty, scenario):
     splits = pandas.DataFrame(
@@ -632,7 +632,7 @@ def test_direct_damages_share_draws_across_return_periods():
         cost_mean=10.0,
         cost_asset_cv=0.2,
         cost_systemic_cv=0.2,
-        hazard_alpha=0.1,
+        hazard_cv=0.1,
         eta_sd=0.1,
         n_samples=10,  # Low samples
         quantiles=(0.05, 0.25, 0.5, 0.75, 0.95),
@@ -932,21 +932,21 @@ def test_direct_damages_clamp_both_cost_stages(monkeypatch):
             ValueError,
             "cost_systemic_cv must be finite and non-negative",
         ),
-        ("missing_hazard_alpha", ValueError, "hazard_alpha missing intensity cases"),
+        ("missing_hazard_cv", ValueError, "hazard_cv missing intensity cases"),
         (
-            "negative_hazard_alpha",
+            "negative_hazard_cv",
             ValueError,
-            "hazard_alpha values must be non-negative",
+            "hazard_cv values must be non-negative",
         ),
         (
-            "nonfinite_hazard_alpha",
+            "nonfinite_hazard_cv",
             ValueError,
-            "hazard_alpha values must be non-negative",
+            "hazard_cv values must be non-negative",
         ),
         (
-            "negative_scalar_hazard_alpha",
+            "negative_scalar_hazard_cv",
             ValueError,
-            "hazard_alpha values must be non-negative",
+            "hazard_cv values must be non-negative",
         ),
         ("empty_curves", ValueError, "same non-empty keys"),
         ("mismatched_curve_keys", ValueError, "same non-empty keys"),
@@ -1063,14 +1063,14 @@ def test_direct_damages_validates_inputs(bad_input, error, message):
             arguments["cost_systemic_cv"] = numpy.inf
         case "negative_infinite_cost_systemic_cv":
             arguments["cost_systemic_cv"] = -numpy.inf
-        case "missing_hazard_alpha":
-            arguments["hazard_alpha"] = {20: 0.1}
-        case "negative_hazard_alpha":
-            arguments["hazard_alpha"] = {10: -0.1}
-        case "nonfinite_hazard_alpha":
-            arguments["hazard_alpha"] = {10: numpy.inf}
-        case "negative_scalar_hazard_alpha":
-            arguments["hazard_alpha"] = -0.1
+        case "missing_hazard_cv":
+            arguments["hazard_cv"] = {20: 0.1}
+        case "negative_hazard_cv":
+            arguments["hazard_cv"] = {10: -0.1}
+        case "nonfinite_hazard_cv":
+            arguments["hazard_cv"] = {10: numpy.inf}
+        case "negative_scalar_hazard_cv":
+            arguments["hazard_cv"] = -0.1
         case "empty_curves":
             arguments["curves"] = arguments["curve_weights"] = {}
         case "mismatched_curve_keys":

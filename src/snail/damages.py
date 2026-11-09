@@ -162,7 +162,7 @@ def calculate_direct_damages(
     asset_id: str,
     quantity: str,
     intensity_columns: Mapping[Any, str],
-    hazard_alpha: float | Mapping[Any, float] = 0.0,
+    hazard_cv: float | Mapping[Any, float] = 0.0,
     curves: Mapping[str, "DamageCurve"],
     curve_weights: Mapping[str, float],
     eta_sd: float = 0.0,
@@ -211,10 +211,11 @@ def calculate_direct_damages(
         central hazard intensity for each segment. Labels identify the cases
         in the returned summaries and may represent any kind of event or
         return-period maps, for example.
-    hazard_alpha : float or Mapping[Any, float], default 0.0
-        Relative standard deviation of hazard intensity. Supply one value for
-        all cases or a mapping from each intensity-case label to its value.
-        A case's sampled intensity is ``max(0, mean * (1 + alpha * Z))``.
+    hazard_cv : float or Mapping[Any, float], default 0.0
+        Coefficient of variation of hazard intensity before clamping. Supply
+        one value for all cases or a mapping from each intensity-case label
+        to its value. A case's sampled intensity is
+        ``max(0, mean * (1 + hazard_cv * Z))``.
     curves : Mapping[str, DamageCurve]
         Damage curves available for sampling, keyed by identifiers that match
         the keys in ``curve_weights``.
@@ -350,17 +351,15 @@ def calculate_direct_damages(
         raise ValueError("eta_sd and cost_asset_cv must be non-negative")
     if not numpy.isfinite(cost_systemic_cv) or cost_systemic_cv < 0:
         raise ValueError("cost_systemic_cv must be finite and non-negative")
-    if isinstance(hazard_alpha, Mapping):
-        missing_alpha = set(intensity_columns) - set(hazard_alpha)
-        if missing_alpha:
-            raise ValueError(
-                f"hazard_alpha missing intensity cases: {sorted(missing_alpha)}"
-            )
-        alpha_by_case = {case: float(hazard_alpha[case]) for case in intensity_columns}
+    if isinstance(hazard_cv, Mapping):
+        missing_cv = set(intensity_columns) - set(hazard_cv)
+        if missing_cv:
+            raise ValueError(f"hazard_cv missing intensity cases: {sorted(missing_cv)}")
+        hazard_cv_by_case = {case: float(hazard_cv[case]) for case in intensity_columns}
     else:
-        alpha_by_case = {case: float(hazard_alpha) for case in intensity_columns}
-    if any(not numpy.isfinite(alpha) or alpha < 0 for alpha in alpha_by_case.values()):
-        raise ValueError("hazard_alpha values must be non-negative")
+        hazard_cv_by_case = {case: float(hazard_cv) for case in intensity_columns}
+    if any(not numpy.isfinite(cv) or cv < 0 for cv in hazard_cv_by_case.values()):
+        raise ValueError("hazard_cv values must be non-negative")
 
     if not curves or set(curves) != set(curve_weights):
         raise ValueError("curves and curve_weights must have the same non-empty keys")
@@ -449,7 +448,7 @@ def calculate_direct_damages(
             means = group[column].to_numpy(dtype=float)  # (s,)
             hazard = numpy.maximum(
                 0.0,
-                means[None, :] * (1.0 + alpha_by_case[case] * z_hazard[:, None]),
+                means[None, :] * (1.0 + hazard_cv_by_case[case] * z_hazard[:, None]),
             )  # (n, s)
             damage_fraction = numpy.empty((n_samples, size), dtype=float)  # (n, s)
             for curve_index, curve in enumerate(curve_values):
@@ -519,7 +518,7 @@ def calculate_direct_damages(
         "cost_mean": cost_mean,
         "cost_asset_cv": cost_asset_cv,
         "cost_systemic_cv": cost_systemic_cv,
-        "hazard_alpha": alpha_by_case,
+        "hazard_cv": hazard_cv_by_case,
         "eta_sd": eta_sd,
         "draw_scopes": {
             "damage_curve": "call",
