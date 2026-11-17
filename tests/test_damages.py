@@ -284,6 +284,29 @@ def test_direct_damages_deterministic_single_curve():
     # b, RP100: 0.25 * 0.5 * 1 * 100 = 12.5
     assert actual.loc[("b", 100)] == pytest.approx(12.5)
     assert result.metadata["seed"] == 42
+    assert result.metadata["curve_weights"] == {"central": 1.0}
+
+
+def test_direct_damages_normalises_curve_weights_in_metadata():
+    splits = pandas.DataFrame(
+        {"asset": ["a"], "length": [1.0], "intensity": [0.5]}
+    )
+    result = calculate_direct_damages(
+        splits,
+        asset_id="asset",
+        quantity="length",
+        intensity_columns={10: "intensity"},
+        curves={"low": _constant_curve(0.25), "high": _constant_curve(0.75)},
+        curve_weights={"low": 2.0, "high": 6.0},
+        cost_mean=1.0,
+        quantiles=(0.5,),
+        n_samples=1,
+        seed=42,
+    )
+
+    assert result.metadata["curve_weights"] == pytest.approx(
+        {"low": 0.25, "high": 0.75}
+    )
 
 
 def test_direct_damages_calculates_ead_quantiles():
