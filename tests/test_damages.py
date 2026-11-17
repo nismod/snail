@@ -507,8 +507,8 @@ def test_direct_damages_share_curve_draws_across_splits():
     )
 
     summary = result.quantiles.iloc[0]
-    # q_05: the 60% low-curve draws total 0.2 * (1 + 2) * 10 = 6.
-    assert summary["q_05"] == pytest.approx(6.0)
+    # q_5: the 60% low-curve draws total 0.2 * (1 + 2) * 10 = 6.
+    assert summary["q_5"] == pytest.approx(6.0)
     # q_50: low-curve draws have 60% weight, so the median is 6.
     assert summary["q_50"] == pytest.approx(6.0)
     # q_95: the high-curve draws total 0.8 * (1 + 2) * 10 = 24.
@@ -546,8 +546,8 @@ def test_direct_damages_share_hazard_damage_and_cost_draws_across_splits(uncerta
     combined_result = calculate_direct_damages(combined_input, **kwargs)
     # Shared per-asset draws make lengths 1 + 2 equivalent to one length-3 split.
     pandas.testing.assert_frame_equal(
-        split_result.quantiles[["q_05", "q_50", "q_95"]],
-        combined_result.quantiles[["q_05", "q_50", "q_95"]],
+        split_result.quantiles[["q_5", "q_50", "q_95"]],
+        combined_result.quantiles[["q_5", "q_50", "q_95"]],
     )
 
 
@@ -640,7 +640,7 @@ def test_direct_damages_share_draws_across_return_periods():
     )
 
     summary = result.quantiles.set_index("intensity_case")
-    for quantile in ("q_05", "q_50", "q_95"):
+    for quantile in ("q_5", "q_50", "q_95"):
         # RP100 exactly doubles RP10's hazard and damage quantile, with few
         # samples and very tight relative tolerance.
         assert summary.loc[100, quantile] == pytest.approx(
@@ -788,7 +788,7 @@ def test_direct_damages_share_systemic_cost_multipliers(cost_mean):
     }
     result = calculate_direct_damages(splits, cost_systemic_cv=0.05, **arguments)
     doubled = calculate_direct_damages(splits, cost_systemic_cv=0.10, **arguments)
-    columns = ["q_00", "q_50", "q_100"]
+    columns = ["q_0", "q_50", "q_100"]
     baselines = splits["cost"].to_numpy() if cost_mean == "cost" else cost_mean
     # Recover unit cost, then divide by the baseline to get relative changes.
     costs = result.quantiles[columns].to_numpy() / (
@@ -842,7 +842,7 @@ def test_direct_damages_mixed_asset_quantities(systemic_cv):
         seed=42,
     )
     summary = result.quantiles.set_index("asset")
-    columns = ["q_00", "q_50", "q_100"]
+    columns = ["q_0", "q_50", "q_100"]
     # Baseline damages: half of 1*100, (2+3)*10 and (10+20)*4.
     if systemic_cv == 0.0:
         for asset, expected in [("point", 50.0), ("line", 25.0), ("polygon", 60.0)]:
@@ -887,7 +887,7 @@ def test_direct_damages_clamp_both_cost_stages(monkeypatch):
     # Multipliers [1, -1, -1, 2] and the second clamp give costs [0, 0, 0, 4].
     # Damage = 0.5 * 2 * cost, so minimum, median and maximum are 0, 0 and 4.
     assert_allclose(
-        result.quantiles.loc[0, ["q_00", "q_50", "q_100"]].to_numpy(dtype=float),
+        result.quantiles.loc[0, ["q_0", "q_50", "q_100"]].to_numpy(dtype=float),
         [0.0, 0.0, 4.0],
     )
 
@@ -1045,8 +1045,6 @@ def test_direct_damages_validates_inputs(bad_input, error, message):
             arguments["quantiles"] = (numpy.nan,)
         case "duplicate_quantiles":
             arguments["quantiles"] = (0.5, 0.5)
-        case "duplicate_quantile_columns":
-            arguments["quantiles"] = (0.501, 0.504)
         case "negative_eta_sd":
             arguments["eta_sd"] = -0.1
         case "nonfinite_eta_sd":
@@ -1120,3 +1118,45 @@ def test_direct_damages_validates_inputs(bad_input, error, message):
 
     with pytest.raises(error, match=message):
         calculate_direct_damages(splits, **arguments)
+
+
+def test_quantile_columns_preserve_decimal_digits():
+    quantiles = (
+        0.0,
+        0.025,
+        0.05,
+        0.5,
+        0.501,
+        0.504,
+        0.975,
+        0.123456789,
+        1e-5,
+        1e-8,
+        1.0,
+    )
+    _, columns = _validate_quantiles(quantiles, "quantiles")
+    assert columns == [
+        # no trailing .0
+        "q_0",
+        "q_2.5",
+        # no zero-padding
+        "q_5",
+        # we stick with percentiles in column names (quantile 0.5 => percentile q_50)
+        "q_50",
+        "q_50.1",
+        "q_50.4",
+        "q_97.5",
+        "q_12.3456789",
+        "q_0.001",
+        # let really small floats do their thing
+        "q_1e-06",
+        "q_100",
+    ]
+
+
+@pytest.mark.parametrize(
+    "invalid_quantile", [-1, 1.1, float("nan"), "a string", float("inf")]
+)
+def test_invalid_quantiles(invalid_quantile):
+    with pytest.raises(ValueError):
+        _validate_quantiles([invalid_quantile], "quantiles")

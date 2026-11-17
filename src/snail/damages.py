@@ -40,12 +40,14 @@ def _validate_quantiles(
         return None, None
     quantiles = tuple(quantiles)
     if len(quantiles) == 0 or any(
-        not numpy.isfinite(q) or not 0 <= q <= 1 for q in quantiles
+        not isinstance(q, Real) or not numpy.isfinite(q) or not 0 <= q <= 1
+        for q in quantiles
     ):
         raise ValueError(f"{name} must be a non-empty sequence in [0, 1]")
     if len(set(quantiles)) != len(quantiles):
         raise ValueError(f"{name} must not contain duplicates")
-    columns = [f"q_{round(q * 100):02d}" for q in quantiles]
+    # avoid rounding - keep precision in label in case of non-whole-percentile quantiles
+    columns = [f"q_{(q * 100)}".removesuffix(".0") for q in quantiles]
     if len(set(columns)) != len(columns):
         raise ValueError(f"{name} must map to distinct percentile column names")
     return quantiles, columns
