@@ -17,9 +17,7 @@ from pathlib import Path
 
 COMMIT = "9712bc8fe569b10b033b4d753c21658397fa17de"
 BASE_URL = f"https://raw.githubusercontent.com/catchorg/Catch2/{COMMIT}"
-VENDOR_DIR = (
-    Path(__file__).resolve().parent.parent / "extension" / "extern" / "Catch2"
-)
+VENDOR_DIR = Path(__file__).resolve().parent.parent / "extension" / "extern" / "Catch2"
 FILES = {
     "catch.hpp": (
         f"{BASE_URL}/single_include/catch2/catch.hpp",
