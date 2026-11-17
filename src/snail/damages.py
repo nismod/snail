@@ -369,6 +369,7 @@ def calculate_direct_damages(
     if not numpy.isfinite(weights).all() or (weights < 0).any() or weights.sum() <= 0:
         raise ValueError("curve_weights must be finite, non-negative, and sum > 0")
     weights /= weights.sum()
+    normalised_curve_weights = {key: weight for key, weight in zip(curves, weights)}
     curve_ids = list(curves)
     curve_values = [curves[key] for key in curve_ids]
 
@@ -516,7 +517,7 @@ def calculate_direct_damages(
         "quantity_column": quantity,
         "intensity_columns": dict(intensity_columns),
         "curve_ids": curve_ids,
-        "curve_weights": dict(curve_weights),
+        "curve_weights": dict(normalised_curve_weights),
         "cost_mean": cost_mean,
         "cost_asset_cv": cost_asset_cv,
         "cost_systemic_cv": cost_systemic_cv,
