@@ -927,6 +927,12 @@ def test_direct_damages_clamp_both_cost_stages(monkeypatch):
         ("empty_intensity_columns", ValueError, "at least one intensity case"),
         ("zero_samples", ValueError, "n_samples"),
         ("noninteger_samples", ValueError, "n_samples"),
+        ("boolean_samples", ValueError, "n_samples"),
+        ("none_eta_sd", ValueError, "non-negative"),
+        ("none_cost_asset_cv", ValueError, "non-negative"),
+        ("none_cost_systemic_cv", ValueError, "cost_systemic_cv"),
+        ("none_hazard_cv", ValueError, "hazard_cv values"),
+        ("none_cost_mean", ValueError, "cost_mean must be finite"),
         ("empty_quantiles", ValueError, "quantiles must be a non-empty sequence"),
         ("out_of_range_quantile", ValueError, "quantiles must be a non-empty sequence"),
         ("nonfinite_quantile", ValueError, "quantiles must be a non-empty sequence"),
@@ -956,6 +962,7 @@ def test_direct_damages_clamp_both_cost_stages(monkeypatch):
             "cost_systemic_cv must be finite and non-negative",
         ),
         ("missing_hazard_cv", ValueError, "hazard_cv missing intensity cases"),
+        ("unknown_hazard_cv", ValueError, "hazard_cv has unknown intensity cases"),
         (
             "negative_hazard_cv",
             ValueError,
@@ -1060,6 +1067,18 @@ def test_direct_damages_validates_inputs(bad_input, error, message):
             arguments["n_samples"] = 0
         case "noninteger_samples":
             arguments["n_samples"] = 1.5
+        case "boolean_samples":
+            arguments["n_samples"] = True
+        case "none_eta_sd":
+            arguments["eta_sd"] = None
+        case "none_cost_asset_cv":
+            arguments["cost_asset_cv"] = None
+        case "none_cost_systemic_cv":
+            arguments["cost_systemic_cv"] = None
+        case "none_hazard_cv":
+            arguments["hazard_cv"] = None
+        case "none_cost_mean":
+            arguments["cost_mean"] = None
         case "empty_quantiles":
             arguments["quantiles"] = ()
         case "out_of_range_quantile":
@@ -1086,6 +1105,8 @@ def test_direct_damages_validates_inputs(bad_input, error, message):
             arguments["cost_systemic_cv"] = -numpy.inf
         case "missing_hazard_cv":
             arguments["hazard_cv"] = {20: 0.1}
+        case "unknown_hazard_cv":
+            arguments["hazard_cv"] = {10: 0.1, 99: 0.2}
         case "negative_hazard_cv":
             arguments["hazard_cv"] = {10: -0.1}
         case "nonfinite_hazard_cv":

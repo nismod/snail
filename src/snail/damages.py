@@ -1,8 +1,9 @@
 """Damage assessment"""
 
-from abc import ABC
+from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from numbers import Real
 from typing import Any
 
 import numpy
@@ -31,6 +32,15 @@ class DirectDamageResult:
     ead_quantiles: pandas.DataFrame | None = None
     total_quantiles: pandas.DataFrame | None = None
     total_ead_quantiles: pandas.DataFrame | None = None
+
+
+def _is_finite_non_negative(value: Any) -> bool:
+    return (
+        isinstance(value, Real)
+        and not isinstance(value, bool)
+        and bool(numpy.isfinite(value))
+        and value >= 0
+    )
 
 
 def _validate_quantiles(
@@ -216,7 +226,8 @@ def calculate_direct_damages(
     hazard_cv : float or Mapping[Any, float], default 0.0
         Coefficient of variation of hazard intensity before clamping. Supply
         one value for all cases or a mapping from each intensity-case label
-        to its value. A case's sampled intensity is
+        to its value; the mapping keys must exactly match ``intensity_columns``.
+        A case's sampled intensity is
         ``max(0, mean * (1 + hazard_cv * Z))``.
     curves : Mapping[str, DamageCurve]
         Damage curves available for sampling, keyed by identifiers that match
@@ -330,7 +341,11 @@ def calculate_direct_damages(
         raise KeyError(f"Required columns not present in splits: {sorted(missing)}")
     if not intensity_columns:
         raise ValueError("intensity_columns must contain at least one intensity case")
-    if not isinstance(n_samples, (int, numpy.integer)) or n_samples <= 0:
+    if (
+        not isinstance(n_samples, (int, numpy.integer))
+        or isinstance(n_samples, bool)
+        or n_samples <= 0
+    ):
         raise ValueError("n_samples must be greater than zero")
 
     if quantiles is None and ead_quantiles is None:
@@ -344,24 +359,27 @@ def calculate_direct_damages(
 
     return_period_values = _validate_return_periods(return_periods, intensity_columns)
 
-    if (
-        not numpy.isfinite(eta_sd)
-        or not numpy.isfinite(cost_asset_cv)
-        or eta_sd < 0
-        or cost_asset_cv < 0
+    if not _is_finite_non_negative(eta_sd) or not _is_finite_non_negative(
+        cost_asset_cv
     ):
         raise ValueError("eta_sd and cost_asset_cv must be non-negative")
-    if not numpy.isfinite(cost_systemic_cv) or cost_systemic_cv < 0:
+    if not _is_finite_non_negative(cost_systemic_cv):
         raise ValueError("cost_systemic_cv must be finite and non-negative")
     if isinstance(hazard_cv, Mapping):
         missing_cv = set(intensity_columns) - set(hazard_cv)
         if missing_cv:
             raise ValueError(f"hazard_cv missing intensity cases: {sorted(missing_cv)}")
-        hazard_cv_by_case = {case: float(hazard_cv[case]) for case in intensity_columns}
+        unknown_cv = set(hazard_cv) - set(intensity_columns)
+        if unknown_cv:
+            raise ValueError(
+                f"hazard_cv has unknown intensity cases: {sorted(unknown_cv, key=str)}"
+            )
+        hazard_cv_by_case = {case: hazard_cv[case] for case in intensity_columns}
     else:
-        hazard_cv_by_case = {case: float(hazard_cv) for case in intensity_columns}
-    if any(not numpy.isfinite(cv) or cv < 0 for cv in hazard_cv_by_case.values()):
+        hazard_cv_by_case = dict.fromkeys(intensity_columns, hazard_cv)
+    if not all(_is_finite_non_negative(cv) for cv in hazard_cv_by_case.values()):
         raise ValueError("hazard_cv values must be non-negative")
+    hazard_cv_by_case = {case: float(cv) for case, cv in hazard_cv_by_case.items()}
 
     if not curves or set(curves) != set(curve_weights):
         raise ValueError("curves and curve_weights must have the same non-empty keys")
@@ -373,9 +391,7 @@ def calculate_direct_damages(
     curve_ids = list(curves)
     curve_values = [curves[key] for key in curve_ids]
 
-    if not isinstance(cost_mean, str) and (
-        not numpy.isfinite(cost_mean) or cost_mean < 0
-    ):
+    if not isinstance(cost_mean, str) and not _is_finite_non_negative(cost_mean):
         raise ValueError("cost_mean must be finite and non-negative")
     numeric_columns = list(dict.fromkeys([quantity, *intensity_columns.values()]))
     if isinstance(cost_mean, str) and cost_mean not in numeric_columns:
@@ -582,6 +598,7 @@ class DamageCurve(ABC):
     def __init__(self):
         pass
 
+    @abstractmethod
     def damage_fraction(exposure: numpy.array) -> numpy.array:
         """Evaluate damage fraction for exposure to a given hazard intensity"""
 
