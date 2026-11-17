@@ -128,8 +128,8 @@ def _integrate_ead_samples(
     p = numpy.asarray([1.0 / return_periods[case] for case in cases])
     D = numpy.column_stack([sampled_damage_by_case[case] for case in cases])
 
-    p_0 = p[:-1]  # higher probability
-    p_1 = p[1:]  # lower probability
+    p_0 = p[:-1]  # lower probability
+    p_1 = p[1:]  # higher probability
     w = p_1 - p_0  # width
     L = numpy.log(p_1 / p_0)  # log ratio
     lambd = w / L  # log mean, also known as lambda
