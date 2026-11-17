@@ -14,6 +14,7 @@ from snail.damages import (
     DamageCurve,
     PiecewiseLinearDamageCurve,
     _integrate_ead_samples,
+    _validate_quantiles,
     calculate_direct_damages,
 )
 
@@ -274,7 +275,7 @@ def test_direct_damages_deterministic_single_curve():
         seed=42,
     )
 
-    actual = result.quantiles.set_index(["asset", "intensity_case"])["q_50"]
+    actual = result.quantiles.set_index(["asset", "intensity_case"])["q_5"]
     # a, RP10: 0.25 * 0.5 * (2 + 3) * 100 = 62.5
     assert actual.loc[("a", 10)] == pytest.approx(62.5)
     # a, RP100: 0.25 * 1.0 * (2 + 3) * 100 = 125
@@ -341,7 +342,7 @@ def test_direct_damages_calculates_ead_quantiles():
     # Integrating 1 - 2*ln(p/0.5)/ln(5) gives 0.2 + 0.8/ln(5).
     # Add the rare tail rectangle 0.1*3; omit probabilities above 0.5.
     expected_ead = 0.5 + 0.8 / numpy.log(5.0)
-    assert result.ead_quantiles.loc[0, "q_05"] == pytest.approx(expected_ead)
+    assert result.ead_quantiles.loc[0, "q_5"] == pytest.approx(expected_ead)
     assert result.ead_quantiles.loc[0, "q_50"] == pytest.approx(expected_ead)
     assert result.ead_quantiles.loc[0, "q_95"] == pytest.approx(expected_ead)
 
@@ -930,7 +931,6 @@ def test_direct_damages_clamp_both_cost_stages(monkeypatch):
         ("out_of_range_quantile", ValueError, "quantiles must be a non-empty sequence"),
         ("nonfinite_quantile", ValueError, "quantiles must be a non-empty sequence"),
         ("duplicate_quantiles", ValueError, "quantiles must not contain duplicates"),
-        ("duplicate_quantile_columns", ValueError, "distinct percentile column names"),
         ("negative_eta_sd", ValueError, "non-negative"),
         ("nonfinite_eta_sd", ValueError, "non-negative"),
         ("negative_cost_asset_cv", ValueError, "non-negative"),
