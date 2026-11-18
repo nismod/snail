@@ -289,9 +289,7 @@ def test_direct_damages_deterministic_single_curve():
 
 
 def test_direct_damages_normalises_curve_weights_in_metadata():
-    splits = pandas.DataFrame(
-        {"asset": ["a"], "length": [1.0], "intensity": [0.5]}
-    )
+    splits = pandas.DataFrame({"asset": ["a"], "length": [1.0], "intensity": [0.5]})
     result = calculate_direct_damages(
         splits,
         asset_id="asset",
