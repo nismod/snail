@@ -269,6 +269,13 @@ def calculate_direct_damages(
         Mapping from intensity-case labels to return periods in years. Supply
         this together with ``ead_quantiles`` to request expected annual damage
         (EAD) quantiles. Keys must exactly match ``intensity_columns``.
+        Note that return periods RP are interpreted as the reciprocal of annual
+        exceedance probability (AEP), so ``AEP = 1 / RP``. If the hazard data
+        instead defines return period R as the mean recurrence interval of
+        events exceeding a theshold, it should be converted to ``1 / AEP``.
+        For example, assuming a Poisson process for events, R = 2 years
+        corresponds to AEP ~0.393 or RP ~2.54. This distinction would affect
+        expected annual damage (EAD) calculations.
     ead_quantiles : Sequence[float] or None, default None
         Quantiles to report for each asset/scenario EAD distribution. Requires
         ``return_periods``. Values use the same validation and column naming as
@@ -595,6 +602,7 @@ def calculate_direct_damages(
 class DamageCurve(ABC):
     """A damage curve"""
 
+    @abstractmethod
     def __init__(self):
         pass
 
