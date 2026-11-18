@@ -79,4 +79,4 @@ jobs:
 
       - name: Test with pytest
         run: |
-          pytest --cov=snail --cov-report=term-missing tests
+          pytest -n 2 --cov=snail --cov-report=term-missing tests
