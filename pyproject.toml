@@ -47,7 +47,7 @@ dev = [
     "affine",
     "psutil",
     # Pinned so "ruff check" uses consistent set of rules
-    "ruff>=0.16,<0.17",
+    "ruff>=0.17,<0.18",
     "hilbertcurve",
     "nbstripout",
     "pytest-cov",
