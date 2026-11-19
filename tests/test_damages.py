@@ -9,14 +9,41 @@ import pandas
 import pytest
 from numpy.testing import assert_allclose
 from scipy.integrate import trapezoid
+from scipy.special import ndtri
 
 from snail.damages import (
     DamageCurve,
     PiecewiseLinearDamageCurve,
     _integrate_ead_samples,
+    _mean_one_lognormal,
+    _sample_damage_fraction,
     _validate_quantiles,
     calculate_direct_damages,
 )
+
+
+@pytest.mark.parametrize("cv", [0.0, 0.4, 1.0, 2.0])
+def test_lognormal_multipliers_preserve_mean_and_cv(cv):
+    z = ndtri((numpy.arange(100_000) + 0.5) / 100_000)
+    samples = _mean_one_lognormal(z, cv)
+    assert (samples > 0).all()
+    assert samples.mean() == pytest.approx(1.0, abs=0.003)
+    assert samples.std() / samples.mean() == pytest.approx(cv, rel=0.04, abs=1e-12)
+
+
+@pytest.mark.parametrize("eta_sd", [0.0, 0.15, 1.0])
+def test_beta_damage_noise_preserves_means_bounds_and_endpoints(eta_sd):
+    means = numpy.array([0.0, 0.01, 0.5, 0.94, 0.99, 1.0])
+    z = ndtri((numpy.arange(20_000) + 0.5) / 20_000)
+    samples = _sample_damage_fraction(
+        numpy.broadcast_to(means, (len(z), len(means))), z, eta_sd
+    )
+    assert ((samples >= 0) & (samples <= 1)).all()
+    assert_allclose(samples.mean(axis=0), means, atol=1e-4)
+    assert (samples[:, 0] == 0).all()
+    assert (samples[:, -1] == 1).all()
+    expected_variance = means * (1 - means) * eta_sd**2 / (1 + eta_sd**2)
+    assert_allclose(samples.var(axis=0), expected_variance, atol=1e-4)
 
 
 @pytest.fixture
@@ -655,7 +682,7 @@ def test_direct_damages_share_draws_across_return_periods():
         cost_asset_cv=0.2,
         cost_systemic_cv=0.2,
         hazard_cv=0.1,
-        eta_sd=0.1,
+        eta_sd=0.0,
         n_samples=10,  # Low samples
         quantiles=(0.05, 0.25, 0.5, 0.75, 0.95),
         seed=9,
@@ -663,8 +690,8 @@ def test_direct_damages_share_draws_across_return_periods():
 
     summary = result.quantiles.set_index("intensity_case")
     for quantile in ("q_5", "q_50", "q_95"):
-        # RP100 exactly doubles RP10's hazard and damage quantile, with few
-        # samples and very tight relative tolerance.
+        # Without beta dispersion, shared hazard and cost factors preserve
+        # the exact twofold ratio between these linear-curve cases.
         assert summary.loc[100, quantile] == pytest.approx(
             2.0 * summary.loc[10, quantile], rel=1e-12
         )
@@ -823,8 +850,14 @@ def test_direct_damages_share_systemic_cost_multipliers(cost_mean):
     doubled_changes = (doubled_costs.T / baselines).T - 1.0
     for change in relative_changes:
         assert_allclose(change, relative_changes[0], rtol=1e-12)
-    # Doubling the systemic CV doubles each relative change when neither draw is clamped.
-    assert_allclose(doubled_changes, 2 * relative_changes, rtol=1e-12)
+    # Both CV settings transform the same shared normal draws.
+    sigma = numpy.sqrt(numpy.log1p(0.05**2))
+    doubled_sigma = numpy.sqrt(numpy.log1p(0.10**2))
+    assert_allclose(
+        (numpy.log1p(doubled_changes) + doubled_sigma**2 / 2) / doubled_sigma,
+        (numpy.log1p(relative_changes) + sigma**2 / 2) / sigma,
+        rtol=1e-12,
+    )
     assert (costs > 0).all()
     assert (doubled_costs > 0).all()
     assert relative_changes[0, 0] < relative_changes[0, 1] < relative_changes[0, 2]
@@ -881,7 +914,7 @@ def test_direct_damages_mixed_asset_quantities(systemic_cv):
     assert result.metadata["quantity_column"] == "quantity"
 
 
-def test_direct_damages_clamp_both_cost_stages(monkeypatch):
+def test_direct_damages_lognormal_cost_stages(monkeypatch):
     rng = Mock()
     rng.choice.return_value = numpy.zeros(4, dtype=int)
     rng.standard_normal.side_effect = [
@@ -905,12 +938,11 @@ def test_direct_damages_clamp_both_cost_stages(monkeypatch):
         quantiles=(0.0, 0.5, 1.0),
         seed=0,
     )
-    # Systemic costs [-1, -1, 2, 2] become [0, 0, 2, 2] before local multipliers.
-    # Multipliers [1, -1, -1, 2] and the second clamp give costs [0, 0, 0, 4].
-    # Damage = 0.5 * 2 * cost, so minimum, median and maximum are 0, 0 and 4.
+    sigma = numpy.sqrt(numpy.log(2.0))
+    expected = numpy.exp(sigma * numpy.array([-2.0, -4.0, -1.0, 2.0]) - sigma**2)
     assert_allclose(
         result.quantiles.loc[0, ["q_0", "q_50", "q_100"]].to_numpy(dtype=float),
-        [0.0, 0.0, 4.0],
+        numpy.quantile(expected, [0.0, 0.5, 1.0]),
     )
 
 

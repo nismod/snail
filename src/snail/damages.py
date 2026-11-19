@@ -11,6 +11,38 @@ import pandas
 import pandera.pandas as pandera
 from pandera.typing import DataFrame, Series
 from scipy.interpolate import interp1d
+from scipy.special import betaincinv, ndtr
+
+
+def _mean_one_lognormal(z: numpy.ndarray, cv: float) -> numpy.ndarray:
+    """Transform shared normal draws into multipliers with mean one and CV cv."""
+    variance = (
+        numpy.log1p(cv * cv) if cv < 1.0 else 2.0 * numpy.log(numpy.hypot(1.0, cv))
+    )
+    return numpy.exp(numpy.sqrt(variance) * z - variance / 2.0)
+
+
+def _sample_damage_fraction(
+    mean: numpy.ndarray, z: numpy.ndarray, eta_sd: float
+) -> numpy.ndarray:
+    """Sample beta marginals with shared ranks and unchanged endpoint means."""
+    result = numpy.clip(mean, 0.0, 1.0)
+    if eta_sd == 0:
+        return result
+    interior = (result > 0) & (result < 1)
+    probabilities = numpy.broadcast_to(ndtr(z)[:, None], result.shape)[interior]
+    mu = result[interior]
+    # At numerical limits the beta tends to a point mass or a Bernoulli.
+    if eta_sd < numpy.sqrt(numpy.finfo(float).eps):
+        return result
+    if eta_sd > 1.0 / numpy.sqrt(numpy.finfo(float).eps):
+        result[interior] = probabilities > (1.0 - mu)
+    else:
+        concentration = (1.0 / eta_sd) ** 2
+        result[interior] = betaincinv(
+            mu * concentration, (1.0 - mu) * concentration, probabilities
+        )
+    return result
 
 
 @dataclass(frozen=True)
@@ -197,8 +229,9 @@ def calculate_direct_damages(
     draws a systemic cost multiplier shared across all assets and scenarios.
     Each asset/scenario group then receives independent hazard, damage-noise
     and local cost draws, shared across its splits and intensity cases.
-    Hazard and cost values are clamped at zero, damage fractions are clipped to [0, 1],
-    and asset splits damages are summed for each intensity case. The result
+    Hazard and cost use mean-preserving lognormal multipliers, and damage
+    fractions use beta noise centred on the curve value within [0, 1].
+    Asset split damages are summed for each intensity case. The result
     returns requested quantiles and run metadata. Samples can optionally be
     accumulated across assets to calculate total quantiles.
 
@@ -224,11 +257,12 @@ def calculate_direct_damages(
         in the returned summaries and may represent any kind of event or
         return-period maps, for example.
     hazard_cv : float or Mapping[Any, float], default 0.0
-        Coefficient of variation of hazard intensity before clamping. Supply
+        Coefficient of variation of lognormal hazard intensity. Supply
         one value for all cases or a mapping from each intensity-case label
         to its value; the mapping keys must exactly match ``intensity_columns``.
         A case's sampled intensity is
-        ``max(0, mean * (1 + hazard_cv * Z))``.
+        ``mean * exp(sigma * Z - sigma**2 / 2)``, where
+        ``sigma**2 = log(1 + hazard_cv**2)``. Zero means remain zero.
     curves : Mapping[str, DamageCurve]
         Damage curves available for sampling, keyed by identifiers that match
         the keys in ``curve_weights``.
@@ -236,9 +270,13 @@ def calculate_direct_damages(
         Non-negative relative selection weights for the curves. Weights are
         normalised before sampling and must have a positive total.
     eta_sd : float, default 0.0
-        Standard deviation of the normal damage-noise term. The sampled
-        damage fraction is multiplied by
-        ``exp(eta_sd * Z - eta_sd**2 / 2)`` before clipping to [0, 1].
+        Non-negative beta dispersion scale. For curve fraction m in (0, 1),
+        sample Beta(m / eta_sd**2, (1 - m) / eta_sd**2). The conditional
+        mean is m and variance is ``m * (1 - m) * eta_sd**2 / (1 + eta_sd**2)``.
+        Fractions 0 and 1 remain exact, and zero disables noise. This replaces
+        the former clipped multiplicative lognormal noise; eta_sd is no longer
+        a normal standard deviation. One shared normal draw is converted to
+        a uniform quantile and used across each asset/scenario's splits and cases.
     cost_mean : float or str
         Baseline rehabilitation cost per unit of quantity. Give a non-negative number
         to use the same mean for all assets, or a column name to read an
@@ -247,14 +285,12 @@ def calculate_direct_damages(
         this is the whole-asset cost; for lines and polygons, value is assumed
         uniformly distributed per unit length or area.
     cost_asset_cv : float, default 0.0
-        Coefficient of variation of the asset normal cost factor before clamping.
-        Sampled unit cost is ``max(0, systemic_cost * (1 + cost_asset_cv * Z))``,
+        Coefficient of variation of the mean-one lognormal asset cost factor,
         with an independent draw for each asset/scenario group, shared across
         its splits and intensity cases. Zero disables asset-specific cost variation.
     cost_systemic_cv : float, default 0.0
-        Finite, non-negative coefficient of variation of the systemic normal
-        cost factor before clamping. Each simulation uses
-        ``systemic_cost = cost_mean * max(0, 1 + cost_systemic_cv * Z_system)``.
+        Finite, non-negative coefficient of variation of the mean-one lognormal
+        systemic cost factor. Each simulation multiplies cost_mean by this factor.
         The same dimensionless multiplier applies to every asset/scenario
         baseline, including assets with different quantity units.
         Zero disables systemic cost variation.
@@ -319,8 +355,8 @@ def calculate_direct_damages(
     Curve choices and systemic cost multipliers are shared across the entire call
     at each simulation index. Hazard, damage noise and local cost draws are
     independent between asset/scenario groups and shared across all splits
-    and intensity cases within each group. Both cost stages are clamped at
-    zero; the final cost mean may therefore differ from the input baseline.
+    and intensity cases within each group. Independent mean-one lognormal
+    multipliers at both cost stages preserve the input cost mean.
 
     Global damage curve choices are made first, then systemic cost draws, then
     local draws for each group. Metadata records inputs and draw_scopes ("call"
@@ -422,7 +458,7 @@ def calculate_direct_damages(
     # Make systemic draws, shared across the whole call
     selected_curve = rng.choice(len(curve_values), size=n_samples, p=weights)  # (n,)
     z_system = rng.standard_normal(n_samples)  # (n,)
-    systemic_multiplier = numpy.maximum(0.0, 1.0 + cost_systemic_cv * z_system)  # (n,)
+    systemic_multiplier = _mean_one_lognormal(z_system, cost_systemic_cv)  # (n,)
 
     rows: list[dict[str, Any]] = []
     ead_rows: list[dict[str, Any]] = []
@@ -462,27 +498,23 @@ def calculate_direct_damages(
         z_damage = rng.standard_normal(n_samples)  # (n,)
         z_cost = rng.standard_normal(n_samples)  # (n,)
         systemic_cost = group_cost_mean * systemic_multiplier  # (n,)
-        cost_draw = numpy.maximum(
-            0.0, systemic_cost * (1.0 + cost_asset_cv * z_cost)
-        )  # (n,)
-        damage_multiplier = numpy.exp(eta_sd * z_damage - 0.5 * eta_sd**2)  # (n,)
+        cost_draw = systemic_cost * _mean_one_lognormal(z_cost, cost_asset_cv)  # (n,)
         quantities = group[quantity].to_numpy(dtype=float)  # (s,)
         sampled_totals: dict[Any, numpy.ndarray] = {}  # each value: (n,)
 
         # Intensity case (e.g. return-period) iterator
         for case, column in intensity_columns.items():
             means = group[column].to_numpy(dtype=float)  # (s,)
-            hazard = numpy.maximum(
-                0.0,
-                means[None, :] * (1.0 + hazard_cv_by_case[case] * z_hazard[:, None]),
+            hazard = means[None, :] * _mean_one_lognormal(
+                z_hazard[:, None], hazard_cv_by_case[case]
             )  # (n, s)
             damage_fraction = numpy.empty((n_samples, size), dtype=float)  # (n, s)
             for curve_index, curve in enumerate(curve_values):
                 mask = selected_curve == curve_index  # (n,)
                 if mask.any():
                     damage_fraction[mask] = curve.damage_fraction(hazard[mask])
-            damage_fraction = numpy.clip(
-                damage_fraction * damage_multiplier[:, None], 0.0, 1.0
+            damage_fraction = _sample_damage_fraction(
+                damage_fraction, z_damage, eta_sd
             )  # (n, s)
             total = (damage_fraction * quantities[None, :] * cost_draw[:, None]).sum(
                 axis=1
@@ -546,6 +578,12 @@ def calculate_direct_damages(
         "cost_systemic_cv": cost_systemic_cv,
         "hazard_cv": hazard_cv_by_case,
         "eta_sd": eta_sd,
+        "distributions": {
+            "hazard": "lognormal",
+            "cost_system": "lognormal",
+            "cost": "lognormal",
+            "damage_noise": "beta",
+        },
         "draw_scopes": {
             "damage_curve": "call",
             "cost_system": "call",
