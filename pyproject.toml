@@ -35,6 +35,7 @@ dependencies = [
     "pyarrow>=14",
     "pyogrio",
     "rasterio",
+    "requests",
     "rioxarray",
     "scipy",
     "shapely>=2.1",
