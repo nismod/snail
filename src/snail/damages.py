@@ -1,16 +1,20 @@
 """Damage assessment"""
 
+import operator
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 from numbers import Real
 from typing import Any
 
 import numpy
 import pandas
 import pandera.pandas as pandera
+from numpy.typing import ArrayLike
 from pandera.typing import DataFrame, Series
 from scipy.interpolate import interp1d
+from scipy.special import ndtri
 
 
 @dataclass(frozen=True)
@@ -137,7 +141,21 @@ def _integrate_ead_samples(
     cases = sorted(return_periods, key=lambda case: 1.0 / return_periods[case])
     p = numpy.asarray([1.0 / return_periods[case] for case in cases])
     D = numpy.column_stack([sampled_damage_by_case[case] for case in cases])
+    return _integrate_sorted_ead(D, p)
 
+
+def _integrate_sorted_ead(
+    D: numpy.ndarray, p: numpy.ndarray, axis: int = -1
+) -> numpy.ndarray:
+    """Integrate damages ``D`` over increasing probabilities ``p`` of shape
+    ``(k,)``, on ``D``'s ``axis`` of length ``k``, removing that axis."""
+    axis = axis % D.ndim
+    trailing = (1,) * (D.ndim - axis - 1)
+
+    def along(index):
+        return D[(slice(None),) * axis + (index,)]
+
+    p = p.reshape(p.shape + trailing)
     p_0 = p[:-1]  # lower probability
     p_1 = p[1:]  # higher probability
     w = p_1 - p_0  # width
@@ -161,9 +179,11 @@ def _integrate_ead_samples(
     # I = D_0 * w + (D_1 - D_0) * (p_1 - lambda)
     #   = D_0 * (lambda - p_0) + D_1 * (p_1 - lambda)
 
-    areas = D[:, :-1] * (lambd - p_0) + D[:, 1:] * (p_1 - lambd)
-    integral = areas.sum(axis=1)
-    rare_tail = p[0] * D[:, 0]
+    areas = along(slice(None, -1)) * (lambd - p_0) + along(slice(1, None)) * (
+        p_1 - lambd
+    )
+    integral = areas.sum(axis=axis)
+    rare_tail = p[0] * along(0)
 
     return integral + rare_tail
 
@@ -592,6 +612,972 @@ def calculate_direct_damages(
         ead_quantiles=ead_quantile_frame,
         total_quantiles=total_quantile_frame,
         total_ead_quantiles=total_ead_quantile_frame,
+    )
+
+
+#: Version of the random-draw scheme used by :func:`simulate_direct_damages`.
+#: Change it whenever the draws for given inputs would change.
+DRAW_SCHEME = "philox4x64-keyed-v1"
+
+# Philox key word 1 for each stream; key word 0 is the seed.
+_STREAM_IDS = {"curve": 1, "system": 2, "hazard": 3, "damage": 4, "cost": 5}
+# Philox counter word 3 marks what counter word 2 holds.
+_COUNTER_LOCAL = 0  # word 2 is the asset key
+_COUNTER_SYSTEMIC = 1  # word 2 is zero: no systemic key
+_COUNTER_SYSTEMIC_KEYED = 2  # word 2 is the systemic key
+_LEVELS = ("split", "asset", "total")
+# Target number of float64 values in one (split, event, sample) block array.
+_BLOCK_VALUES = 2**22
+
+
+@dataclass(frozen=True)
+class DirectDamageArrays:
+    """Quantiles of sampled direct damages at split, asset and total level.
+
+    Returned by :func:`simulate_direct_damages`. Arrays are aligned by
+    position with its inputs: ``s`` splits, ``a`` assets, ``e`` events,
+    ``q`` quantiles and ``n`` samples. Arrays for levels that were not
+    requested, and EAD arrays when no return periods were given, are None.
+
+    Attributes
+    ----------
+    quantiles : numpy.ndarray
+        Requested quantiles, shape ``(q,)``.
+    return_periods : numpy.ndarray or None
+        Return periods of the events in years, shape ``(e,)``.
+    split_fraction : numpy.ndarray or None
+        Quantiles of each split's damage fraction, shape ``(s, e, q)``.
+    split_cost : numpy.ndarray or None
+        Quantiles of each split's damage cost, shape ``(s, e, q)``.
+    split_ead : numpy.ndarray or None
+        Quantiles of each split's expected annual damage, shape ``(s, q)``.
+    asset_cost : numpy.ndarray or None
+        Quantiles of each asset's damage cost, shape ``(a, e, q)``.
+    asset_ead : numpy.ndarray or None
+        Quantiles of each asset's expected annual damage, shape ``(a, q)``.
+    total_cost : numpy.ndarray or None
+        Quantiles of the total damage cost over all assets, shape ``(e, q)``.
+    total_ead : numpy.ndarray or None
+        Quantiles of the total expected annual damage, shape ``(q,)``.
+    total_samples : numpy.ndarray or None
+        Total damage cost samples, shape ``(n, e)``, when
+        ``keep_total_samples`` was set. Sample ``i`` of separate calls with
+        the same seed, ``n_samples``, curves and ``systemic_key`` shares the
+        same curve choice and systemic cost draw, so these can be summed
+        across calls and summarised with :func:`summarise_samples` and
+        :func:`expected_annual_damage`.
+    metadata : dict
+        Seed, model inputs, normalised curve weights and ``draw_scheme``.
+    """
+
+    quantiles: numpy.ndarray
+    return_periods: numpy.ndarray | None
+    split_fraction: numpy.ndarray | None
+    split_cost: numpy.ndarray | None
+    split_ead: numpy.ndarray | None
+    asset_cost: numpy.ndarray | None
+    asset_ead: numpy.ndarray | None
+    total_cost: numpy.ndarray | None
+    total_ead: numpy.ndarray | None
+    total_samples: numpy.ndarray | None
+    metadata: dict[str, Any]
+
+
+def _lerp(a, b, t: float):
+    """Linear interpolation exactly as ``numpy.quantile`` does it."""
+    diff_b_a = b - a
+    if t >= 0.5:
+        return b - diff_b_a * (1 - t)
+    return a + diff_b_a * t
+
+
+def _quantile_positions(
+    n: int, quantiles: numpy.ndarray
+) -> list[tuple[int, int, float]]:
+    """Sorted-sample indices and weights of numpy's default (linear) method."""
+    virtual = (n - 1) * quantiles
+    positions = []
+    for v in virtual:
+        lo = int(numpy.floor(v))
+        positions.append((lo, min(lo + 1, n - 1), float(v - lo)))
+    return positions
+
+
+def _check_quantiles(quantiles: Sequence[float], name: str = "quantiles"):
+    try:
+        values = numpy.asarray(quantiles, dtype=float)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be a non-empty sequence in [0, 1]") from error
+    if (
+        values.ndim != 1
+        or len(values) == 0
+        or not numpy.isfinite(values).all()
+        or (values < 0).any()
+        or (values > 1).any()
+    ):
+        raise ValueError(f"{name} must be a non-empty sequence in [0, 1]")
+    if len(numpy.unique(values)) != len(values):
+        raise ValueError(f"{name} must not contain duplicates")
+    return values
+
+
+def _check_return_periods(return_periods: ArrayLike, n_event: int | None = None):
+    try:
+        values = numpy.asarray(return_periods, dtype=float)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "return periods must be finite numbers of at least one year"
+        ) from error
+    if values.ndim != 1 or len(values) == 0:
+        raise ValueError("return_periods must be a non-empty one-dimensional array")
+    if n_event is not None and len(values) != n_event:
+        raise ValueError("return_periods must have one value per event")
+    if (
+        not numpy.isfinite(values).all()
+        or (values < 1.0).any()
+        or len(numpy.unique(values)) != len(values)
+    ):
+        raise ValueError("return periods must be finite, unique, and at least one year")
+    return values
+
+
+def _sorted_quantiles(sorted_samples: numpy.ndarray, quantiles: numpy.ndarray):
+    """Quantiles over the last axis of already sorted samples: (..., n) -> (..., q)."""
+    n = sorted_samples.shape[-1]
+    out = numpy.empty(sorted_samples.shape[:-1] + (len(quantiles),))
+    for j, (lo, hi, t) in enumerate(_quantile_positions(n, quantiles)):
+        out[..., j] = _lerp(sorted_samples[..., lo], sorted_samples[..., hi], t)
+    # numpy.quantile returns NaN for any slice containing NaN, which sorts last
+    nan_rows = numpy.isnan(sorted_samples[..., -1])
+    if nan_rows.any():
+        out[nan_rows] = numpy.nan
+    return out
+
+
+def _summarise(samples: numpy.ndarray, quantiles: numpy.ndarray, overwrite=False):
+    if overwrite:
+        samples.sort(axis=-1)
+        return _sorted_quantiles(samples, quantiles)
+    return _sorted_quantiles(numpy.sort(samples, axis=-1), quantiles)
+
+
+def _summarise_rows(samples, quantiles, wet=None, overwrite=False):
+    """Summarise ``samples`` (..., n), returning exact zeros where ``wet``
+    (of shape ``samples.shape[:-1]``) is False."""
+    if wet is None or wet.all():
+        return _summarise(samples, quantiles, overwrite=overwrite)
+    out = numpy.zeros(samples.shape[:-1] + (len(quantiles),))
+    if wet.any():
+        out[wet] = _summarise(samples[wet], quantiles, overwrite=True)
+    return out
+
+
+def _discrete_quantiles(values, counts, quantiles):
+    """Quantiles of samples that take ``values[..., k]`` in ``counts[k]`` of the
+    samples, without forming the samples: (..., K) -> (..., q). Equal to
+    :func:`summarise_samples` of the expanded samples."""
+    n = int(counts.sum())
+    order = numpy.argsort(values, axis=-1, kind="stable")
+    sorted_values = numpy.take_along_axis(values, order, axis=-1)
+    cumulative = numpy.cumsum(counts[order], axis=-1)
+    out = numpy.empty(values.shape[:-1] + (len(quantiles),))
+
+    def value_at(position):
+        index = (cumulative <= position).sum(axis=-1, keepdims=True)
+        return numpy.take_along_axis(sorted_values, index, axis=-1)[..., 0]
+
+    for j, (lo, hi, t) in enumerate(_quantile_positions(n, quantiles)):
+        out[..., j] = _lerp(value_at(lo), value_at(hi), t)
+    return out
+
+
+def summarise_samples(samples: ArrayLike, quantiles: Sequence[float]) -> numpy.ndarray:
+    """Calculate quantiles of samples over their last axis.
+
+    Uses one sort and numpy's default (linear) interpolation, so the values
+    equal ``numpy.moveaxis(numpy.quantile(samples, quantiles, axis=-1), 0, -1)``.
+
+    Parameters
+    ----------
+    samples : ArrayLike
+        Samples of shape ``(..., n)``, for example ``total_samples.T`` summed
+        across calls to :func:`simulate_direct_damages`.
+    quantiles : Sequence[float]
+        Unique quantiles in [0, 1].
+
+    Returns
+    -------
+    numpy.ndarray
+        Quantiles of shape ``(..., q)``. Slices containing NaN give NaN.
+
+    Raises
+    ------
+    ValueError
+        If quantiles are invalid or there are no samples.
+    """
+    quantiles = _check_quantiles(quantiles)
+    samples = numpy.asarray(samples, dtype=float)
+    if samples.ndim == 0 or samples.shape[-1] == 0:
+        raise ValueError("samples must have at least one sample on the last axis")
+    return _summarise(samples, quantiles)
+
+
+def expected_annual_damage(
+    samples: ArrayLike, return_periods: ArrayLike
+) -> numpy.ndarray:
+    """Integrate damage samples over events to expected annual damage (EAD).
+
+    Uses the same maths as :func:`calculate_direct_damages`: damage is assumed
+    linear in the natural logarithm of annual exceedance probability
+    (``1 / return_period``) between events, integrated analytically, with
+    constant extrapolation from the rarest event to zero probability and no
+    extrapolation beyond the most frequent event.
+
+    Parameters
+    ----------
+    samples : ArrayLike
+        Damage samples of shape ``(n, e)``, events on the last axis (any
+        leading shape ``(..., e)`` is accepted).
+    return_periods : ArrayLike
+        Return periods of the ``e`` events in years, in any order: finite,
+        unique and at least one year.
+
+    Returns
+    -------
+    numpy.ndarray
+        EAD samples of shape ``(n,)`` (generally ``samples.shape[:-1]``).
+
+    Raises
+    ------
+    ValueError
+        If return periods are invalid or do not match the events.
+    """
+    samples = numpy.asarray(samples, dtype=float)
+    if samples.ndim == 0:
+        raise ValueError("samples must have events on the last axis")
+    return_periods = _check_return_periods(return_periods, samples.shape[-1])
+    order = numpy.argsort(1.0 / return_periods, kind="stable")
+    p = 1.0 / return_periods[order]
+    return _integrate_sorted_ead(samples[..., order], p)
+
+
+def _ead_weights(return_periods: numpy.ndarray) -> numpy.ndarray:
+    """Weights ``w`` of shape ``(e,)``, in the given event order, such that
+    ``(D * w).sum(-1)`` equals :func:`expected_annual_damage` up to rounding.
+
+    EAD is linear in the event damages, so the integration in
+    :func:`_integrate_sorted_ead` collapses to one weight per event.
+    """
+    order = numpy.argsort(1.0 / return_periods, kind="stable")
+    weights = numpy.empty(len(return_periods))
+    weights[order] = _integrate_sorted_ead(
+        numpy.eye(len(return_periods)), 1.0 / return_periods[order]
+    )
+    return weights
+
+
+def _event_axis_ead(samples: numpy.ndarray, weights: numpy.ndarray):
+    """EAD of samples with events on axis 1: (b, e, n) -> (b, n)."""
+    return numpy.matmul(weights, samples)
+
+
+def _to_uint64_key(value: Any, name: str) -> int:
+    """Map an integer in [-2**63, 2**64) to a 64-bit key word."""
+    if isinstance(value, (bool, numpy.bool_)):
+        # Keep ValueError for all invalid inputs, as elsewhere in this module.
+        raise ValueError(f"{name} must be an integer")  # noqa: TRY004
+    try:
+        value = operator.index(value)
+    except TypeError as error:
+        raise ValueError(f"{name} must be an integer") from error
+    if not -(2**63) <= value < 2**64:
+        raise ValueError(f"{name} must be in [-2**63, 2**64)")
+    return value % 2**64
+
+
+def _uniform_draws(
+    seed: int, stream: str, words: numpy.ndarray, flag: int, n: int
+) -> numpy.ndarray:
+    """Draw ``n`` uniforms in (0, 1) for each counter word: (len(words), n).
+
+    Each row comes from Philox4x64 with key ``(seed, stream id)`` and counter
+    ``(0, 0, word, flag)``, so it depends only on these and not on the other
+    rows. Each uniform uses one 64-bit output: ``((x >> 12) + 0.5) / 2**52``.
+    """
+    key = numpy.array([seed, _STREAM_IDS[stream]], dtype=numpy.uint64)
+    counter = numpy.array([0, 0, 0, flag], dtype=numpy.uint64)
+    raw = numpy.empty((len(words), n), dtype=numpy.uint64)
+    for i, word in enumerate(words):
+        counter[2] = word
+        raw[i] = numpy.random.Philox(key=key, counter=counter).random_raw(n)
+    raw >>= numpy.uint64(12)
+    uniforms = raw.astype(float)
+    uniforms += 0.5
+    uniforms *= 2.0**-52
+    return uniforms
+
+
+def _normal_draws(seed, stream, words, flag, n):
+    return ndtri(_uniform_draws(seed, stream, words, flag, n))
+
+
+def _check_cv(value: Any, name: str) -> float:
+    if not _is_finite_non_negative(value):
+        raise ValueError(f"{name} must be finite and non-negative")
+    return float(value)
+
+
+def _as_float_array(value: Any, name: str) -> numpy.ndarray:
+    try:
+        return numpy.asarray(value, dtype=float)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be numeric") from error
+
+
+@dataclass
+class _Simulation:
+    """Validated inputs of :func:`simulate_direct_damages`."""
+
+    intensity: numpy.ndarray  # (s, e)
+    asset_index: numpy.ndarray  # (s,)
+    quantity: numpy.ndarray  # (s,)
+    curves: list
+    weights: numpy.ndarray  # (K,)
+    cost_mean: numpy.ndarray  # (a,)
+    cost_mean_scalar: float | None
+    cost_systemic_cv: float
+    cost_asset_cv: float
+    hazard_cv: numpy.ndarray  # (e,)
+    eta_sd: float
+    n_samples: int
+    quantiles: numpy.ndarray
+    return_periods: numpy.ndarray | None
+    seed: int
+    asset_keys: numpy.ndarray  # (a,) uint64
+    systemic_key: int | None
+    systemic_word: int
+    systemic_flag: int
+    n_assets: int
+    levels: frozenset
+    keep_total_samples: bool
+    block_size: int
+
+
+def _validate_simulation(
+    intensity,
+    asset_index,
+    quantity,
+    *,
+    curves,
+    curve_weights,
+    cost_mean,
+    cost_systemic_cv,
+    cost_asset_cv,
+    hazard_cv,
+    eta_sd,
+    n_samples,
+    quantiles,
+    return_periods,
+    seed,
+    asset_keys,
+    systemic_key,
+    n_assets,
+    levels,
+    keep_total_samples,
+    block_size,
+) -> _Simulation:
+    intensity = _as_float_array(intensity, "intensity")
+    if intensity.ndim != 2 or intensity.shape[1] == 0:
+        raise ValueError("intensity must have shape (n_split, n_event), n_event > 0")
+    if not numpy.isfinite(intensity).all() or (intensity < 0).any():
+        raise ValueError("intensity must be finite and non-negative")
+    n_split, n_event = intensity.shape
+
+    asset_index = numpy.asarray(asset_index)
+    if asset_index.shape != (n_split,):
+        raise ValueError("asset_index must have shape (n_split,)")
+    if n_split and asset_index.dtype.kind not in "iu":
+        raise ValueError("asset_index must contain integers")
+    asset_index = asset_index.astype(numpy.intp)
+    if (asset_index < 0).any():
+        raise ValueError("asset_index must be non-negative")
+    min_assets = int(asset_index.max()) + 1 if n_split else 0
+    if n_assets is None:
+        n_assets = min_assets
+    else:
+        if isinstance(n_assets, bool) or not isinstance(n_assets, (int, numpy.integer)):
+            raise ValueError("n_assets must be an integer")
+        n_assets = int(n_assets)
+        if n_assets < min_assets:
+            raise ValueError("asset_index must be less than n_assets")
+
+    quantity = _as_float_array(quantity, "quantity")
+    if quantity.shape != (n_split,):
+        raise ValueError("quantity must have shape (n_split,)")
+    if not numpy.isfinite(quantity).all() or (quantity < 0).any():
+        raise ValueError("quantity must be finite and non-negative")
+
+    curves = list(curves)
+    if not curves or any(
+        not callable(getattr(curve, "damage_fraction", None)) for curve in curves
+    ):
+        raise ValueError("curves must be a non-empty sequence of damage curves")
+    weights = _as_float_array(curve_weights, "curve_weights")
+    if weights.shape != (len(curves),):
+        raise ValueError("curve_weights must have one weight per curve")
+    if not numpy.isfinite(weights).all() or (weights < 0).any() or weights.sum() <= 0:
+        raise ValueError("curve_weights must be finite, non-negative, and sum > 0")
+    weights = weights / weights.sum()
+
+    cost_mean = _as_float_array(cost_mean, "cost_mean")
+    cost_mean_scalar = float(cost_mean) if cost_mean.ndim == 0 else None
+    if cost_mean.ndim == 0:
+        cost_mean = numpy.full(n_assets, cost_mean_scalar)
+    elif cost_mean.shape != (n_assets,):
+        raise ValueError("cost_mean must be a scalar or have shape (n_assets,)")
+    if not numpy.isfinite(cost_mean).all() or (cost_mean < 0).any():
+        raise ValueError("cost_mean must be finite and non-negative")
+    if cost_mean_scalar is not None and not cost_mean_scalar >= 0:
+        raise ValueError("cost_mean must be finite and non-negative")
+
+    cost_systemic_cv = _check_cv(cost_systemic_cv, "cost_systemic_cv")
+    cost_asset_cv = _check_cv(cost_asset_cv, "cost_asset_cv")
+    eta_sd = _check_cv(eta_sd, "eta_sd")
+    hazard_cv = _as_float_array(hazard_cv, "hazard_cv")
+    if hazard_cv.ndim == 0:
+        hazard_cv = numpy.full(n_event, float(hazard_cv))
+    elif hazard_cv.shape != (n_event,):
+        raise ValueError("hazard_cv must be a scalar or have shape (n_event,)")
+    if not numpy.isfinite(hazard_cv).all() or (hazard_cv < 0).any():
+        raise ValueError("hazard_cv must be finite and non-negative")
+
+    if (
+        not isinstance(n_samples, (int, numpy.integer))
+        or isinstance(n_samples, bool)
+        or n_samples <= 0
+    ):
+        raise ValueError("n_samples must be a positive integer")
+    quantiles = _check_quantiles(quantiles)
+    if return_periods is not None:
+        return_periods = _check_return_periods(return_periods, n_event)
+
+    if (
+        isinstance(seed, bool)
+        or not isinstance(seed, (int, numpy.integer))
+        or not 0 <= seed < 2**64
+    ):
+        raise ValueError("seed must be an integer in [0, 2**64)")
+
+    if asset_keys is None:
+        keys = numpy.arange(n_assets, dtype=numpy.uint64)
+    else:
+        keys = numpy.asarray(asset_keys)
+        if keys.shape != (n_assets,):
+            raise ValueError("asset_keys must have shape (n_assets,)")
+        if n_assets and keys.dtype.kind not in "iu":
+            raise ValueError("asset_keys must contain integers")
+        # Signed keys (such as hashes) map to their two's complement bits
+        keys = keys.astype(numpy.int64 if keys.dtype.kind == "i" else numpy.uint64)
+        keys = keys.view(numpy.uint64)
+        if len(numpy.unique(keys)) != n_assets:
+            raise ValueError("asset_keys must be unique")
+
+    if systemic_key is None:
+        systemic_word, systemic_flag = 0, _COUNTER_SYSTEMIC
+    else:
+        systemic_word = _to_uint64_key(systemic_key, "systemic_key")
+        systemic_flag = _COUNTER_SYSTEMIC_KEYED
+
+    if isinstance(levels, str):
+        levels = (levels,)
+    levels = frozenset(levels)
+    if not levels <= set(_LEVELS):
+        raise ValueError(f"levels must be a subset of {_LEVELS}")
+    if not levels and not keep_total_samples:
+        raise ValueError("request at least one level, or keep_total_samples")
+
+    if block_size is None:
+        block_size = max(1, _BLOCK_VALUES // (n_samples * n_event))
+    elif (
+        isinstance(block_size, bool)
+        or not isinstance(block_size, (int, numpy.integer))
+        or block_size <= 0
+    ):
+        raise ValueError("block_size must be a positive integer or None")
+
+    return _Simulation(
+        intensity=intensity,
+        asset_index=asset_index,
+        quantity=quantity,
+        curves=curves,
+        weights=weights,
+        cost_mean=cost_mean,
+        cost_mean_scalar=cost_mean_scalar,
+        cost_systemic_cv=cost_systemic_cv,
+        cost_asset_cv=cost_asset_cv,
+        hazard_cv=hazard_cv,
+        eta_sd=eta_sd,
+        n_samples=int(n_samples),
+        quantiles=quantiles,
+        return_periods=return_periods,
+        seed=int(seed),
+        asset_keys=keys,
+        systemic_key=None if systemic_key is None else operator.index(systemic_key),
+        systemic_word=systemic_word,
+        systemic_flag=systemic_flag,
+        n_assets=n_assets,
+        levels=levels,
+        keep_total_samples=bool(keep_total_samples),
+        block_size=int(block_size),
+    )
+
+
+def simulate_direct_damages(
+    intensity: ArrayLike,
+    asset_index: ArrayLike,
+    quantity: ArrayLike,
+    *,
+    curves: Sequence["DamageCurve"],
+    curve_weights: Sequence[float],
+    cost_mean: float | ArrayLike,
+    cost_systemic_cv: float = 0.0,
+    cost_asset_cv: float = 0.0,
+    hazard_cv: float | ArrayLike = 0.0,
+    eta_sd: float = 0.0,
+    n_samples: int = 1000,
+    quantiles: Sequence[float] = (0.05, 0.5, 0.95),
+    return_periods: ArrayLike | None = None,
+    seed: int = 0,
+    asset_keys: ArrayLike | None = None,
+    systemic_key: int | None = None,
+    n_assets: int | None = None,
+    levels: Collection[str] = ("split", "asset", "total"),
+    keep_total_samples: bool = False,
+    block_size: int | None = None,
+) -> DirectDamageArrays:
+    """Sample direct damages once and summarise them at split, asset and
+    total level.
+
+    An array form of :func:`calculate_direct_damages` for a single scenario
+    combination, with the same uncertainty model. Inputs are aligned by
+    position: ``s`` splits, each belonging to one of ``a`` assets, and ``e``
+    events (for example the return periods of one climate scenario and
+    epoch). Each simulation sample chooses a weighted damage curve and draws a
+    systemic cost factor, shared by all assets. Each asset draws a hazard
+    factor, a damage-noise factor and a local cost factor, shared by its
+    splits and events. Split damages are summed to assets and assets to the
+    total, sample by sample, and all levels are summarised from the same
+    samples.
+
+    In the equations below, ``Z`` denotes a standard normal draw. For split
+    ``i`` of asset ``j`` and event ``k``:
+
+    - hazard ``h = max(0, intensity[i, k] * (1 + hazard_cv[k] * Z_hazard[j]))``
+    - damage fraction
+      ``f = clip(curve(h) * exp(eta_sd * Z_damage[j] - eta_sd**2 / 2), 0, 1)``
+    - unit cost ``u = max(0, cost_mean[j] * max(0, 1 + cost_systemic_cv *
+      Z_system) * (1 + cost_asset_cv * Z_cost[j]))``
+    - split cost ``f * quantity[i] * u``
+
+    Parameters
+    ----------
+    intensity : ArrayLike
+        Central hazard intensity of shape ``(s, e)``. Must be finite and
+        non-negative: the caller decides what missing data means.
+    asset_index : ArrayLike
+        Integer parent asset of each split, shape ``(s,)``, in
+        ``[0, n_assets)``.
+    quantity : ArrayLike
+        Non-negative quantity of each split, shape ``(s,)``, in the units of
+        the cost (count, length or area).
+    curves : Sequence[DamageCurve]
+        Damage curves available for sampling.
+    curve_weights : Sequence[float]
+        Non-negative relative selection weights, one per curve, with a
+        positive total. Normalised weights are recorded in the metadata.
+    cost_mean : float or ArrayLike
+        Baseline cost per unit of quantity: a non-negative scalar, or one
+        value per asset, shape ``(a,)``.
+    cost_systemic_cv : float, default 0.0
+        Coefficient of variation of the systemic cost factor, before clamping.
+    cost_asset_cv : float, default 0.0
+        Coefficient of variation of each asset's local cost factor, before
+        clamping.
+    hazard_cv : float or ArrayLike, default 0.0
+        Coefficient of variation of hazard intensity before clamping: a
+        scalar, or one value per event, shape ``(e,)``.
+    eta_sd : float, default 0.0
+        Standard deviation of the normal damage-noise term.
+    n_samples : int, default 1000
+        Number of simulation samples.
+    quantiles : Sequence[float], default (0.05, 0.5, 0.95)
+        Unique quantiles in [0, 1] to report at every level. Calculated with
+        numpy's default (linear) method.
+    return_periods : ArrayLike or None, default None
+        Return periods of the events in years, shape ``(e,)``: finite, unique
+        and at least one year. Enables expected annual damage (EAD) arrays,
+        integrated per sample as in :func:`expected_annual_damage`. Split and
+        asset EAD apply that integration as one weight per event, equal up to
+        rounding; total EAD is ``expected_annual_damage(total_samples)``.
+    seed : int, default 0
+        Seed in [0, 2**64) for all random streams.
+    asset_keys : ArrayLike or None, default None
+        Unique integer key of each asset, shape ``(a,)``, that keys its local
+        random draws, for example a 64-bit hash of a stable asset id. Signed
+        and unsigned 64-bit keys are accepted; signed keys map to their two's
+        complement bits. Defaults to ``arange(a)``, which is only stable for a
+        fixed asset order.
+    systemic_key : int or None, default None
+        Optional key, in [-2**63, 2**64), for the curve choice and systemic
+        cost draws. With None these draws depend only on ``seed``, so they are
+        shared by every call with the same seed (perfectly correlated across
+        asset types, layers and hazards). With an integer they also depend on
+        the key, so for example a different key per asset type gives
+        independent systemic draws per type. ``total_samples`` from calls
+        with different keys can still be summed: they are then independent
+        rather than perfectly correlated, which is the caller's modelling
+        choice.
+    n_assets : int or None, default None
+        Number of assets, ``a``. Defaults to ``asset_index.max() + 1``. Assets
+        without splits have zero damage.
+    levels : Collection[str], default ("split", "asset", "total")
+        Levels to summarise, any of ``"split"``, ``"asset"`` and ``"total"``.
+        Arrays of other levels are None and are not computed.
+    keep_total_samples : bool, default False
+        Return ``total_samples``, shape ``(n, e)``. This is independent of
+        ``levels``: total samples are kept even if ``"total"`` is not in
+        ``levels``, for example to sum across calls before summarising.
+    block_size : int or None, default None
+        Target number of splits per vectorised block. Blocks hold whole assets,
+        so a block can exceed it by part of one asset's splits. Memory is about
+        a few times ``8 * block_size * e * n`` bytes. Defaults to about
+        ``2**22 / (n * e)`` splits (32 MB per block array). Results do not
+        depend on it, beyond floating-point summation order of totals.
+
+    Returns
+    -------
+    DirectDamageArrays
+        Quantile arrays at the requested levels, optional total samples and
+        metadata.
+
+    Raises
+    ------
+    ValueError
+        If any input is invalid, including non-finite or negative intensity.
+
+    Notes
+    -----
+    Random draws are keyed rather than sequential. Each stream (``curve``,
+    ``system``, ``hazard``, ``damage``, ``cost``) is a Philox4x64
+    counter-based generator with key ``(seed, stream id)``. The per-asset
+    streams (hazard, damage, cost) start at counter ``(0, 0, asset_key, 0)``.
+    The systemic streams (curve choice, systemic cost) start at counter
+    ``(0, 0, 0, 1)``, or ``(0, 0, systemic_key, 2)`` when a key is given.
+    Each uniform uses one 64-bit output, ``((x >> 12) + 0.5) / 2**52``, in
+    (0, 1). Normals are its inverse normal CDF. Curve choice is the inverse
+    CDF of the normalised weights. So:
+
+    - an asset's draws depend only on ``(seed, asset key, n_samples)``, not on
+      which other assets are in the call, their order, blocks or skipped
+      assets; and the first ``m`` samples are the same for any
+      ``n_samples >= m``
+    - scenarios use common random numbers: an asset gets the same local draws
+      for every intensity array, so differences between scenarios reflect the
+      hazard rather than sampling noise
+    - total samples from separate calls (chunks of assets, asset types,
+      layers) with the same seed and ``systemic_key`` share curve choice and
+      systemic draws at each sample index, so they can be summed and then
+      summarised
+
+    The scheme is recorded as ``metadata["draw_scheme"]``. It differs from
+    :func:`calculate_direct_damages`, so the two agree in distribution, not
+    sample by sample.
+
+    Damage fractions carry no cost uncertainty. A split's damage fraction
+    samples are only formed when needed: with no hazard or damage-noise
+    uncertainty, fraction quantiles are computed exactly from the curve
+    choice counts.
+
+    If every curve gives zero damage at zero intensity, splits with zero
+    intensity in every event have zero damage in every sample. They are left
+    out of the computation, and their results, and those of assets with no
+    other splits, are exact zeros. Keyed draws mean this does not change any
+    other result.
+    """
+    spec = _validate_simulation(
+        intensity,
+        asset_index,
+        quantity,
+        curves=curves,
+        curve_weights=curve_weights,
+        cost_mean=cost_mean,
+        cost_systemic_cv=cost_systemic_cv,
+        cost_asset_cv=cost_asset_cv,
+        hazard_cv=hazard_cv,
+        eta_sd=eta_sd,
+        n_samples=n_samples,
+        quantiles=quantiles,
+        return_periods=return_periods,
+        seed=seed,
+        asset_keys=asset_keys,
+        systemic_key=systemic_key,
+        n_assets=n_assets,
+        levels=levels,
+        keep_total_samples=keep_total_samples,
+        block_size=block_size,
+    )
+    return _run_simulation(spec)
+
+
+def _run_simulation(
+    spec: _Simulation, on_block: Callable[[dict], None] | None = None
+) -> DirectDamageArrays:
+    """Compute :func:`simulate_direct_damages` from validated inputs.
+
+    ``on_block``, for testing, receives each block's samples, in the
+    internal sample order ``sample_order`` (samples sorted by chosen curve).
+    """
+    n = spec.n_samples
+    n_split, n_event = spec.intensity.shape
+    n_q = len(spec.quantiles)
+    n_curves = len(spec.curves)
+    levels = spec.levels
+    want_split = "split" in levels
+    want_asset = "asset" in levels
+    want_total = "total" in levels or spec.keep_total_samples
+    want_ead = spec.return_periods is not None
+    ead_weights = _ead_weights(spec.return_periods) if want_ead else None
+    hazard_uncertain = bool((spec.hazard_cv > 0).any())
+    noisy = spec.eta_sd > 0
+
+    # Systemic draws, shared by every asset at each sample index
+    if n_curves > 1:
+        words = numpy.array([spec.systemic_word], dtype=numpy.uint64)
+        u_curve = _uniform_draws(spec.seed, "curve", words, spec.systemic_flag, n)[0]
+        cdf = numpy.cumsum(spec.weights)
+        cdf[-1] = 1.0
+        choice = numpy.minimum(
+            numpy.searchsorted(cdf, u_curve, side="right"), n_curves - 1
+        )
+    else:
+        choice = numpy.zeros(n, dtype=numpy.intp)
+    # Work in samples sorted by chosen curve, so each curve applies to one slice
+    sample_order = numpy.argsort(choice, kind="stable")
+    curve_counts = numpy.bincount(choice, minlength=n_curves)
+    curve_bounds = numpy.concatenate([[0], numpy.cumsum(curve_counts)])
+    if spec.cost_systemic_cv > 0:
+        words = numpy.array([spec.systemic_word], dtype=numpy.uint64)
+        z_system = _normal_draws(spec.seed, "system", words, spec.systemic_flag, n)[0]
+        systemic_multiplier = numpy.maximum(
+            0.0, 1.0 + spec.cost_systemic_cv * z_system
+        )[sample_order]
+    else:
+        systemic_multiplier = numpy.ones(n)
+
+    # Splits that need computing: all, unless dry splits have zero damage
+    zero_at_zero = all(
+        (numpy.asarray(curve.damage_fraction(numpy.zeros(1)), dtype=float) <= 0).all()
+        for curve in spec.curves
+    )
+    if zero_at_zero:
+        computed = numpy.flatnonzero((spec.intensity > 0).any(axis=1))
+    else:
+        computed = numpy.arange(n_split)
+    split_order = computed[
+        numpy.argsort(spec.asset_index[computed], kind="stable")
+    ]  # computed splits, grouped by asset
+    split_assets = spec.asset_index[split_order]
+    is_first = numpy.ones(len(split_order), dtype=bool)
+    is_first[1:] = split_assets[1:] != split_assets[:-1]
+    asset_starts = numpy.flatnonzero(is_first)  # into split_order
+    assets = split_assets[asset_starts]  # computed assets
+    asset_ends = numpy.append(asset_starts[1:], len(split_order))
+    block_of_asset = asset_starts // spec.block_size
+    block_bounds = numpy.flatnonzero(
+        numpy.diff(block_of_asset, prepend=-1, append=numpy.inf)
+    )  # into assets
+
+    split_fraction = numpy.zeros((n_split, n_event, n_q)) if want_split else None
+    split_cost = numpy.zeros((n_split, n_event, n_q)) if want_split else None
+    split_ead = numpy.zeros((n_split, n_q)) if want_split and want_ead else None
+    asset_cost = numpy.zeros((spec.n_assets, n_event, n_q)) if want_asset else None
+    asset_ead = numpy.zeros((spec.n_assets, n_q)) if want_asset and want_ead else None
+    totals = numpy.zeros((n_event, n)) if want_total else None
+    quantiles = spec.quantiles
+
+    for b0, b1 in pairwise(block_bounds):
+        s0, s1 = asset_starts[b0], asset_ends[b1 - 1]
+        splits = split_order[s0:s1]  # (b,) original split indices
+        block_assets = assets[b0:b1]  # (a_b,)
+        local_starts = asset_starts[b0:b1] - s0
+        local_asset = numpy.repeat(
+            numpy.arange(b1 - b0), asset_ends[b0:b1] - asset_starts[b0:b1]
+        )  # (b,) position of each split's asset in the block
+        keys = spec.asset_keys[block_assets]
+        mean_intensity = spec.intensity[splits]  # (b, e)
+
+        # Damage fraction samples, (b, e, n)
+        fraction = numpy.empty((len(splits), n_event, n))
+        if hazard_uncertain:
+            z_hazard = _normal_draws(spec.seed, "hazard", keys, _COUNTER_LOCAL, n)
+            z_hazard = z_hazard[:, sample_order][local_asset]  # (b, n)
+            hazard = mean_intensity[:, :, None] * (
+                1.0 + spec.hazard_cv[None, :, None] * z_hazard[:, None, :]
+            )
+            numpy.maximum(0.0, hazard, out=hazard)
+            for k, curve in enumerate(spec.curves):
+                part = slice(curve_bounds[k], curve_bounds[k + 1])
+                if curve_counts[k]:
+                    fraction[..., part] = curve.damage_fraction(hazard[..., part])
+            del hazard
+            curve_values = None
+        else:
+            # Hazard is the same in every sample: evaluate each curve once
+            curve_values = numpy.stack(
+                [
+                    numpy.asarray(curve.damage_fraction(mean_intensity), dtype=float)
+                    for curve in spec.curves
+                ],
+                axis=-1,
+            )  # (b, e, K)
+            if not noisy:
+                # clip once per curve value rather than per sample
+                curve_values = numpy.clip(curve_values, 0.0, 1.0)
+            for k in range(n_curves):
+                part = slice(curve_bounds[k], curve_bounds[k + 1])
+                fraction[..., part] = curve_values[..., k, None]
+        if noisy:
+            z_damage = _normal_draws(spec.seed, "damage", keys, _COUNTER_LOCAL, n)
+            damage_multiplier = numpy.exp(
+                spec.eta_sd * z_damage - 0.5 * spec.eta_sd**2
+            )[:, sample_order]
+            fraction *= damage_multiplier[local_asset][:, None, :]
+        if hazard_uncertain or noisy:
+            numpy.clip(fraction, 0.0, 1.0, out=fraction)
+
+        wet = (mean_intensity > 0) if zero_at_zero else None  # (b, e)
+        if want_split:
+            if curve_values is not None and not noisy:
+                split_fraction[splits] = _discrete_quantiles(
+                    curve_values, curve_counts, quantiles
+                )
+            else:
+                split_fraction[splits] = _summarise_rows(fraction, quantiles, wet)
+        # Cost samples reuse the fraction array, unless a test inspects both
+        cost_samples = fraction if on_block is None else fraction.copy()
+
+        # Unit cost per asset, (a_b, n)
+        unit_cost = spec.cost_mean[block_assets][:, None] * systemic_multiplier
+        if spec.cost_asset_cv > 0:
+            z_cost = _normal_draws(spec.seed, "cost", keys, _COUNTER_LOCAL, n)
+            unit_cost = unit_cost * (1.0 + spec.cost_asset_cv * z_cost[:, sample_order])
+        numpy.maximum(0.0, unit_cost, out=unit_cost)
+
+        # Split cost samples, (b, e, n)
+        cost_samples *= spec.quantity[splits][:, None, None]
+        cost_samples *= unit_cost[local_asset][:, None, :]
+        asset_samples = numpy.add.reduceat(cost_samples, local_starts, axis=0)
+        if on_block is not None:
+            on_block(
+                {
+                    "split_index": splits,
+                    "asset_index": block_assets,
+                    "sample_order": sample_order,
+                    "fraction": fraction,
+                    "split_cost": cost_samples.copy(),
+                    "asset_cost": asset_samples.copy(),
+                }
+            )
+        if want_total:
+            totals += asset_samples.sum(axis=0)
+        if want_asset:
+            asset_wet = None
+            if wet is not None:
+                asset_wet = numpy.logical_or.reduceat(wet, local_starts, axis=0)
+            if want_ead:
+                asset_ead[block_assets] = _summarise(
+                    _event_axis_ead(asset_samples, ead_weights),
+                    quantiles,
+                    overwrite=True,
+                )
+            asset_cost[block_assets] = _summarise_rows(
+                asset_samples, quantiles, asset_wet, overwrite=True
+            )
+        del asset_samples
+        if want_split:
+            if want_ead:
+                split_ead[splits] = _summarise(
+                    _event_axis_ead(cost_samples, ead_weights),
+                    quantiles,
+                    overwrite=True,
+                )
+            split_cost[splits] = _summarise_rows(
+                cost_samples, quantiles, wet, overwrite=True
+            )
+        del fraction, cost_samples
+
+    total_samples = total_cost = total_ead = None
+    if want_total:
+        total_samples = numpy.empty((n, n_event))
+        total_samples[sample_order] = totals.T
+        if "total" in levels:
+            total_cost = _summarise(totals, quantiles, overwrite=True)
+            if want_ead:
+                total_ead = _summarise(
+                    expected_annual_damage(total_samples, spec.return_periods),
+                    quantiles,
+                )
+        if not spec.keep_total_samples:
+            total_samples = None
+
+    metadata = {
+        "draw_scheme": DRAW_SCHEME,
+        "seed": spec.seed,
+        "systemic_key": spec.systemic_key,
+        "n_samples": n,
+        "quantiles": spec.quantiles.tolist(),
+        "return_periods": (
+            spec.return_periods.tolist() if spec.return_periods is not None else None
+        ),
+        "levels": [level for level in _LEVELS if level in levels],
+        "keep_total_samples": spec.keep_total_samples,
+        "n_splits": n_split,
+        "n_assets": spec.n_assets,
+        "n_events": n_event,
+        "n_computed_splits": len(split_order),
+        "n_computed_assets": len(assets),
+        "skip_dry": zero_at_zero,
+        "block_size": spec.block_size,
+        "curve_weights": spec.weights.tolist(),
+        "cost_mean": spec.cost_mean_scalar
+        if spec.cost_mean_scalar is not None
+        else "per_asset",
+        "cost_systemic_cv": spec.cost_systemic_cv,
+        "cost_asset_cv": spec.cost_asset_cv,
+        "hazard_cv": spec.hazard_cv.tolist(),
+        "eta_sd": spec.eta_sd,
+        "draw_scopes": {
+            "damage_curve": "seed_systemic_key",
+            "cost_system": "seed_systemic_key",
+            "hazard": "seed_asset_key",
+            "damage_noise": "seed_asset_key",
+            "cost": "seed_asset_key",
+        },
+    }
+    return DirectDamageArrays(
+        quantiles=spec.quantiles.copy(),
+        return_periods=(
+            spec.return_periods.copy() if spec.return_periods is not None else None
+        ),
+        split_fraction=split_fraction,
+        split_cost=split_cost,
+        split_ead=split_ead,
+        asset_cost=asset_cost,
+        asset_ead=asset_ead,
+        total_cost=total_cost,
+        total_ead=total_ead,
+        total_samples=total_samples,
+        metadata=metadata,
     )
 
 
